@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
@@ -25,12 +26,23 @@ void main() async {
 
   runApp(GgeApp(initialDark: dark));
 
-  unawaited(NotificationsService.init().catchError((e) {
-    debugPrint('[Init] NotificationsService: $e');
-  }));
   unawaited(BackgroundService.init().catchError((e) {
     debugPrint('[Init] BackgroundService: $e');
   }));
+  unawaited(NotificationsService.init().catchError((e) {
+    debugPrint('[Init] NotificationsService: $e');
+  }));
+
+  // ═══ CRITICAL: listen to BG isolate messages ═══
+  try {
+    FlutterForegroundTask.addTaskDataCallback((data) {
+      if (data is String) {
+        TrafficLog.add('ST', '[BG-IN] $data');
+      }
+    });
+  } catch (e) {
+    debugPrint('[Init] addTaskDataCallback: $e');
+  }
 }
 
 class GgeApp extends StatefulWidget {

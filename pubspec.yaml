@@ -16,8 +16,10 @@ dependencies:
   web_socket_channel: ^2.4.0
   flutter_local_notifications: ^18.0.1
   timezone: ^0.10.0
-  # ═══ NEW: keeps app alive in background ═══
-  flutter_foreground_task: ^8.17.0
+  flutter_foreground_task: ^11.0.3
+  # ═══ NEW ═══
+  android_intent_plus: ^5.2.0
+  device_info_plus: ^11.1.0
 
 flutter:
   uses-material-design: true

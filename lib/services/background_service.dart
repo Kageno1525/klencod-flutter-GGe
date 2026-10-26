@@ -4,15 +4,17 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import '../gge_client.dart';  // for TrafficLog
+import '../gge_client.dart';
 
 @pragma('vm:entry-point')
 void ggeBackgroundCallback() {
-  // ═══ CRITICAL: init Flutter bindings in this isolate ═══
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
   FlutterForegroundTask.setTaskHandler(_GgeTaskHandler());
 }
+
+// ═══ CRITICAL: keep reference so release tree-shaking can't strip callback ═══
+final _callbackRef = ggeBackgroundCallback;
 
 class _GgeTaskHandler extends TaskHandler {
   WebSocket? _ws;
@@ -23,14 +25,13 @@ class _GgeTaskHandler extends TaskHandler {
   static const String _url =
       'wss://ep-live-mz-sa1-ae1-eg1-arab1-game.goodgamestudios.com/';
 
-  @override
-  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    debugPrint('[BG WS] onStart');
-    await _save('STARTING');
-    _connect();
+  void _log(String s) {
+    debugPrint('[BG WS] $s');
+    try {
+      FlutterForegroundTask.sendDataToMain('LOG:$s');
+    } catch (_) {}
   }
 
-  /// Uses FlutterForegroundTask.saveData — works across isolates
   Future<void> _save(String s) async {
     try {
       await FlutterForegroundTask.saveData(key: 'bg_status', value: s);
@@ -42,9 +43,16 @@ class _GgeTaskHandler extends TaskHandler {
     }
   }
 
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    _log('onStart');
+    await _save('STARTING');
+    _connect();
+  }
+
   Future<void> _connect() async {
     try {
-      debugPrint('[BG WS] connecting...');
+      _log('connecting...');
       await _save('CONNECTING');
 
       final ws = await WebSocket.connect(_url)
@@ -52,10 +60,9 @@ class _GgeTaskHandler extends TaskHandler {
 
       _ws = ws;
       _connected = true;
-      debugPrint('[BG WS] CONNECTED ✓');
+      _log('CONNECTED');
       await _save('CONNECTED');
 
-      // Send verChk — same as main app
       ws.add(
           '<msg t="sys"><body action="verChk" r="0"><ver v="166" /></body></msg>');
 
@@ -63,35 +70,34 @@ class _GgeTaskHandler extends TaskHandler {
         (data) {
           _msgCount++;
           final text = data.toString();
-          if (text.length < 80) {
-            debugPrint('[BG WS] RX: $text');
-          } else {
-            debugPrint('[BG WS] RX: ${text.substring(0, 80)}...');
-          }
+          final short = text.length > 80
+              ? '${text.substring(0, 80)}...'
+              : text;
+          _log('RX[$_msgCount]: $short');
           _save('MSG_$_msgCount');
         },
         onDone: () {
-          debugPrint('[BG WS] disconnected');
+          _log('disconnected');
           _connected = false;
           _save('DISCONNECTED');
         },
         onError: (e) {
-          debugPrint('[BG WS] error: $e');
+          _log('error: $e');
           _connected = false;
           _save('ERROR: $e');
         },
       );
     } catch (e) {
-      debugPrint('[BG WS] connect failed: $e');
+      _log('connect failed: $e');
       _connected = false;
       await _save('CONNECT_FAILED: $e');
     }
   }
 
   @override
-  void onRepeatEvent(DateTime timestamp) {
-    debugPrint('[BG WS] heartbeat (connected=$_connected, msgs=$_msgCount)');
-    _save('HEARTBEAT_$_msgCount');
+  Future<void> onRepeatEvent(DateTime timestamp) async {
+    _log('heartbeat connected=$_connected msgs=$_msgCount');
+    await _save('HEARTBEAT_$_msgCount');
   }
 
   @override
@@ -102,12 +108,9 @@ class _GgeTaskHandler extends TaskHandler {
     } catch (_) {}
     _ws = null;
     _connected = false;
-    debugPrint('[BG WS] destroyed');
+    _log('destroyed');
     await _save('DESTROYED');
   }
-
-  @override
-  void onReceiveData(Object data) {}
 
   @override
   void onNotificationButtonPressed(String id) {}
@@ -134,7 +137,7 @@ class BackgroundService {
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: 'gge_bot_service',
         channelName: 'GGE Bot',
-        channelDescription: 'Keeps GGE Bot connected in the background',
+        channelDescription: 'Keeps GGE Bot connected',
         channelImportance: NotificationChannelImportance.LOW,
         priority: NotificationPriority.LOW,
         onlyAlertOnce: true,
@@ -174,16 +177,17 @@ class BackgroundService {
         }).catchError((_) {}),
       );
 
-      final service = await FlutterForegroundTask.startService(
+      final result = await FlutterForegroundTask.startService(
         serviceId: 1001,
         notificationTitle: 'GGE Bot is active',
-        notificationText: 'Watching for attacks in background...',
-        callback: ggeBackgroundCallback,
+        notificationText: 'Watching for attacks...',
+        callback: _callbackRef,
       );
 
-      _running = service != null;
+      // ═══ FIX: check the enum, not null ═══
+      _running = result == ServiceRequestResult.success;
       GgeClient.allowBackgroundReconnect = _running;
-      TrafficLog.add('ST', '[BG] start → $_running');
+      TrafficLog.add('ST', '[BG] start → ${result.name}');
       return _running;
     } catch (e) {
       TrafficLog.add('ER', '[BG] start failed: $e');
@@ -219,26 +223,20 @@ class BackgroundService {
     } catch (_) {}
   }
 
-  /// Read BG WS status from main isolate
   static Future<Map<String, dynamic>> readStatus() async {
     try {
       final status =
           await FlutterForegroundTask.getData<String>(key: 'bg_status');
       final time =
           await FlutterForegroundTask.getData<String>(key: 'bg_time');
-      final msgs =
-          await FlutterForegroundTask.getData<int>(key: 'bg_msgs');
+      final msgs = await FlutterForegroundTask.getData<int>(key: 'bg_msgs');
       return {
         'status': status ?? 'never ran',
         'time': time ?? '?',
         'msgs': msgs ?? 0,
       };
     } catch (e) {
-      return {
-        'status': 'read error: $e',
-        'time': '?',
-        'msgs': 0,
-      };
+      return {'status': 'read error: $e', 'time': '?', 'msgs': 0};
     }
   }
 }
