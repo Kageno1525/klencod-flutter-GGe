@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // ═══════════════════════════════════════════
+//  OwnedCastle
+// ═══════════════════════════════════════════
 class OwnedCastle {
   final int kingdomId;
   final int areaType;
@@ -38,6 +40,8 @@ class OwnedCastle {
   String get fullLabel => '$displayName · $kingdomName';
 }
 
+// ═══════════════════════════════════════════
+//  UnitCatalogEntry
 // ═══════════════════════════════════════════
 class UnitCatalogEntry {
   final int wodId;
@@ -76,6 +80,8 @@ class UnitCatalogEntry {
 }
 
 // ═══════════════════════════════════════════
+//  CastleUnit
+// ═══════════════════════════════════════════
 class CastleUnit {
   final int wodId;
   final int amount;
@@ -102,6 +108,8 @@ class CastleUnit {
 }
 
 // ═══════════════════════════════════════════
+//  Lord
+// ═══════════════════════════════════════════
 class Lord {
   final int id;
   final int visibleIndex;
@@ -121,6 +129,8 @@ class Lord {
       name?.isNotEmpty == true ? name! : 'Lord ${visibleIndex + 1}';
 }
 
+// ═══════════════════════════════════════════
+//  LordMovement
 // ═══════════════════════════════════════════
 class LordMovement {
   final int movementId;
@@ -174,6 +184,8 @@ class LordMovement {
 }
 
 // ═══════════════════════════════════════════
+//  CommanderInfo
+// ═══════════════════════════════════════════
 class CommanderInfo {
   final Lord lord;
   final LordMovement? movement;
@@ -183,6 +195,8 @@ class CommanderInfo {
   bool get isBusy => movement != null;
 }
 
+// ═══════════════════════════════════════════
+//  XtMessage
 // ═══════════════════════════════════════════
 class XtMessage {
   final String command;
@@ -194,6 +208,8 @@ class XtMessage {
   XtMessage(this.command, this.roomId, this.resultCode, this.payload, this.raw);
 }
 
+// ═══════════════════════════════════════════
+//  AllyCastle
 // ═══════════════════════════════════════════
 class AllyCastle {
   final int kingdomId;
@@ -229,6 +245,8 @@ class AllyCastle {
   String get displayLabel => '$typeName · $kingdomName ($x,$y)';
 }
 
+// ═══════════════════════════════════════════
+//  AllyMember
 // ═══════════════════════════════════════════
 class AllyMember {
   final int playerId;
@@ -329,6 +347,8 @@ const Map<int, String> ggeErrors = {
 String errorName(int code) => ggeErrors[code] ?? 'Error $code';
 
 // ═══════════════════════════════════════════
+//  AppStorage
+// ═══════════════════════════════════════════
 class AppStorage {
   static const _kUser = 'username';
   static const _kPass = 'password';
@@ -377,7 +397,7 @@ class AppStorage {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  ═══ NEW: Stats + Attack models ═══
+//  Stats models
 // ═══════════════════════════════════════════════════════════
 class CastleStats {
   final int areaId;
@@ -423,8 +443,25 @@ class CastleStats {
     required this.hasDefenseWorkshop,
     required this.hasHospital,
   });
+
+  int get totalUnits => units.fold<int>(0, (s, u) => s + u.amount);
+
+  int get totalTraveling =>
+      travelingUnits.fold<int>(0, (s, u) => s + u.amount);
+
+  String get kingdomName => switch (kingdomId) {
+        0 => 'Great Empire',
+        1 => 'Burning Sands',
+        2 => 'Everwinter',
+        3 => 'Fire Peaks',
+        4 => 'Storm Islands',
+        _ => 'K$kingdomId',
+      };
 }
 
+// ═══════════════════════════════════════════════════════════
+//  Attack alert models
+// ═══════════════════════════════════════════════════════════
 class AttackUnit {
   final int wodId;
   final int amount;
@@ -439,13 +476,22 @@ class AttackUnit {
   });
 
   String get displayName => name ?? 'Unit #$wodId';
+
+  IconData get icon {
+    switch (position) {
+      case 'courtyard':
+        return Icons.castle_rounded;
+      default:
+        return Icons.shield_rounded;
+    }
+  }
 }
 
 class AttackAlert {
   final int movementId;
   final int attackerId;
   final String attackerName;
-  final String? attackerAlliance;
+  final String? attackerAlliance;   // canonical name
   final int targetX, targetY;
   final int kingdomId;
   final int totalTime;
@@ -467,8 +513,16 @@ class AttackAlert {
     required this.receivedAt,
   });
 
+  // ✅ Alias for backward compat (used in some service code)
+  String? get attackerAlly => attackerAlliance;
+
   int get remainingSeconds => (totalTime - paidTime).clamp(0, 999999);
+
   int get totalUnits => units.fold(0, (s, u) => s + u.amount);
+
+  bool get hasUnits => units.isNotEmpty;
+
+  bool get isCritical => remainingSeconds > 0 && remainingSeconds < 300;
 
   String get remainingLabel {
     final s = remainingSeconds;
@@ -489,4 +543,19 @@ class AttackAlert {
         4 => 'Storm Islands',
         _ => 'K$kingdomId',
       };
+
+  /// Short one-line summary for notifications.
+  String get shortSummary {
+    final unitsPart = hasUnits ? ' · $totalUnits units' : '';
+    return '$attackerName → $remainingLabel$unitsPart';
+  }
+
+  /// All units grouped by name (useful for showing aggregated data).
+  Map<String, int> get groupedUnits {
+    final map = <String, int>{};
+    for (final u in units) {
+      map[u.displayName] = (map[u.displayName] ?? 0) + u.amount;
+    }
+    return map;
+  }
 }

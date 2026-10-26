@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:gge/gge_client.dart';
@@ -5,17 +6,31 @@ import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/screens/login_screen.dart';
-// ═══ NEW ═══
 import 'package:gge/services/notifications_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final dark = await AppStorage.getDarkMode();
-  final lang = await AppStorage.getLanguageCode();
-  S.current = Locale(lang);
-  // ═══ NEW: init notifications ═══
-  await NotificationsService.init();
+
+  // Load saved prefs with timeout — never block app start
+  bool dark = true;
+  Locale locale = const Locale('ar');
+  try {
+    dark = await AppStorage.getDarkMode()
+        .timeout(const Duration(seconds: 2), onTimeout: () => true);
+    final lang = await AppStorage.getLanguageCode()
+        .timeout(const Duration(seconds: 2), onTimeout: () => 'ar');
+    locale = Locale(lang);
+  } catch (_) {}
+  S.current = locale;
+
+  // ✅ Start the app FIRST — this is the critical part
   runApp(GgeApp(initialDark: dark));
+
+  // ✅ Fire-and-forget notification init — MUST NOT block UI
+  // Errors are swallowed so they never crash the app
+  unawaited(NotificationsService.init().catchError((e) {
+    debugPrint('[Notifications] init failed: $e');
+  }));
 }
 
 class GgeApp extends StatefulWidget {
