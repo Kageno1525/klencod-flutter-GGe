@@ -369,9 +369,7 @@ class AppStorage {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  CastleStats
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════
 class CastleStats {
   final int areaId;
   final int kingdomId;
@@ -430,9 +428,7 @@ class CastleStats {
       };
 }
 
-// ═══════════════════════════════════════════════════════════
-//  AttackUnit
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════
 class AttackUnit {
   final int wodId;
   final int amount;
@@ -458,9 +454,9 @@ class AttackUnit {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  AttackAlert (updated)
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════
+//  AttackAlert — UPDATED with DateTime + cancelled
+// ═══════════════════════════════════════════
 class AttackAlert {
   final int movementId;
   final int attackerId;
@@ -478,6 +474,7 @@ class AttackAlert {
   final List<AttackUnit> units;
   final DateTime receivedAt;
   final bool isAllianceAttack;
+  final DateTime? cancelledAt;
 
   AttackAlert({
     required this.movementId,
@@ -498,14 +495,68 @@ class AttackAlert {
     required this.units,
     required this.receivedAt,
     this.isAllianceAttack = false,
+    this.cancelledAt,
   });
 
   String? get attackerAlly => attackerAlliance;
-  int get remainingSeconds => (totalTime - paidTime).clamp(0, 999999);
-  int get totalUnits => units.fold(0, (s, u) => s + u.amount);
-  bool get hasUnits => units.isNotEmpty;
-  bool get isCritical => remainingSeconds > 0 && remainingSeconds < 300;
 
+  // ═══ Timing logic ═══
+  /// الوقت الفعلي اللي الحركة بدأت فيه (على الخادم تقريباً)
+  DateTime get startedAt =>
+      receivedAt.subtract(Duration(seconds: paidTime));
+
+  /// الوقت المتوقع لوصول الجيش
+  DateTime get arrivalAt =>
+      receivedAt.add(Duration(seconds: remainingSeconds));
+
+  bool get isCancelled => cancelledAt != null;
+
+  bool get isArrived =>
+      !isCancelled && DateTime.now().isAfter(arrivalAt);
+
+  int get remainingSeconds =>
+      (totalTime - paidTime).clamp(0, 999999);
+
+  /// الوقت المتبقي دلوقتي (live)
+  Duration get remainingNow {
+    if (isCancelled) return Duration.zero;
+    final diff = arrivalAt.difference(DateTime.now());
+    return diff.isNegative ? Duration.zero : diff;
+  }
+
+  /// نص الوقت المتبقي (live — بيتحسب من now)
+  String get liveRemainingLabel {
+    if (isCancelled) return 'Recalled';
+    if (isArrived) return 'Arrived';
+    final d = remainingNow;
+    if (d.inSeconds <= 0) return 'Arrived';
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    final s = d.inSeconds % 60;
+    if (h > 0) return '${h}h ${m}m';
+    if (m > 0) return '${m}m ${s}s';
+    return '${s}s';
+  }
+
+  // Status
+  String get statusKey {
+    if (isCancelled) return 'cancelled';
+    if (isArrived) return 'arrived';
+    return 'incoming';
+  }
+
+  // HH:mm:ss format
+  static String _fmt(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:'
+      '${t.minute.toString().padLeft(2, '0')}:'
+      '${t.second.toString().padLeft(2, '0')}';
+
+  String get startedAtLabel => _fmt(startedAt);
+  String get arrivalAtLabel => _fmt(arrivalAt);
+  String? get cancelledAtLabel =>
+      cancelledAt == null ? null : _fmt(cancelledAt!);
+
+  // Existing helpers
   String get remainingLabel {
     final s = remainingSeconds;
     if (s <= 0) return 'Arrived';
@@ -516,6 +567,10 @@ class AttackAlert {
     if (m > 0) return '${m}m ${sec}s';
     return '${sec}s';
   }
+
+  int get totalUnits => units.fold(0, (s, u) => s + u.amount);
+  bool get hasUnits => units.isNotEmpty;
+  bool get isCritical => remainingSeconds > 0 && remainingSeconds < 300;
 
   String get kingdomName => switch (kingdomId) {
         0 => 'Great Empire',
@@ -528,7 +583,7 @@ class AttackAlert {
 
   String get shortSummary {
     final unitsPart = hasUnits ? ' · $totalUnits units' : '';
-    return '$attackerName → $remainingLabel$unitsPart';
+    return '$attackerName → $liveRemainingLabel$unitsPart';
   }
 
   Map<String, int> get groupedUnits {

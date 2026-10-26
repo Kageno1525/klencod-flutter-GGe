@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:gge/gge_client.dart';
@@ -18,15 +19,22 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen>
     with WidgetsBindingObserver {
+  Timer? _ticker;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     NotificationsService.startListening();
+    // ═══ Live countdown: rebuild every second ═══
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
+    _ticker?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -35,6 +43,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       NotificationsService.checkPermission();
+      setState(() {});
     }
   }
 
@@ -180,8 +189,27 @@ class _NotificationsScreenState extends State<NotificationsScreen>
   }
 
   Widget _alertCard(AttackAlert alert) {
-    final isIncoming = alert.remainingSeconds > 0;
     final isAlly = alert.isAllianceAttack;
+    final isCancelled = alert.isCancelled;
+    final isArrived = alert.isArrived;
+
+    // Status pill
+    final Color statusColor;
+    final IconData statusIcon;
+    final String statusLabel;
+    if (isCancelled) {
+      statusColor = AppTheme.red;
+      statusIcon = Icons.cancel_rounded;
+      statusLabel = S.isAr ? 'انسحب' : 'Recalled';
+    } else if (isArrived) {
+      statusColor = AppTheme.green;
+      statusIcon = Icons.check_circle_rounded;
+      statusLabel = S.isAr ? 'وصل' : 'Arrived';
+    } else {
+      statusColor = AppTheme.orange;
+      statusIcon = Icons.timer_rounded;
+      statusLabel = alert.liveRemainingLabel;
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -191,6 +219,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ─── Header ───
             Row(
               children: [
                 Container(
@@ -199,11 +228,20 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                   decoration: BoxDecoration(
                     gradient: isAlly
                         ? AppTheme.successGradient
-                        : AppTheme.dangerGradient,
+                        : isCancelled
+                            ? const LinearGradient(colors: [
+                                Colors.grey,
+                                Colors.grey,
+                              ])
+                            : AppTheme.dangerGradient,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
-                    isAlly ? Icons.shield_moon_rounded : Icons.gavel_rounded,
+                    isAlly
+                        ? Icons.shield_moon_rounded
+                        : isCancelled
+                            ? Icons.cancel_rounded
+                            : Icons.gavel_rounded,
                     color: Colors.white,
                     size: 22,
                   ),
@@ -258,15 +296,154 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                     ],
                   ),
                 ),
-                InfoChip(
-                  icon: isIncoming
-                      ? Icons.timer_rounded
-                      : Icons.check_circle_rounded,
-                  label: alert.remainingLabel,
-                  color: isIncoming ? AppTheme.orange : AppTheme.green,
+                // Status pill
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: statusColor.withOpacity(0.4)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(statusIcon, color: statusColor, size: 13),
+                      const SizedBox(width: 4),
+                      Text(
+                        statusLabel,
+                        style: TextStyle(
+                            color: statusColor,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
+
+            // ─── Timing block ───
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppTheme.blue.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: AppTheme.blue.withOpacity(0.18)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Started
+                  Row(
+                    children: [
+                      const Icon(Icons.play_arrow_rounded,
+                          size: 13, color: AppTheme.blue),
+                      const SizedBox(width: 6),
+                      Text(
+                        S.isAr ? 'بدأ في:' : 'Started:',
+                        style: TextStyle(
+                            color: AppTheme.subTextColor(context),
+                            fontSize: 11,
+                            decoration: TextDecoration.none),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        alert.startedAtLabel,
+                        style: TextStyle(
+                            color: AppTheme.textColor(context),
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'monospace',
+                            decoration: TextDecoration.none),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 5),
+                  // Arrived / Cancelled
+                  if (isCancelled)
+                    Row(
+                      children: [
+                        const Icon(Icons.cancel_rounded,
+                            size: 13, color: AppTheme.red),
+                        const SizedBox(width: 6),
+                        Text(
+                          S.isAr ? 'انسحب في:' : 'Recalled:',
+                          style: const TextStyle(
+                              color: AppTheme.red,
+                              fontSize: 11,
+                              decoration: TextDecoration.none),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          alert.cancelledAtLabel ?? '',
+                          style: const TextStyle(
+                              color: AppTheme.red,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.bold,
+                              fontFamily: 'monospace',
+                              decoration: TextDecoration.none),
+                        ),
+                      ],
+                    )
+                  else
+                    Row(
+                      children: [
+                        Icon(
+                          isArrived
+                              ? Icons.check_circle_rounded
+                              : Icons.flag_rounded,
+                          size: 13,
+                          color: isArrived
+                              ? AppTheme.green
+                              : AppTheme.orange,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          isArrived
+                              ? (S.isAr ? 'وصل في:' : 'Arrived:')
+                              : (S.isAr ? 'هيوصل في:' : 'Arrives:'),
+                          style: TextStyle(
+                              color: isArrived
+                                  ? AppTheme.green
+                                  : AppTheme.orange,
+                              fontSize: 11,
+                              decoration: TextDecoration.none),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          alert.arrivalAtLabel,
+                          style: TextStyle(
+                              color: isArrived
+                                  ? AppTheme.green
+                                  : AppTheme.orange,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.bold,
+                              fontFamily: 'monospace',
+                              decoration: TextDecoration.none),
+                        ),
+                        if (!isArrived) ...[
+                          const Spacer(),
+                          Text(
+                            alert.liveRemainingLabel,
+                            style: const TextStyle(
+                                color: AppTheme.orange,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.bold,
+                                decoration: TextDecoration.none),
+                          ),
+                        ],
+                      ],
+                    ),
+                ],
+              ),
+            ),
+
+            // ─── Info chips ───
             const SizedBox(height: 10),
             Wrap(
               spacing: 6,
@@ -288,11 +465,17 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                   ),
                 InfoChip(
                   icon: Icons.shield_rounded,
-                  label: '${alert.totalUnits} ${S.units}',
-                  color: AppTheme.purple,
+                  label: alert.hasUnits
+                      ? '${alert.totalUnits} ${S.units}'
+                      : (S.isAr ? 'جنود مخفية' : 'Hidden units'),
+                  color: alert.hasUnits
+                      ? AppTheme.purple
+                      : AppTheme.subTextColor(context),
                 ),
               ],
             ),
+
+            // ─── Actions ───
             const SizedBox(height: 10),
             Row(
               children: [
@@ -419,7 +602,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Details Dialog — blur + X + clean sections
+//  Details Dialog — blur + X + timing info
 // ═══════════════════════════════════════════════════════════
 class _AlertDetailsDialog extends StatelessWidget {
   final AttackAlert alert;
@@ -428,6 +611,8 @@ class _AlertDetailsDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAlly = alert.isAllianceAttack;
+    final isCancelled = alert.isCancelled;
+    final isArrived = alert.isArrived;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final screenH = MediaQuery.of(context).size.height;
     final bottomPad = MediaQuery.of(context).padding.bottom;
@@ -438,7 +623,6 @@ class _AlertDetailsDialog extends StatelessWidget {
       color: Colors.transparent,
       child: Stack(
         children: [
-          // Blur backdrop
           Positioned.fill(
             child: GestureDetector(
               onTap: () => Navigator.of(context).pop(),
@@ -448,8 +632,6 @@ class _AlertDetailsDialog extends StatelessWidget {
               ),
             ),
           ),
-
-          // Sheet content
           Positioned(
             left: 12,
             right: 12,
@@ -479,7 +661,10 @@ class _AlertDetailsDialog extends StatelessWidget {
                       decoration: BoxDecoration(
                         gradient: isAlly
                             ? AppTheme.successGradient
-                            : AppTheme.dangerGradient,
+                            : isCancelled
+                                ? const LinearGradient(
+                                    colors: [Colors.grey, Colors.grey])
+                                : AppTheme.dangerGradient,
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -510,7 +695,9 @@ class _AlertDetailsDialog extends StatelessWidget {
                                 child: Icon(
                                   isAlly
                                       ? Icons.shield_moon_rounded
-                                      : Icons.gavel_rounded,
+                                      : isCancelled
+                                          ? Icons.cancel_rounded
+                                          : Icons.gavel_rounded,
                                   color: Colors.white,
                                   size: 22,
                                 ),
@@ -522,13 +709,17 @@ class _AlertDetailsDialog extends StatelessWidget {
                                       CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      isAlly
+                                      isCancelled
                                           ? (S.isAr
-                                              ? 'هجوم على عضو تحالف'
-                                              : 'Ally under attack')
-                                          : (S.isAr
-                                              ? 'هجوم عليك'
-                                              : 'Attack on you'),
+                                              ? 'تم سحب الجيش'
+                                              : 'Attack recalled')
+                                          : isAlly
+                                              ? (S.isAr
+                                                  ? 'هجوم على عضو تحالف'
+                                                  : 'Ally under attack')
+                                              : (S.isAr
+                                                  ? 'هجوم عليك'
+                                                  : 'Attack on you'),
                                       style: const TextStyle(
                                         color: Colors.white,
                                         fontSize: 18,
@@ -538,7 +729,9 @@ class _AlertDetailsDialog extends StatelessWidget {
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
-                                      alert.remainingLabel,
+                                      isCancelled
+                                          ? '${alert.cancelledAtLabel ?? ""}'
+                                          : alert.liveRemainingLabel,
                                       style: TextStyle(
                                         color:
                                             Colors.white.withOpacity(0.85),
@@ -562,7 +755,18 @@ class _AlertDetailsDialog extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            // Attacker info
+                            // ═══ Timing Section ═══
+                            _sectionLabel(
+                              context,
+                              S.isAr ? 'التوقيت' : 'Timing',
+                              Icons.schedule_rounded,
+                              AppTheme.blue,
+                            ),
+                            const SizedBox(height: 8),
+                            _timingBlock(context),
+                            const SizedBox(height: 16),
+
+                            // Attacker
                             _sectionLabel(
                               context,
                               S.isAr ? 'معلومات المهاجم' : 'Attacker info',
@@ -621,23 +825,10 @@ class _AlertDetailsDialog extends StatelessWidget {
                                   value:
                                       '${alert.targetCastleName!}\n(${alert.targetX}, ${alert.targetY})',
                                   color: AppTheme.purple),
-                            _infoRow(context,
-                                icon: Icons.timer_rounded,
-                                label: S.timeRemaining,
-                                value: alert.remainingLabel,
-                                color: AppTheme.orange),
-                            _infoRow(context,
-                                icon: Icons.groups_rounded,
-                                label: S.isAr
-                                    ? 'إجمالي الجنود'
-                                    : 'Total units',
-                                value:
-                                    '${alert.totalUnits} ${S.isAr ? "جندي" : "units"}',
-                                color: AppTheme.red),
 
                             const SizedBox(height: 16),
 
-                            // Attacking Units — ✅ ياخد List<AttackUnit>
+                            // Attacking Units
                             _sectionLabel(
                               context,
                               S.attackingUnits,
@@ -648,9 +839,13 @@ class _AlertDetailsDialog extends StatelessWidget {
                             if (alert.units.isEmpty)
                               _noDataCard(
                                 context,
-                                S.isAr
-                                    ? 'لم تصل تفاصيل الجنود بعد'
-                                    : 'Unit details not received yet',
+                                isCancelled
+                                    ? (S.isAr
+                                        ? 'تم سحب الجيش قبل وصول تفاصيل الجنود'
+                                        : 'Army recalled before units arrived')
+                                    : (S.isAr
+                                        ? 'الجنود مخفية — المهاجم اختار إخفاء الجيش'
+                                        : 'Units hidden — attacker chose Hidden Army'),
                               )
                             else
                               ..._buildAttackUnitRows(
@@ -704,6 +899,89 @@ class _AlertDetailsDialog extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _timingBlock(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.blue.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.blue.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _timingRow(
+            context,
+            icon: Icons.play_arrow_rounded,
+            label: S.isAr ? 'بدأ في' : 'Started',
+            value: alert.startedAtLabel,
+            color: AppTheme.blue,
+          ),
+          const SizedBox(height: 8),
+          if (alert.isCancelled)
+            _timingRow(
+              context,
+              icon: Icons.cancel_rounded,
+              label: S.isAr ? 'انسحب في' : 'Recalled',
+              value: alert.cancelledAtLabel ?? '',
+              color: AppTheme.red,
+            )
+          else if (alert.isArrived)
+            _timingRow(
+              context,
+              icon: Icons.check_circle_rounded,
+              label: S.isAr ? 'وصل في' : 'Arrived',
+              value: alert.arrivalAtLabel,
+              color: AppTheme.green,
+            )
+          else
+            _timingRow(
+              context,
+              icon: Icons.flag_rounded,
+              label: S.isAr ? 'هيوصل في' : 'Arrives',
+              value: '${alert.arrivalAtLabel} (${alert.liveRemainingLabel})',
+              color: AppTheme.orange,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _timingRow(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 16),
+        const SizedBox(width: 8),
+        Text(
+          '$label:',
+          style: TextStyle(
+              color: AppTheme.subTextColor(context),
+              fontSize: 12,
+              decoration: TextDecoration.none),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+                color: color,
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'monospace',
+                decoration: TextDecoration.none),
+            textAlign: TextAlign.end,
+          ),
+        ),
+      ],
     );
   }
 
@@ -794,7 +1072,6 @@ class _AlertDetailsDialog extends StatelessWidget {
     );
   }
 
-  // ═══ للـ AttackUnit (هجوم) ═══
   List<Widget> _buildAttackUnitRows(
     BuildContext context,
     List<AttackUnit> attackUnits, {
@@ -811,7 +1088,6 @@ class _AlertDetailsDialog extends StatelessWidget {
         .toList();
   }
 
-  // ═══ للـ CastleUnit (دفاع) ═══
   List<Widget> _buildCastleUnitRows(
     BuildContext context,
     List<CastleUnit> castleUnits, {

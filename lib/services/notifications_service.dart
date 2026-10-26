@@ -199,25 +199,29 @@ class NotificationsService {
     if (!_enabled) return;
     if (alert.isAllianceAttack && !_allianceAttacksEnabled) return;
 
-    // ═══ Check for existing alert (update scenario) ═══
+    // Check if this is an update to an existing alert
     final existingIdx = _history.indexWhere(
       (a) => a.movementId == alert.movementId,
     );
+    final isUpdate = existingIdx >= 0;
 
-    if (existingIdx >= 0) {
+    if (isUpdate) {
       _history[existingIdx] = alert;
-      TrafficLog.add('ST',
-          '[Notif] alert UPDATED mid=${alert.movementId} units=${alert.units.length}');
     } else {
       _history.insert(0, alert);
       if (_history.length > 100) {
         _history.removeRange(100, _history.length);
       }
-      TrafficLog.add('ST',
-          '[Notif] alert INSERTED mid=${alert.movementId} units=${alert.units.length}');
     }
 
     if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
+
+    // Don't show system notification on updates
+    if (isUpdate) {
+      TrafficLog.add('ST',
+          '[Notif] alert UPDATED mid=${alert.movementId} (cancelled=${alert.isCancelled})');
+      return;
+    }
 
     if (!_ready) return;
 

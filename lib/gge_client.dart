@@ -98,11 +98,8 @@ class GgeClient {
   DateTime? _lastRxTime;
 
   int? _cachedPlayerId;
-
-  // ═══ Track alerts by movement ID to allow unit updates ═══
   final Map<int, AttackAlert> _latestAlertByMid = {};
 
-  // ═══ Cached stats by areaId ═══
   Map<int, CastleStats>? _cachedStatsByArea;
   Map<int, CastleStats>? get cachedStatsByArea => _cachedStatsByArea;
   set cachedStatsByArea(Map<int, CastleStats>? v) => _cachedStatsByArea = v;
@@ -273,9 +270,47 @@ class GgeClient {
         }
       } catch (_) {}
     }
+
+    // ═══ Movement recall (attacker withdrew army) ═══
+    if (msg.command == 'mrm' && msg.payload != null) {
+      try {
+        final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
+        final mid = _asInt(data['MID']);
+        if (mid <= 0) return;
+        final existing = _latestAlertByMid[mid];
+        if (existing == null || existing.isCancelled) return;
+
+        final recalled = AttackAlert(
+          movementId: existing.movementId,
+          attackerId: existing.attackerId,
+          attackerName: existing.attackerName,
+          attackerAlliance: existing.attackerAlliance,
+          attackerCastleName: existing.attackerCastleName,
+          attackerAreaId: existing.attackerAreaId,
+          attackerX: existing.attackerX,
+          attackerY: existing.attackerY,
+          targetX: existing.targetX,
+          targetY: existing.targetY,
+          targetCastleName: existing.targetCastleName,
+          targetAreaId: existing.targetAreaId,
+          kingdomId: existing.kingdomId,
+          totalTime: existing.totalTime,
+          paidTime: existing.paidTime,
+          units: existing.units,
+          receivedAt: existing.receivedAt,
+          isAllianceAttack: existing.isAllianceAttack,
+          cancelledAt: DateTime.now(),
+        );
+        _latestAlertByMid[mid] = recalled;
+        if (!_attackCtrl.isClosed) _attackCtrl.add(recalled);
+        TrafficLog.add('ST',
+            '❌ Attack mid=$mid recalled by ${existing.attackerName}');
+      } catch (e) {
+        TrafficLog.add('ER', 'mrm parse error: $e');
+      }
+    }
   }
 
-  // ═══ UPDATED: units update support ═══
   void _processAttacks(Map<String, dynamic> data) {
     final myPid = _cachedPlayerId;
     if (myPid == null || myPid <= 0) return;
@@ -298,6 +333,7 @@ class GgeClient {
       if (m is! Map) continue;
       final mov = m['M'] as Map<String, dynamic>?;
       if (mov == null) continue;
+
       if (_asInt(mov['T']) != 0) continue;
 
       final ta = mov['TA'] as List?;
@@ -318,7 +354,6 @@ class GgeClient {
       final mid = _asInt(mov['MID']);
       if (mid <= 0) continue;
 
-      // ═══ Extract units FIRST ═══
       final units = <AttackUnit>[];
       final ga = m['GA'] as Map<String, dynamic>?;
       if (ga != null) {
@@ -331,7 +366,7 @@ class GgeClient {
       final existing = _latestAlertByMid[mid];
 
       if (existing != null) {
-        // Already alerted
+        if (existing.isCancelled) continue;
         if (units.isEmpty) continue;
         if (existing.units.isNotEmpty) continue;
         TrafficLog.add('ST',
