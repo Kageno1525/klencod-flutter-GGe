@@ -62,10 +62,7 @@ class TrainingScreen extends StatefulWidget {
 
 class _TrainingScreenState extends State<TrainingScreen> {
   static const int _maxPerBatch = 80;
-
-  /// Default verified units for a Level-1 Barracks:
-  ///   602 = Swordsman · 603 = Spearman
-  static const Set<int> _defaultVerified = <int>{602, 603};
+  static const Set<int> _defaultVerified = <int>{602, 603}; // Swordsman & Spearman
 
   List<OwnedCastle> _castles = [];
   Map<int, UnitCatalogEntry> _catalog = {};
@@ -83,12 +80,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
   DateTime? _lastSlotFetch;
   Timer? _slotsTimer;
 
-  // ═══ Verification state (learned, per account) ═══
   Set<int> _verifiedUnits = {..._defaultVerified};
   Set<int> _hiddenUnits = {};
   bool _showAll = false;
 
-  // ═══ Prefs keys (namespaced by player id) ═══
   String get _verifiedKey =>
       'training_verified_${widget.client.cachedPlayerId ?? 0}';
   String get _hiddenKey =>
@@ -110,9 +105,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  Prefs: verified / hidden sets
-  // ═══════════════════════════════════════════════════════════
   Future<void> _loadLearnedSets() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -144,7 +136,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     } catch (_) {}
   }
 
-  // ═══════════════════════════════════════════════════════════
   Future<void> _loadAll() async {
     try {
       await _loadLearnedSets();
@@ -223,7 +214,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
         name.contains('elite') ||
         name.contains('twohand') ||
         name.contains('knight') ||
-        name.contains('cavalry')) {
+        name.contains('cavalry') ||
+        name.contains('relic')) {
       return 'elite';
     }
     if (name.contains('heavy') ||
@@ -236,9 +228,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     return 'basic';
   }
 
-  // ═══ THE FILTER ═══
-  //  Default: only verified (∩ not hidden)
-  //  Show all: everything except hidden
+  // ═══ THE SMART FILTER & DEDUPLICATOR ═══
   List<UnitCatalogEntry> get _filteredTrainable {
     var base = _trainable.where((u) {
       if (_hiddenUnits.contains(u.wodId)) return false;
@@ -246,14 +236,28 @@ class _TrainingScreenState extends State<TrainingScreen> {
       return true;
     }).toList();
 
-    if (_tierFilter == 'all') return base;
-    return base.where((u) => _getUnitTier(u) == _tierFilter).toList();
+    if (_tierFilter != 'all') {
+      base = base.where((u) => _getUnitTier(u) == _tierFilter).toList();
+    }
+
+    // إزالة التكرار: اللعبة بتبعت نفس الوحدة بأكتر من ID (كل لفل ID مختلف)
+    // هنحتفظ بأعلى ID (أقوى لفل) لكل اسم
+    final uniqueMap = <String, UnitCatalogEntry>{};
+    for (var u in base) {
+      final name = u.displayName;
+      if (!uniqueMap.containsKey(name) || u.wodId > uniqueMap[name]!.wodId) {
+        uniqueMap[name] = u;
+      }
+    }
+
+    final result = uniqueMap.values.toList()
+      ..sort((a, b) => a.displayName.compareTo(b.displayName));
+
+    return result;
   }
 
   List<UnitCatalogEntry> get _allTrainableNotHidden {
-    return _trainable
-        .where((u) => !_hiddenUnits.contains(u.wodId))
-        .toList();
+    return _trainable.where((u) => !_hiddenUnits.contains(u.wodId)).toList();
   }
 
   void _setTier(String tier) {
@@ -274,8 +278,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     setState(() {
       _showAll = !_showAll;
       final filtered = _filteredTrainable;
-      _selectedUnit =
-          filtered.isNotEmpty ? filtered.first : null;
+      _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
     });
   }
 
@@ -284,34 +287,26 @@ class _TrainingScreenState extends State<TrainingScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: Theme.of(context).colorScheme.surface,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          S.isAr ? 'إعادة ضبط القائمة؟' : 'Reset list?',
-          style: const TextStyle(decoration: TextDecoration.none),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(S.isAr ? 'إعادة ضبط القائمة؟' : 'Reset list?',
+            style: const TextStyle(decoration: TextDecoration.none)),
         content: Text(
           S.isAr
               ? 'هيتم إرجاع القائمة للافتراضي (رمح + سياف فقط).\n\n'
                   'استخدم ده لو طورت الباراكس بتاعك وعايز تكتشف وحدات جديدة.'
               : 'Will reset to default (Spearman + Swordsman only).\n\n'
                   'Use this after upgrading your barracks to discover new units.',
-          style: const TextStyle(
-              decoration: TextDecoration.none, height: 1.5),
+          style: const TextStyle(decoration: TextDecoration.none, height: 1.5),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(S.cancel),
-          ),
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(S.cancel)),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            style:
-                ElevatedButton.styleFrom(backgroundColor: AppTheme.orange),
-            child: Text(
-              S.isAr ? 'إعادة ضبط' : 'Reset',
-              style: const TextStyle(color: Colors.white),
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.orange),
+            child: Text(S.isAr ? 'إعادة ضبط' : 'Reset',
+                style: const TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -327,10 +322,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     });
     await _saveLearnedSets();
     if (!mounted) return;
-    _snack(
-      S.isAr ? 'تم إعادة الضبط' : 'Reset done',
-      color: AppTheme.teal,
-    );
+    _snack(S.isAr ? 'تم إعادة الضبط' : 'Reset done', color: AppTheme.teal);
   }
 
   Future<void> _train() async {
@@ -342,9 +334,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
     if (amt > _maxPerBatch) {
       _snack(
-        S.isAr
-            ? 'الحد الأقصى $_maxPerBatch في المرة الواحدة'
-            : 'Max $_maxPerBatch per batch',
+        S.isAr ? 'الحد الأقصى $_maxPerBatch' : 'Max $_maxPerBatch',
         color: AppTheme.orange,
       );
       return;
@@ -362,7 +352,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     setState(() => _training = false);
 
     if (result.success) {
-      // ✅ Learn: this unit IS trainable
       _verifiedUnits.add(capturedWodId);
       _hiddenUnits.remove(capturedWodId);
       await _saveLearnedSets();
@@ -374,7 +363,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     } else {
       final err = result.error ?? '';
       if (err.contains('87') || err.contains('Missing required building')) {
-        // ❌ Learn: NOT trainable → hide
         _hiddenUnits.add(capturedWodId);
         _verifiedUnits.remove(capturedWodId);
         await _saveLearnedSets();
@@ -399,8 +387,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(msg,
-            style: const TextStyle(decoration: TextDecoration.none)),
+        content: Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
       ));
@@ -421,34 +408,28 @@ class _TrainingScreenState extends State<TrainingScreen> {
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
                     children: [
                       FadeSlideIn(
-                        delay: const Duration(milliseconds: 100),
-                        child: _castlePicker(context),
-                      ),
+                          delay: const Duration(milliseconds: 100),
+                          child: _castlePicker(context)),
                       const SizedBox(height: 14),
                       FadeSlideIn(
-                        delay: const Duration(milliseconds: 160),
-                        child: _slotsCard(context),
-                      ),
+                          delay: const Duration(milliseconds: 160),
+                          child: _slotsCard(context)),
                       const SizedBox(height: 14),
                       FadeSlideIn(
-                        delay: const Duration(milliseconds: 220),
-                        child: _tierFilterRow(context),
-                      ),
+                          delay: const Duration(milliseconds: 220),
+                          child: _tierFilterRow(context)),
                       const SizedBox(height: 14),
                       FadeSlideIn(
-                        delay: const Duration(milliseconds: 280),
-                        child: _unitPicker(context),
-                      ),
+                          delay: const Duration(milliseconds: 280),
+                          child: _unitPicker(context)),
                       const SizedBox(height: 14),
                       FadeSlideIn(
-                        delay: const Duration(milliseconds: 340),
-                        child: _amountInput(context),
-                      ),
+                          delay: const Duration(milliseconds: 340),
+                          child: _amountInput(context)),
                       const SizedBox(height: 14),
                       FadeSlideIn(
-                        delay: const Duration(milliseconds: 400),
-                        child: _unitPreview(context),
-                      ),
+                          delay: const Duration(milliseconds: 400),
+                          child: _unitPreview(context)),
                     ],
                   ),
                 ),
@@ -482,57 +463,47 @@ class _TrainingScreenState extends State<TrainingScreen> {
       child: Row(
         children: [
           AppIconBtn(
-            icon: Icons.arrow_back_rounded,
-            onTap: () => Navigator.pop(context),
-            size: 42,
-          ),
+              icon: Icons.arrow_back_rounded,
+              onTap: () => Navigator.pop(context),
+              size: 42),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  S.trainTroops,
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.textColor(context),
-                    letterSpacing: -0.3,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-                Text(
-                  S.trainDesc,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: AppTheme.subTextColor(context),
-                    decoration: TextDecoration.none,
-                  ),
-                ),
+                Text(S.trainTroops,
+                    style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textColor(context),
+                        letterSpacing: -0.3,
+                        decoration: TextDecoration.none)),
+                Text(S.trainDesc,
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.subTextColor(context),
+                        decoration: TextDecoration.none)),
               ],
             ),
           ),
           AppIconBtn(
-            icon: Icons.restart_alt_rounded,
-            onTap: _resetLearning,
-            size: 42,
-            color: AppTheme.orange,
-          ),
+              icon: Icons.restart_alt_rounded,
+              onTap: _resetLearning,
+              size: 42,
+              color: AppTheme.orange),
           const SizedBox(width: 8),
           Container(
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              gradient: AppTheme.successGradient,
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: AppTheme.green.withOpacity(0.35),
-                  blurRadius: 14,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
+                gradient: AppTheme.successGradient,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                      color: AppTheme.green.withOpacity(0.35),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6))
+                ]),
             child: const Icon(Icons.military_tech_rounded,
                 color: Colors.white, size: 22),
           ),
@@ -551,36 +522,29 @@ class _TrainingScreenState extends State<TrainingScreen> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: AppTheme.blue.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.blue.withOpacity(0.3)),
-            ),
-            child: const Icon(Icons.castle_rounded,
-                color: AppTheme.blue, size: 20),
+                color: AppTheme.blue.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.blue.withOpacity(0.3))),
+            child: const Icon(Icons.castle_rounded, color: AppTheme.blue, size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  S.selectCastle,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.subTextColor(context),
-                    letterSpacing: 0.8,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
+                Text(S.selectCastle,
+                    style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.subTextColor(context),
+                        letterSpacing: 0.8,
+                        decoration: TextDecoration.none)),
                 const SizedBox(height: 2),
                 if (_castles.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     child: Text(
-                      S.isAr
-                          ? 'لا توجد قلاع قابلة للتدريب'
-                          : 'No trainable castles',
+                      S.isAr ? 'لا توجد قلاع قابلة للتدريب' : 'No trainable castles',
                       style: TextStyle(
                           color: AppTheme.subTextColor(context),
                           fontSize: 12,
@@ -596,19 +560,17 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       dropdownColor: Theme.of(context).colorScheme.surface,
                       borderRadius: BorderRadius.circular(14),
                       style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textColor(context),
-                      ),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textColor(context)),
                       items: _castles
                           .map((c) => DropdownMenuItem(
-                                value: c,
-                                child: Text(c.fullLabel,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                        color: AppTheme.textColor(context),
-                                        fontSize: 13)),
-                              ))
+                              value: c,
+                              child: Text(c.fullLabel,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      color: AppTheme.textColor(context),
+                                      fontSize: 13))))
                           .toList(),
                       onChanged: (v) {
                         setState(() {
@@ -646,37 +608,32 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: AppTheme.purple.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
+                    color: AppTheme.purple.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.meeting_room_rounded,
                     color: AppTheme.purple, size: 18),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  S.isAr ? 'خانات التدريب' : 'Training slots',
-                  style: TextStyle(
-                    color: AppTheme.textColor(context),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
+                child: Text(S.isAr ? 'خانات التدريب' : 'Training slots',
+                    style: TextStyle(
+                        color: AppTheme.textColor(context),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        decoration: TextDecoration.none)),
               ),
               if (loading)
                 const SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: AppTheme.purple),
-                )
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: AppTheme.purple))
               else
                 GestureDetector(
                   onTap: () => _loadSlots(force: true),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: slots != null
                           ? (slots.isAllBusy
@@ -690,15 +647,12 @@ class _TrainingScreenState extends State<TrainingScreen> {
                           ? '${slots.barracksFree}/${slots.barracksTotal}'
                           : '--',
                       style: TextStyle(
-                        color: slots != null
-                            ? (slots.isAllBusy
-                                ? AppTheme.red
-                                : AppTheme.teal)
-                            : AppTheme.subTextColor(context),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 11,
-                        decoration: TextDecoration.none,
-                      ),
+                          color: slots != null
+                              ? (slots.isAllBusy ? AppTheme.red : AppTheme.teal)
+                              : AppTheme.subTextColor(context),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                          decoration: TextDecoration.none),
                     ),
                   ),
                 ),
@@ -720,19 +674,17 @@ class _TrainingScreenState extends State<TrainingScreen> {
                         : AppTheme.red.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: isFree
-                          ? AppTheme.green.withOpacity(0.5)
-                          : AppTheme.red.withOpacity(0.5),
-                      width: 1.4,
-                    ),
+                        color: isFree
+                            ? AppTheme.green.withOpacity(0.5)
+                            : AppTheme.red.withOpacity(0.5),
+                        width: 1.4),
                   ),
                   child: Icon(
-                    isFree
-                        ? Icons.check_circle_outline_rounded
-                        : Icons.lock_clock_rounded,
-                    color: isFree ? AppTheme.green : AppTheme.red,
-                    size: 20,
-                  ),
+                      isFree
+                          ? Icons.check_circle_outline_rounded
+                          : Icons.lock_clock_rounded,
+                      color: isFree ? AppTheme.green : AppTheme.red,
+                      size: 20),
                 );
               }),
             ),
@@ -752,14 +704,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 Icon(Icons.sync_rounded,
                     size: 12, color: AppTheme.subTextColor(context)),
                 const SizedBox(width: 4),
-                Text(
-                  S.isAr ? 'كل دقيقة' : 'Every 60s',
-                  style: TextStyle(
-                    color: AppTheme.subTextColor(context),
-                    fontSize: 9,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
+                Text(S.isAr ? 'كل دقيقة' : 'Every 60s',
+                    style: TextStyle(
+                        color: AppTheme.subTextColor(context),
+                        fontSize: 9,
+                        decoration: TextDecoration.none)),
               ],
             ),
             if (slots.isAllBusy) ...[
@@ -768,11 +717,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: AppTheme.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
-                  border:
-                      Border.all(color: AppTheme.orange.withOpacity(0.3)),
-                ),
+                    color: AppTheme.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppTheme.orange.withOpacity(0.3))),
                 child: Row(
                   children: [
                     const Icon(Icons.info_outline_rounded,
@@ -795,45 +742,34 @@ class _TrainingScreenState extends State<TrainingScreen> {
             ],
           ] else if (slots != null) ...[
             const SizedBox(height: 8),
-            Text(
-              S.isAr
-                  ? 'مفيش باراكس في القلعة دي'
-                  : 'No barracks in this castle',
-              style: TextStyle(
-                color: AppTheme.subTextColor(context),
-                fontSize: 11,
-                decoration: TextDecoration.none,
-              ),
-            ),
+            Text(S.isAr ? 'مفيش باراكس في القلعة دي' : 'No barracks in this castle',
+                style: TextStyle(
+                    color: AppTheme.subTextColor(context),
+                    fontSize: 11,
+                    decoration: TextDecoration.none)),
           ] else if (!loading) ...[
             const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
                   child: Text(
-                    S.isAr
-                        ? 'اضغط تحديث لعرض الخانات'
-                        : 'Tap to load slots',
+                    S.isAr ? 'اضغط تحديث لعرض الخانات' : 'Tap to load slots',
                     style: TextStyle(
-                      color: AppTheme.subTextColor(context),
-                      fontSize: 11,
-                      decoration: TextDecoration.none,
-                    ),
+                        color: AppTheme.subTextColor(context),
+                        fontSize: 11,
+                        decoration: TextDecoration.none),
                   ),
                 ),
                 TextButton.icon(
                   onPressed: () => _loadSlots(force: true),
                   icon: const Icon(Icons.refresh_rounded,
                       color: AppTheme.purple, size: 14),
-                  label: Text(
-                    S.isAr ? 'تحديث' : 'Refresh',
-                    style: const TextStyle(
-                      color: AppTheme.purple,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      decoration: TextDecoration.none,
-                    ),
-                  ),
+                  label: Text(S.isAr ? 'تحديث' : 'Refresh',
+                      style: const TextStyle(
+                          color: AppTheme.purple,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.none)),
                 ),
               ],
             ),
@@ -848,27 +784,22 @@ class _TrainingScreenState extends State<TrainingScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(8),
-      ),
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8)),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
           const SizedBox(width: 5),
-          Text(
-            '$value $label',
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              decoration: TextDecoration.none,
-            ),
-          ),
+          Text('$value $label',
+              style: TextStyle(
+                  color: color,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none)),
         ],
       ),
     );
@@ -892,9 +823,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: AppTheme.purple.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
+                    color: AppTheme.purple.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.filter_alt_rounded,
                     color: AppTheme.purple, size: 18),
               ),
@@ -903,24 +833,20 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      S.isAr ? 'الوحدات المتاحة' : 'Available units',
-                      style: TextStyle(
-                        color: AppTheme.textColor(context),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
+                    Text(S.isAr ? 'الوحدات المتاحة' : 'Available units',
+                        style: TextStyle(
+                            color: AppTheme.textColor(context),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            decoration: TextDecoration.none)),
                     Text(
                       S.isAr
                           ? '$shown ظاهر · $verifiedCount مؤكد'
                           : '$shown shown · $verifiedCount verified',
                       style: TextStyle(
-                        color: AppTheme.teal,
-                        fontSize: 9.5,
-                        decoration: TextDecoration.none,
-                      ),
+                          color: AppTheme.teal,
+                          fontSize: 9.5,
+                          decoration: TextDecoration.none),
                     ),
                   ],
                 ),
@@ -932,45 +858,37 @@ class _TrainingScreenState extends State<TrainingScreen> {
             spacing: 6,
             runSpacing: 6,
             children: [
-              _tierChip(context, 'all', S.isAr ? 'الكل' : 'All',
-                  AppTheme.purple),
-              _tierChip(context, 'basic',
-                  S.isAr ? 'أساسي' : 'Basic', AppTheme.teal),
-              _tierChip(context, 'advanced',
-                  S.isAr ? 'متقدم' : 'Advanced', AppTheme.orange),
-              _tierChip(context, 'elite',
-                  S.isAr ? 'نخبة' : 'Elite', AppTheme.red),
+              _tierChip(context, 'all', S.isAr ? 'الكل' : 'All', AppTheme.purple),
+              _tierChip(context, 'basic', S.isAr ? 'أساسي' : 'Basic', AppTheme.teal),
+              _tierChip(context, 'advanced', S.isAr ? 'متقدم' : 'Advanced', AppTheme.orange),
+              _tierChip(context, 'elite', S.isAr ? 'نخبة' : 'Elite', AppTheme.red),
             ],
           ),
           const SizedBox(height: 10),
-          // ═══ Show all toggle ═══
           InkWell(
             onTap: _toggleShowAll,
             borderRadius: BorderRadius.circular(10),
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: _showAll
                     ? AppTheme.orange.withOpacity(0.15)
                     : AppTheme.teal.withOpacity(0.08),
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(
-                  color: _showAll
-                      ? AppTheme.orange.withOpacity(0.4)
-                      : AppTheme.teal.withOpacity(0.3),
-                  width: 1.2,
-                ),
+                    color: _showAll
+                        ? AppTheme.orange.withOpacity(0.4)
+                        : AppTheme.teal.withOpacity(0.3),
+                    width: 1.2),
               ),
               child: Row(
                 children: [
                   Icon(
-                    _showAll
-                        ? Icons.visibility_off_rounded
-                        : Icons.visibility_rounded,
-                    color: _showAll ? AppTheme.orange : AppTheme.teal,
-                    size: 16,
-                  ),
+                      _showAll
+                          ? Icons.visibility_off_rounded
+                          : Icons.visibility_rounded,
+                      color: _showAll ? AppTheme.orange : AppTheme.teal,
+                      size: 16),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Column(
@@ -978,45 +896,31 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       children: [
                         Text(
                           _showAll
-                              ? (S.isAr
-                                  ? 'عرض المؤكد فقط'
-                                  : 'Show verified only')
-                              : (S.isAr
-                                  ? 'عرض كل الوحدات'
-                                  : 'Show all units'),
+                              ? (S.isAr ? 'عرض المؤكد فقط' : 'Show verified only')
+                              : (S.isAr ? 'عرض كل الوحدات' : 'Show all units'),
                           style: TextStyle(
-                            color: _showAll
-                                ? AppTheme.orange
-                                : AppTheme.teal,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            decoration: TextDecoration.none,
-                          ),
+                              color: _showAll ? AppTheme.orange : AppTheme.teal,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              decoration: TextDecoration.none),
                         ),
                         Text(
                           _showAll
                               ? (S.isAr
                                   ? 'هتشوف $totalNotHidden وحدة — جرب واحدة عشان تتأكد'
                                   : '$totalNotHidden units — try to verify')
-                              : (S.isAr
-                                  ? 'طورت الباراكس؟ اضغط هنا'
-                                  : 'Upgraded barracks? Tap here'),
+                              : (S.isAr ? 'طورت الباراكس؟ اضغط هنا' : 'Upgraded barracks? Tap here'),
                           style: TextStyle(
-                            color: AppTheme.subTextColor(context),
-                            fontSize: 9.5,
-                            decoration: TextDecoration.none,
-                          ),
+                              color: AppTheme.subTextColor(context),
+                              fontSize: 9.5,
+                              decoration: TextDecoration.none),
                         ),
                       ],
                     ),
                   ),
-                  Icon(
-                    _showAll
-                        ? Icons.toggle_on_rounded
-                        : Icons.toggle_off_rounded,
-                    color: _showAll ? AppTheme.orange : AppTheme.teal,
-                    size: 26,
-                  ),
+                  Icon(_showAll ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
+                      color: _showAll ? AppTheme.orange : AppTheme.teal,
+                      size: 26),
                 ],
               ),
             ),
@@ -1025,8 +929,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
             const SizedBox(height: 8),
             Row(
               children: [
-                const Icon(Icons.block_rounded,
-                    color: AppTheme.red, size: 12),
+                const Icon(Icons.block_rounded, color: AppTheme.red, size: 12),
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
@@ -1047,8 +950,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  Widget _tierChip(
-      BuildContext context, String key, String label, Color color) {
+  Widget _tierChip(BuildContext context, String key, String label, Color color) {
     final sel = _tierFilter == key;
     return GestureDetector(
       onTap: () => _setTier(key),
@@ -1060,21 +962,17 @@ class _TrainingScreenState extends State<TrainingScreen> {
               : Theme.of(context).colorScheme.surface.withOpacity(0.5),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
-            color: sel
-                ? color.withOpacity(0.6)
-                : AppTheme.subTextColor(context).withOpacity(0.15),
-            width: sel ? 1.4 : 1,
-          ),
+              color: sel
+                  ? color.withOpacity(0.6)
+                  : AppTheme.subTextColor(context).withOpacity(0.15),
+              width: sel ? 1.4 : 1),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: sel ? color : AppTheme.subTextColor(context),
-            fontSize: 11,
-            fontWeight: sel ? FontWeight.bold : FontWeight.w500,
-            decoration: TextDecoration.none,
-          ),
-        ),
+        child: Text(label,
+            style: TextStyle(
+                color: sel ? color : AppTheme.subTextColor(context),
+                fontSize: 11,
+                fontWeight: sel ? FontWeight.bold : FontWeight.w500,
+                decoration: TextDecoration.none)),
       ),
     );
   }
@@ -1094,9 +992,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
               const SizedBox(height: 8),
               Text(
                 _showAll
-                    ? (S.isAr
-                        ? 'مفيش وحدات في المستوى ده'
-                        : 'No units at this tier')
+                    ? (S.isAr ? 'مفيش وحدات في المستوى ده' : 'No units at this tier')
                     : (S.isAr
                         ? 'مفيش وحدات مؤكدة — اضغط "عرض كل الوحدات"'
                         : 'No verified units — tap "Show all"'),
@@ -1114,26 +1010,22 @@ class _TrainingScreenState extends State<TrainingScreen> {
                     onPressed: () => _setTier('all'),
                     icon: const Icon(Icons.refresh_rounded,
                         color: AppTheme.purple, size: 16),
-                    label: Text(
-                      S.isAr ? 'الكل' : 'All',
-                      style: const TextStyle(
-                          color: AppTheme.purple,
-                          fontWeight: FontWeight.bold,
-                          decoration: TextDecoration.none),
-                    ),
+                    label: Text(S.isAr ? 'الكل' : 'All',
+                        style: const TextStyle(
+                            color: AppTheme.purple,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none)),
                   ),
                   if (!_showAll)
                     TextButton.icon(
                       onPressed: _toggleShowAll,
                       icon: const Icon(Icons.visibility_rounded,
                           color: AppTheme.teal, size: 16),
-                      label: Text(
-                        S.isAr ? 'عرض الكل' : 'Show all',
-                        style: const TextStyle(
-                            color: AppTheme.teal,
-                            fontWeight: FontWeight.bold,
-                            decoration: TextDecoration.none),
-                      ),
+                      label: Text(S.isAr ? 'عرض الكل' : 'Show all',
+                          style: const TextStyle(
+                              color: AppTheme.teal,
+                              fontWeight: FontWeight.bold,
+                              decoration: TextDecoration.none)),
                     ),
                 ],
               ),
@@ -1152,12 +1044,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: AppTheme.teal.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.teal.withOpacity(0.3)),
-            ),
-            child: const Icon(Icons.gavel_rounded,
-                color: AppTheme.teal, size: 20),
+                color: AppTheme.teal.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.teal.withOpacity(0.3))),
+            child: const Icon(Icons.gavel_rounded, color: AppTheme.teal, size: 20),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1166,16 +1056,13 @@ class _TrainingScreenState extends State<TrainingScreen> {
               children: [
                 Row(
                   children: [
-                    Text(
-                      S.unitType,
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.subTextColor(context),
-                        letterSpacing: 0.8,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
+                    Text(S.unitType,
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.subTextColor(context),
+                            letterSpacing: 0.8,
+                            decoration: TextDecoration.none)),
                     if (_selectedUnit != null &&
                         !_verifiedUnits.contains(_selectedUnit!.wodId)) ...[
                       const SizedBox(width: 6),
@@ -1183,17 +1070,14 @@ class _TrainingScreenState extends State<TrainingScreen> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 1),
                         decoration: BoxDecoration(
-                          color: AppTheme.orange.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(5),
-                        ),
-                        child: Text(
-                          S.isAr ? 'غير مؤكد' : 'unverified',
-                          style: const TextStyle(
-                              color: AppTheme.orange,
-                              fontSize: 8,
-                              fontWeight: FontWeight.bold,
-                              decoration: TextDecoration.none),
-                        ),
+                            color: AppTheme.orange.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(5)),
+                        child: Text(S.isAr ? 'غير مؤكد' : 'unverified',
+                            style: const TextStyle(
+                                color: AppTheme.orange,
+                                fontSize: 8,
+                                fontWeight: FontWeight.bold,
+                                decoration: TextDecoration.none)),
                       ),
                     ],
                   ],
@@ -1207,10 +1091,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
                     dropdownColor: Theme.of(context).colorScheme.surface,
                     borderRadius: BorderRadius.circular(14),
                     style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.textColor(context),
-                    ),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textColor(context)),
                     items: filtered.map((u) {
                       final isVerified = _verifiedUnits.contains(u.wodId);
                       return DropdownMenuItem(
@@ -1218,32 +1101,28 @@ class _TrainingScreenState extends State<TrainingScreen> {
                         child: Row(
                           children: [
                             Icon(
-                              u.role == 'ranged'
-                                  ? Icons.gps_fixed_rounded
-                                  : Icons.gavel_rounded,
-                              size: 14,
-                              color: u.role == 'ranged'
-                                  ? AppTheme.teal
-                                  : AppTheme.red,
-                            ),
+                                u.role == 'ranged'
+                                    ? Icons.gps_fixed_rounded
+                                    : Icons.gavel_rounded,
+                                size: 14,
+                                color: u.role == 'ranged'
+                                    ? AppTheme.teal
+                                    : AppTheme.red),
                             const SizedBox(width: 6),
                             Expanded(
-                              child: Text(
-                                S.unitName(u.displayName),
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    color: AppTheme.textColor(context)),
-                              ),
+                              child: Text(S.unitName(u.displayName),
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      color: AppTheme.textColor(context))),
                             ),
                             if (!isVerified)
                               Container(
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 4, vertical: 1),
                                 decoration: BoxDecoration(
-                                  color: AppTheme.orange.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
+                                    color: AppTheme.orange.withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(4)),
                                 child: const Icon(Icons.help_outline_rounded,
                                     color: AppTheme.orange, size: 10),
                               ),
@@ -1272,10 +1151,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: AppTheme.orange.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.orange.withOpacity(0.3)),
-            ),
+                color: AppTheme.orange.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.orange.withOpacity(0.3))),
             child: const Icon(Icons.numbers_rounded,
                 color: AppTheme.orange, size: 20),
           ),
@@ -1286,26 +1164,19 @@ class _TrainingScreenState extends State<TrainingScreen> {
               children: [
                 Row(
                   children: [
-                    Text(
-                      S.amount,
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.subTextColor(context),
-                        letterSpacing: 0.8,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
+                    Text(S.amount,
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.subTextColor(context),
+                            letterSpacing: 0.8,
+                            decoration: TextDecoration.none)),
                     const SizedBox(width: 6),
-                    Text(
-                      '(${S.isAr ? "حد أقصى" : "max"} $_maxPerBatch)',
-                      style: TextStyle(
-                        fontSize: 9,
-                        color:
-                            AppTheme.subTextColor(context).withOpacity(0.7),
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
+                    Text('(${S.isAr ? "حد أقصى" : "max"} $_maxPerBatch)',
+                        style: TextStyle(
+                            fontSize: 9,
+                            color: AppTheme.subTextColor(context).withOpacity(0.7),
+                            decoration: TextDecoration.none)),
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -1315,47 +1186,41 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       child: TextField(
                         controller: _amountCtrl,
                         keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly
-                        ],
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                         style: TextStyle(
-                          color: AppTheme.textColor(context),
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          decoration: TextDecoration.none,
-                        ),
+                            color: AppTheme.textColor(context),
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none),
                         decoration: const InputDecoration(
-                          isDense: true,
-                          contentPadding: EdgeInsets.symmetric(vertical: 6),
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                        ),
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(vertical: 6),
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none),
                         onChanged: (_) => setState(() {}),
                       ),
                     ),
                     const SizedBox(width: 8),
                     _stepBtn(
-                      icon: Icons.keyboard_double_arrow_up_rounded,
-                      color: AppTheme.green,
-                      tooltip: S.isAr ? '80' : 'Max ($_maxPerBatch)',
-                      onTap: () {
-                        HapticFeedback.lightImpact();
-                        _amountCtrl.text = _maxPerBatch.toString();
-                        setState(() {});
-                      },
-                    ),
+                        icon: Icons.keyboard_double_arrow_up_rounded,
+                        color: AppTheme.green,
+                        tooltip: S.isAr ? '80' : 'Max ($_maxPerBatch)',
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          _amountCtrl.text = _maxPerBatch.toString();
+                          setState(() {});
+                        }),
                     const SizedBox(width: 6),
                     _stepBtn(
-                      icon: Icons.keyboard_double_arrow_down_rounded,
-                      color: AppTheme.red,
-                      tooltip: S.isAr ? '1' : 'Min',
-                      onTap: () {
-                        HapticFeedback.lightImpact();
-                        _amountCtrl.text = '1';
-                        setState(() {});
-                      },
-                    ),
+                        icon: Icons.keyboard_double_arrow_down_rounded,
+                        color: AppTheme.red,
+                        tooltip: S.isAr ? '1' : 'Min',
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          _amountCtrl.text = '1';
+                          setState(() {});
+                        }),
                   ],
                 ),
               ],
@@ -1366,12 +1231,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  Widget _stepBtn({
-    required IconData icon,
-    required Color color,
-    required String tooltip,
-    required VoidCallback onTap,
-  }) {
+  Widget _stepBtn(
+      {required IconData icon,
+      required Color color,
+      required String tooltip,
+      required VoidCallback onTap}) {
     return Tooltip(
       message: tooltip,
       child: Material(
@@ -1383,10 +1247,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: color.withOpacity(0.35)),
-            ),
+                color: color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: color.withOpacity(0.35))),
             child: Icon(icon, color: color, size: 22),
           ),
         ),
@@ -1407,21 +1270,18 @@ class _TrainingScreenState extends State<TrainingScreen> {
             ? const LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFF00B894), Color(0xFF00D68F)],
-              )
+                colors: [Color(0xFF00B894), Color(0xFF00D68F)])
             : const LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFFEC4899), Color(0xFFFF8E53)],
-              ),
+                colors: [Color(0xFFEC4899), Color(0xFFFF8E53)]),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color:
-                (isRanged ? AppTheme.green : AppTheme.pink).withOpacity(0.35),
-            blurRadius: 22,
-            offset: const Offset(0, 10),
-          ),
+              color: (isRanged ? AppTheme.green : AppTheme.pink)
+                  .withOpacity(0.35),
+              blurRadius: 22,
+              offset: const Offset(0, 10))
         ],
       ),
       child: Row(
@@ -1430,49 +1290,37 @@ class _TrainingScreenState extends State<TrainingScreen> {
             width: 64,
             height: 64,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.22),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.2)),
-            ),
-            child: Icon(
-              isRanged ? Icons.gps_fixed_rounded : Icons.gavel_rounded,
-              color: Colors.white,
-              size: 32,
-            ),
+                color: Colors.white.withOpacity(0.22),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withOpacity(0.2))),
+            child: Icon(isRanged ? Icons.gps_fixed_rounded : Icons.gavel_rounded,
+                color: Colors.white, size: 32),
           ),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  S.unitName(u.displayName),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
+                Text(S.unitName(u.displayName),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        decoration: TextDecoration.none)),
                 const SizedBox(height: 4),
                 Text(
                   isVerified
                       ? (u.isDefensive
                           ? S.defenseOnly
-                          : (isRanged
-                              ? 'Ranged · Offense'
-                              : 'Melee · Offense'))
+                          : (isRanged ? 'Ranged · Offense' : 'Melee · Offense'))
                       : (S.isAr
                           ? 'اضغط "ابدأ التدريب" للتأكد'
                           : 'Tap "Start" to verify'),
                   style: TextStyle(
-                    color: Colors.white
-                        .withOpacity(isVerified ? 0.85 : 0.95),
-                    fontSize: 11.5,
-                    fontWeight:
-                        isVerified ? FontWeight.normal : FontWeight.bold,
-                    decoration: TextDecoration.none,
-                  ),
+                      color: Colors.white.withOpacity(isVerified ? 0.85 : 0.95),
+                      fontSize: 11.5,
+                      fontWeight: isVerified ? FontWeight.normal : FontWeight.bold,
+                      decoration: TextDecoration.none),
                 ),
               ],
             ),
@@ -1480,19 +1328,15 @@ class _TrainingScreenState extends State<TrainingScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.22),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white.withOpacity(0.2)),
-            ),
-            child: Text(
-              'x${_amountCtrl.text}',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-                decoration: TextDecoration.none,
-              ),
-            ),
+                color: Colors.white.withOpacity(0.22),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withOpacity(0.2))),
+            child: Text('x${_amountCtrl.text}',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    decoration: TextDecoration.none)),
           ),
         ],
       ),
