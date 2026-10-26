@@ -24,12 +24,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
   void initState() {
     super.initState();
     _loadCommanders();
-
-    // ❌ اشتراك gam متوقف عمداً — يسبب حظر
-    // _gamSub = widget.client.gamStream.listen((_) {
-    //   _loadCommanders(silent: true);
-    // });
-
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _commanders.any((c) => c.isBusy)) {
         setState(() {});
@@ -100,7 +94,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
+        content: Text(msg,
+            style: const TextStyle(decoration: TextDecoration.none)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
       ));
@@ -154,8 +149,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
                                 itemBuilder: (_, i) => FadeSlideIn(
                                   delay: Duration(
                                       milliseconds: 100 + i * 60),
-                                  child: _commanderCard(
-                                      context, _commanders[i]),
+                                  child:
+                                      _commanderCard(context, _commanders[i]),
                                 ),
                               ),
                             ),
@@ -169,8 +164,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
   }
 
   Widget _header(BuildContext context) {
-    final busyCount =
-        _commanders.where((c) => c.isBusy).length;
+    final busyCount = _commanders.where((c) => c.isBusy).length;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
       child: Row(
@@ -196,7 +190,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
                   ),
                 ),
                 Text(
-                  '${busyCount} / ${_commanders.length} ${S.commanderBusy}',
+                  '$busyCount / ${_commanders.length} ${S.commanderBusy}',
                   style: TextStyle(
                     fontSize: 11,
                     color: AppTheme.subTextColor(context),
@@ -250,9 +244,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
     final isReturning = cmd.movement?.type == 2;
     final isStationed = cmd.movement?.isStationed ?? false;
     final accent = isBusy ? AppTheme.orange : AppTheme.green;
-    final gradient = isBusy
-        ? AppTheme.orangeGradient
-        : AppTheme.successGradient;
+    final gradient =
+        isBusy ? AppTheme.orangeGradient : AppTheme.successGradient;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -262,10 +255,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
             .surface
             .withOpacity(AppTheme.isDark(context) ? 0.6 : 0.9),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: accent.withOpacity(0.25),
-          width: 1.4,
-        ),
+        border: Border.all(color: accent.withOpacity(0.25), width: 1.4),
         boxShadow: [
           BoxShadow(
             color: accent.withOpacity(0.12),
@@ -295,18 +285,15 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ],
                   ),
                   child: Center(
-                    child: cmd.lord.isBaron
-                        ? const Icon(Icons.military_tech_rounded,
-                            color: Colors.white, size: 28)
-                        : Text(
-                            '${cmd.lord.visibleIndex + 1}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 24,
-                              fontWeight: FontWeight.w900,
-                              decoration: TextDecoration.none,
-                            ),
-                          ),
+                    child: Text(
+                      '${cmd.lord.visibleIndex + 1}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 14),
@@ -372,8 +359,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ? Colors.white.withOpacity(0.04)
                     : Colors.black.withOpacity(0.03),
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                    color: accent.withOpacity(0.15)),
+                border: Border.all(color: accent.withOpacity(0.15)),
               ),
               child: Column(
                 children: [
@@ -401,7 +387,9 @@ class _CommandersScreenState extends State<CommandersScreen> {
                       Expanded(
                         child: Text(
                           isStationed
-                              ? (S.isAr ? 'متمركز في قلعة الحليف' : 'Stationed')
+                              ? (S.isAr
+                                  ? 'متمركز في قلعة الحليف'
+                                  : 'Stationed')
                               : cmd.movement!.actionLabel,
                           style: TextStyle(
                             color: AppTheme.textColor(context),
@@ -433,7 +421,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  // 🆕 started / arrives like notifications
                   Row(
                     children: [
                       const Icon(Icons.play_arrow_rounded,

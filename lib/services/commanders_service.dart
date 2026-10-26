@@ -14,20 +14,7 @@ class CommandersService {
     final decoded = jsonDecode(lordsResp.payload!) as Map<String, dynamic>;
     final lords = <Lord>[];
 
-    // Barons (B) — special commanders
-    final barons = (decoded['B'] as List?) ?? [];
-    for (final l in barons) {
-      if (l is! Map) continue;
-      lords.add(Lord(
-        id: _asInt(l['ID']),
-        visibleIndex: _asInt(l['VIS']),
-        factionId: 0,
-        name: l['N'] as String?,
-        isBaron: true,
-      ));
-    }
-
-    // Regular Commanders (C)
+    // Regular commanders only — Baron removed per user request
     final commanders = (decoded['C'] as List?) ?? [];
     for (final l in commanders) {
       if (l is! Map) continue;
@@ -35,8 +22,7 @@ class CommandersService {
         id: _asInt(l['ID']),
         visibleIndex: _asInt(l['VIS']),
         factionId: _asInt(l['FID']),
-        name: l['N'] as String?,       // ✅ FIX: N not NOM
-        isBaron: false,
+        name: l['N'] as String?,
       ));
     }
 
@@ -60,10 +46,8 @@ class CommandersService {
         final pt = _asInt(mov['PT']);
         final movType = _asInt(mov['T']);
 
-        // ✅ FIX: only skip COMPLETED return/transport.
-        // T=0 (attack) and T=1 (support/smuggle) must ALWAYS show
-        // if present in gam — commander is busy either in-flight
-        // OR stationed at ally's castle (this was the bug).
+        // Show T=0 (attack) and T=1 (support/smuggle) always
+        // Skip T=2/T=3 only when already arrived (completed)
         if ((movType == 2 || movType == 3) && tt <= pt) continue;
 
         final ta = mov['TA'] as List?;
@@ -113,12 +97,8 @@ class CommandersService {
       ));
     }
 
-    result.sort((a, b) {
-      if (a.lord.isBaron != b.lord.isBaron) {
-        return a.lord.isBaron ? -1 : 1;
-      }
-      return a.lord.visibleIndex.compareTo(b.lord.visibleIndex);
-    });
+    result.sort(
+        (a, b) => a.lord.visibleIndex.compareTo(b.lord.visibleIndex));
     return result;
   }
 

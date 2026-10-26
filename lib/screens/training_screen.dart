@@ -7,11 +7,8 @@ import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-// ═══════════════════════════════════════════════════════════
-//  TrainingSlots — parsed from `spl` response
-//  Each slot in QS has SI.RUT:
-//    -1 = locked · 0 = free · >0 = busy (remaining seconds)
 // ═══════════════════════════════════════════════════════════
 class TrainingSlots {
   final int barracksFree;
@@ -28,26 +25,21 @@ class TrainingSlots {
   bool get hasBarracks => barracksTotal > 0;
   bool get isAllBusy => barracksTotal > 0 && barracksFree == 0;
 
-  /// Defensive parser — tries multiple shapes for the `spl` response.
   factory TrainingSlots.fromSpl(Map<String, dynamic> data) {
-    // Possible locations for the QS array
     dynamic qs = data['QS'];
     qs ??= (data['A'] is Map) ? (data['A'] as Map)['QS'] : null;
     qs ??= data['S'];
-
     if (qs is! List) {
       return TrainingSlots(barracksFree: 0, barracksBusy: 0);
     }
-
     int free = 0, busy = 0;
     for (final q in qs) {
       if (q is! Map) continue;
-      // RUT can be in SI.RUT or directly in q['RUT']
       final si = q['SI'];
       final rut = (si is Map ? si['RUT'] : null) ?? q['RUT'];
       if (rut is num) {
         final r = rut.toInt();
-        if (r == -1) continue; // locked slot
+        if (r == -1) continue;
         if (r == 0) {
           free++;
         } else {
@@ -69,6 +61,12 @@ class TrainingScreen extends StatefulWidget {
 }
 
 class _TrainingScreenState extends State<TrainingScreen> {
+  static const int _maxPerBatch = 80;
+
+  /// Default verified units for a Level-1 Barracks:
+  ///   602 = Swordsman · 603 = Spearman
+  static const Set<int> _defaultVerified = <int>{602, 603};
+
   List<OwnedCastle> _castles = [];
   Map<int, UnitCatalogEntry> _catalog = {};
   OwnedCastle? _castle;
@@ -78,21 +76,28 @@ class _TrainingScreenState extends State<TrainingScreen> {
   final _amountCtrl = TextEditingController(text: '10');
   bool _training = false;
 
-  /// 'basic' | 'advanced' | 'elite' | 'all'
-  String _tierFilter = 'basic';
-  static const int _maxPerBatch = 80;
+  String _tierFilter = 'all';
 
-  // ═══ Training slots state ═══
   TrainingSlots? _slots;
   bool _slotsLoading = false;
   DateTime? _lastSlotFetch;
   Timer? _slotsTimer;
 
+  // ═══ Verification state (learned, per account) ═══
+  Set<int> _verifiedUnits = {..._defaultVerified};
+  Set<int> _hiddenUnits = {};
+  bool _showAll = false;
+
+  // ═══ Prefs keys (namespaced by player id) ═══
+  String get _verifiedKey =>
+      'training_verified_${widget.client.cachedPlayerId ?? 0}';
+  String get _hiddenKey =>
+      'training_hidden_${widget.client.cachedPlayerId ?? 0}';
+
   @override
   void initState() {
     super.initState();
     _loadAll();
-    // ═══ Auto-refresh every 60s (safe per anti-ban rules) ═══
     _slotsTimer = Timer.periodic(const Duration(seconds: 60), (_) {
       if (mounted) _loadSlots(silent: true);
     });
@@ -105,13 +110,48 @@ class _TrainingScreenState extends State<TrainingScreen> {
     super.dispose();
   }
 
+  // ═══════════════════════════════════════════════════════════
+  //  Prefs: verified / hidden sets
+  // ═══════════════════════════════════════════════════════════
+  Future<void> _loadLearnedSets() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final verifiedList = prefs.getStringList(_verifiedKey);
+      if (verifiedList != null) {
+        final parsed =
+            verifiedList.map((e) => int.tryParse(e)).whereType<int>().toSet();
+        _verifiedUnits = parsed.isEmpty ? {..._defaultVerified} : parsed;
+      }
+      final hiddenList = prefs.getStringList(_hiddenKey);
+      if (hiddenList != null) {
+        _hiddenUnits =
+            hiddenList.map((e) => int.tryParse(e)).whereType<int>().toSet();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveLearnedSets() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        _verifiedKey,
+        _verifiedUnits.map((e) => e.toString()).toList(),
+      );
+      await prefs.setStringList(
+        _hiddenKey,
+        _hiddenUnits.map((e) => e.toString()).toList(),
+      );
+    } catch (_) {}
+  }
+
+  // ═══════════════════════════════════════════════════════════
   Future<void> _loadAll() async {
     try {
+      await _loadLearnedSets();
       final castles = await widget.client.getCastles();
       final catalog = await widget.client.loadCatalog();
       if (!mounted) return;
 
-      // Only Main Castle + Outpost can train
       final trainableCastles =
           castles.where((c) => c.areaType == 1 || c.areaType == 4).toList();
 
@@ -135,30 +175,21 @@ class _TrainingScreenState extends State<TrainingScreen> {
             : null;
       });
 
-      if (_castle != null) {
-        unawaited(_loadSlots(force: true));
-      }
+      if (_castle != null) unawaited(_loadSlots(force: true));
     } catch (e) {
       _snack('$e', color: AppTheme.red);
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  Fetch training slots via `spl` (safe, read-only)
-  // ═══════════════════════════════════════════════════════════
   Future<void> _loadSlots({bool silent = false, bool force = false}) async {
     if (_slotsLoading && !force) return;
-
-    // Throttle: min 30s between fetches unless forced
     if (!force && _lastSlotFetch != null) {
       final diff = DateTime.now().difference(_lastSlotFetch!).inSeconds;
       if (diff < 30) return;
     }
     _lastSlotFetch = DateTime.now();
 
-    if (!silent && mounted) {
-      setState(() => _slotsLoading = true);
-    }
+    if (!silent && mounted) setState(() => _slotsLoading = true);
 
     try {
       final resp = await widget.client.sendXtAndWait(
@@ -168,18 +199,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
         timeoutMs: 8000,
         isAction: false,
       );
-
       if (!mounted) return;
-
       if (resp.payload == null || resp.payload!.isEmpty) {
-        TrafficLog.add('ST', '[Slots] spl returned no payload');
         if (mounted) setState(() => _slotsLoading = false);
         return;
       }
-
-      // Log raw for debugging (helps if response shape differs)
-      TrafficLog.add('ST', '[Slots] spl RX: ${resp.payload}');
-
       final data = jsonDecode(resp.payload!) as Map<String, dynamic>;
       final slots = TrainingSlots.fromSpl(data);
       if (!mounted) return;
@@ -193,7 +217,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  /// Detect tier from unit display name
   String _getUnitTier(UnitCatalogEntry u) {
     final name = u.displayName.toLowerCase();
     if (name.contains('veteran') ||
@@ -213,9 +236,24 @@ class _TrainingScreenState extends State<TrainingScreen> {
     return 'basic';
   }
 
+  // ═══ THE FILTER ═══
+  //  Default: only verified (∩ not hidden)
+  //  Show all: everything except hidden
   List<UnitCatalogEntry> get _filteredTrainable {
-    if (_tierFilter == 'all') return _trainable;
-    return _trainable.where((u) => _getUnitTier(u) == _tierFilter).toList();
+    var base = _trainable.where((u) {
+      if (_hiddenUnits.contains(u.wodId)) return false;
+      if (!_showAll && !_verifiedUnits.contains(u.wodId)) return false;
+      return true;
+    }).toList();
+
+    if (_tierFilter == 'all') return base;
+    return base.where((u) => _getUnitTier(u) == _tierFilter).toList();
+  }
+
+  List<UnitCatalogEntry> get _allTrainableNotHidden {
+    return _trainable
+        .where((u) => !_hiddenUnits.contains(u.wodId))
+        .toList();
   }
 
   void _setTier(String tier) {
@@ -225,11 +263,74 @@ class _TrainingScreenState extends State<TrainingScreen> {
       if (filtered.isEmpty) {
         _selectedUnit = null;
       } else {
-        final stillVisible = filtered.any(
-            (u) => u.wodId == (_selectedUnit?.wodId ?? -1));
+        final stillVisible =
+            filtered.any((u) => u.wodId == (_selectedUnit?.wodId ?? -1));
         if (!stillVisible) _selectedUnit = filtered.first;
       }
     });
+  }
+
+  void _toggleShowAll() {
+    setState(() {
+      _showAll = !_showAll;
+      final filtered = _filteredTrainable;
+      _selectedUnit =
+          filtered.isNotEmpty ? filtered.first : null;
+    });
+  }
+
+  Future<void> _resetLearning() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(
+          S.isAr ? 'إعادة ضبط القائمة؟' : 'Reset list?',
+          style: const TextStyle(decoration: TextDecoration.none),
+        ),
+        content: Text(
+          S.isAr
+              ? 'هيتم إرجاع القائمة للافتراضي (رمح + سياف فقط).\n\n'
+                  'استخدم ده لو طورت الباراكس بتاعك وعايز تكتشف وحدات جديدة.'
+              : 'Will reset to default (Spearman + Swordsman only).\n\n'
+                  'Use this after upgrading your barracks to discover new units.',
+          style: const TextStyle(
+              decoration: TextDecoration.none, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(S.cancel),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style:
+                ElevatedButton.styleFrom(backgroundColor: AppTheme.orange),
+            child: Text(
+              S.isAr ? 'إعادة ضبط' : 'Reset',
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() {
+      _verifiedUnits = {..._defaultVerified};
+      _hiddenUnits.clear();
+      _showAll = false;
+      final filtered = _filteredTrainable;
+      _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
+    });
+    await _saveLearnedSets();
+    if (!mounted) return;
+    _snack(
+      S.isAr ? 'تم إعادة الضبط' : 'Reset done',
+      color: AppTheme.teal,
+    );
   }
 
   Future<void> _train() async {
@@ -249,23 +350,48 @@ class _TrainingScreenState extends State<TrainingScreen> {
       return;
     }
 
+    final capturedWodId = _selectedUnit!.wodId;
+
     setState(() => _training = true);
     final result = await widget.client.trainUnits(
       areaId: _castle!.areaId,
-      wodId: _selectedUnit!.wodId,
+      wodId: capturedWodId,
       amount: amt,
     );
     if (!mounted) return;
     setState(() => _training = false);
 
     if (result.success) {
+      // ✅ Learn: this unit IS trainable
+      _verifiedUnits.add(capturedWodId);
+      _hiddenUnits.remove(capturedWodId);
+      await _saveLearnedSets();
+      if (!mounted) return;
       _snack('✓ ${S.trainingOk}', color: AppTheme.green);
       HapticFeedback.mediumImpact();
-      // Refresh slots after training (server registers busy slot)
       await Future.delayed(const Duration(milliseconds: 1500));
       if (mounted) await _loadSlots(force: true);
     } else {
-      _snack('${S.trainingFail}: ${result.error}', color: AppTheme.red);
+      final err = result.error ?? '';
+      if (err.contains('87') || err.contains('Missing required building')) {
+        // ❌ Learn: NOT trainable → hide
+        _hiddenUnits.add(capturedWodId);
+        _verifiedUnits.remove(capturedWodId);
+        await _saveLearnedSets();
+        if (!mounted) return;
+        setState(() {
+          final remaining = _filteredTrainable;
+          _selectedUnit = remaining.isNotEmpty ? remaining.first : null;
+        });
+        _snack(
+          S.isAr
+              ? 'الوحدة دي مش متاحة — اتشالت من القايمة'
+              : 'Unit not available — removed',
+          color: AppTheme.orange,
+        );
+      } else {
+        _snack('${S.trainingFail}: $err', color: AppTheme.red);
+      }
     }
   }
 
@@ -386,6 +512,13 @@ class _TrainingScreenState extends State<TrainingScreen> {
               ],
             ),
           ),
+          AppIconBtn(
+            icon: Icons.restart_alt_rounded,
+            onTap: _resetLearning,
+            size: 42,
+            color: AppTheme.orange,
+          ),
+          const SizedBox(width: 8),
           Container(
             width: 42,
             height: 42,
@@ -485,9 +618,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                           _selectedUnit =
                               filtered.isNotEmpty ? filtered.first : null;
                         });
-                        if (v != null) {
-                          unawaited(_loadSlots(force: true));
-                        }
+                        if (v != null) unawaited(_loadSlots(force: true));
                       },
                     ),
                   ),
@@ -499,9 +630,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  Slots card
-  // ═══════════════════════════════════════════════════════════
   Widget _slotsCard(BuildContext context) {
     final slots = _slots;
     final loading = _slotsLoading;
@@ -541,9 +669,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: AppTheme.purple,
-                  ),
+                      strokeWidth: 2, color: AppTheme.purple),
                 )
               else
                 GestureDetector(
@@ -565,7 +691,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
                           : '--',
                       style: TextStyle(
                         color: slots != null
-                            ? (slots.isAllBusy ? AppTheme.red : AppTheme.teal)
+                            ? (slots.isAllBusy
+                                ? AppTheme.red
+                                : AppTheme.teal)
                             : AppTheme.subTextColor(context),
                         fontWeight: FontWeight.bold,
                         fontSize: 11,
@@ -637,8 +765,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
             if (slots.isAllBusy) ...[
               const SizedBox(height: 10),
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: AppTheme.orange.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(10),
@@ -747,6 +875,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
   }
 
   Widget _tierFilterRow(BuildContext context) {
+    final shown = _filteredTrainable.length;
+    final verifiedCount = _verifiedUnits.length;
+    final hiddenCount = _hiddenUnits.length;
+    final totalNotHidden = _allTrainableNotHidden.length;
+
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(12),
@@ -767,22 +900,30 @@ class _TrainingScreenState extends State<TrainingScreen> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  S.isAr ? 'مستوى الجنود' : 'Unit tier',
-                  style: TextStyle(
-                    color: AppTheme.textColor(context),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    decoration: TextDecoration.none,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      S.isAr ? 'الوحدات المتاحة' : 'Available units',
+                      style: TextStyle(
+                        color: AppTheme.textColor(context),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                    Text(
+                      S.isAr
+                          ? '$shown ظاهر · $verifiedCount مؤكد'
+                          : '$shown shown · $verifiedCount verified',
+                      style: TextStyle(
+                        color: AppTheme.teal,
+                        fontSize: 9.5,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              Text(
-                '${_filteredTrainable.length} ${S.isAr ? "متاح" : "available"}',
-                style: TextStyle(
-                    color: AppTheme.subTextColor(context),
-                    fontSize: 10.5,
-                    decoration: TextDecoration.none),
               ),
             ],
           ),
@@ -791,16 +932,116 @@ class _TrainingScreenState extends State<TrainingScreen> {
             spacing: 6,
             runSpacing: 6,
             children: [
+              _tierChip(context, 'all', S.isAr ? 'الكل' : 'All',
+                  AppTheme.purple),
               _tierChip(context, 'basic',
                   S.isAr ? 'أساسي' : 'Basic', AppTheme.teal),
               _tierChip(context, 'advanced',
                   S.isAr ? 'متقدم' : 'Advanced', AppTheme.orange),
               _tierChip(context, 'elite',
                   S.isAr ? 'نخبة' : 'Elite', AppTheme.red),
-              _tierChip(context, 'all', S.isAr ? 'الكل' : 'All',
-                  AppTheme.purple),
             ],
           ),
+          const SizedBox(height: 10),
+          // ═══ Show all toggle ═══
+          InkWell(
+            onTap: _toggleShowAll,
+            borderRadius: BorderRadius.circular(10),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: _showAll
+                    ? AppTheme.orange.withOpacity(0.15)
+                    : AppTheme.teal.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: _showAll
+                      ? AppTheme.orange.withOpacity(0.4)
+                      : AppTheme.teal.withOpacity(0.3),
+                  width: 1.2,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _showAll
+                        ? Icons.visibility_off_rounded
+                        : Icons.visibility_rounded,
+                    color: _showAll ? AppTheme.orange : AppTheme.teal,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _showAll
+                              ? (S.isAr
+                                  ? 'عرض المؤكد فقط'
+                                  : 'Show verified only')
+                              : (S.isAr
+                                  ? 'عرض كل الوحدات'
+                                  : 'Show all units'),
+                          style: TextStyle(
+                            color: _showAll
+                                ? AppTheme.orange
+                                : AppTheme.teal,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                        Text(
+                          _showAll
+                              ? (S.isAr
+                                  ? 'هتشوف $totalNotHidden وحدة — جرب واحدة عشان تتأكد'
+                                  : '$totalNotHidden units — try to verify')
+                              : (S.isAr
+                                  ? 'طورت الباراكس؟ اضغط هنا'
+                                  : 'Upgraded barracks? Tap here'),
+                          style: TextStyle(
+                            color: AppTheme.subTextColor(context),
+                            fontSize: 9.5,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    _showAll
+                        ? Icons.toggle_on_rounded
+                        : Icons.toggle_off_rounded,
+                    color: _showAll ? AppTheme.orange : AppTheme.teal,
+                    size: 26,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (hiddenCount > 0) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(Icons.block_rounded,
+                    color: AppTheme.red, size: 12),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    S.isAr
+                        ? '$hiddenCount وحدة اتأكد إنها مش متاحة (87)'
+                        : '$hiddenCount confirmed unavailable (87)',
+                    style: const TextStyle(
+                        color: AppTheme.red,
+                        fontSize: 9.5,
+                        decoration: TextDecoration.none),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -852,9 +1093,13 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   color: AppTheme.subTextColor(context), size: 32),
               const SizedBox(height: 8),
               Text(
-                S.isAr
-                    ? 'مفيش وحدات في المستوى ده'
-                    : 'No units at this tier',
+                _showAll
+                    ? (S.isAr
+                        ? 'مفيش وحدات في المستوى ده'
+                        : 'No units at this tier')
+                    : (S.isAr
+                        ? 'مفيش وحدات مؤكدة — اضغط "عرض كل الوحدات"'
+                        : 'No verified units — tap "Show all"'),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     color: AppTheme.subTextColor(context),
@@ -862,17 +1107,35 @@ class _TrainingScreenState extends State<TrainingScreen> {
                     decoration: TextDecoration.none),
               ),
               const SizedBox(height: 10),
-              TextButton.icon(
-                onPressed: () => _setTier('all'),
-                icon: const Icon(Icons.refresh_rounded,
-                    color: AppTheme.purple, size: 16),
-                label: Text(
-                  S.isAr ? 'اعرض كل الوحدات' : 'Show all units',
-                  style: const TextStyle(
-                      color: AppTheme.purple,
-                      fontWeight: FontWeight.bold,
-                      decoration: TextDecoration.none),
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  TextButton.icon(
+                    onPressed: () => _setTier('all'),
+                    icon: const Icon(Icons.refresh_rounded,
+                        color: AppTheme.purple, size: 16),
+                    label: Text(
+                      S.isAr ? 'الكل' : 'All',
+                      style: const TextStyle(
+                          color: AppTheme.purple,
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.none),
+                    ),
+                  ),
+                  if (!_showAll)
+                    TextButton.icon(
+                      onPressed: _toggleShowAll,
+                      icon: const Icon(Icons.visibility_rounded,
+                          color: AppTheme.teal, size: 16),
+                      label: Text(
+                        S.isAr ? 'عرض الكل' : 'Show all',
+                        style: const TextStyle(
+                            color: AppTheme.teal,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none),
+                      ),
+                    ),
+                ],
               ),
             ],
           ),
@@ -901,15 +1164,39 @@ class _TrainingScreenState extends State<TrainingScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  S.unitType,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.subTextColor(context),
-                    letterSpacing: 0.8,
-                    decoration: TextDecoration.none,
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      S.unitType,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.subTextColor(context),
+                        letterSpacing: 0.8,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                    if (_selectedUnit != null &&
+                        !_verifiedUnits.contains(_selectedUnit!.wodId)) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: AppTheme.orange.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Text(
+                          S.isAr ? 'غير مؤكد' : 'unverified',
+                          style: const TextStyle(
+                              color: AppTheme.orange,
+                              fontSize: 8,
+                              fontWeight: FontWeight.bold,
+                              decoration: TextDecoration.none),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 2),
                 DropdownButtonHideUnderline(
@@ -925,6 +1212,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       color: AppTheme.textColor(context),
                     ),
                     items: filtered.map((u) {
+                      final isVerified = _verifiedUnits.contains(u.wodId);
                       return DropdownMenuItem(
                         value: u,
                         child: Row(
@@ -948,6 +1236,17 @@ class _TrainingScreenState extends State<TrainingScreen> {
                                     color: AppTheme.textColor(context)),
                               ),
                             ),
+                            if (!isVerified)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 4, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.orange.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Icon(Icons.help_outline_rounded,
+                                    color: AppTheme.orange, size: 10),
+                              ),
                           ],
                         ),
                       );
@@ -1099,6 +1398,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (_selectedUnit == null) return const SizedBox.shrink();
     final u = _selectedUnit!;
     final isRanged = u.role == 'ranged';
+    final isVerified = _verifiedUnits.contains(u.wodId);
+
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -1116,8 +1417,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: (isRanged ? AppTheme.green : AppTheme.pink)
-                .withOpacity(0.35),
+            color:
+                (isRanged ? AppTheme.green : AppTheme.pink).withOpacity(0.35),
             blurRadius: 22,
             offset: const Offset(0, 10),
           ),
@@ -1155,12 +1456,21 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  u.isDefensive
-                      ? S.defenseOnly
-                      : (isRanged ? 'Ranged · Offense' : 'Melee · Offense'),
+                  isVerified
+                      ? (u.isDefensive
+                          ? S.defenseOnly
+                          : (isRanged
+                              ? 'Ranged · Offense'
+                              : 'Melee · Offense'))
+                      : (S.isAr
+                          ? 'اضغط "ابدأ التدريب" للتأكد'
+                          : 'Tap "Start" to verify'),
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.85),
+                    color: Colors.white
+                        .withOpacity(isVerified ? 0.85 : 0.95),
                     fontSize: 11.5,
+                    fontWeight:
+                        isVerified ? FontWeight.normal : FontWeight.bold,
                     decoration: TextDecoration.none,
                   ),
                 ),

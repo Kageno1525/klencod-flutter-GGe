@@ -83,7 +83,6 @@ class CastleUnit {
 
   CastleUnit({required this.wodId, required this.amount, this.info});
 
-  // ✅ FIX: use displayName (strips Barracks_Unit_ prefix)
   String get displayName => info?.displayName ?? 'Unit #$wodId';
 
   IconData get icon {
@@ -103,13 +102,14 @@ class CastleUnit {
 }
 
 // ═══════════════════════════════════════════
+//  Lord — no more baron field
+// ═══════════════════════════════════════════
 class Lord {
   final int id;
   final int visibleIndex;
   final int factionId;
   final String? name;
   final int level;
-  final bool isBaron;
 
   Lord({
     required this.id,
@@ -117,12 +117,10 @@ class Lord {
     required this.factionId,
     this.name,
     this.level = 1,
-    this.isBaron = false,
   });
 
   String get displayName {
     if (name?.isNotEmpty == true) return name!;
-    if (isBaron) return 'Baron ${visibleIndex + 1}';
     return 'Lord ${visibleIndex + 1}';
   }
 }
@@ -153,10 +151,8 @@ class LordMovement {
     DateTime? fetchedAt,
   }) : fetchedAt = fetchedAt ?? DateTime.now();
 
-  // Static (from server at fetch time)
   int get timeRemaining => totalTime - paidTime;
 
-  // Live (accounts for time elapsed since fetch)
   int get liveRemainingSeconds {
     final elapsed = DateTime.now().difference(fetchedAt).inSeconds;
     return (timeRemaining - elapsed).clamp(0, 999999);
@@ -325,6 +321,7 @@ const Map<int, String> ggeErrors = {
   27: 'Account is banned',
   50: 'Wrong mode',
   55: 'Not enough resources',
+  87: 'Missing required building',
   88: 'Too much units',
   93: 'Exceeds max count',
   95: 'Cooling down',
@@ -487,8 +484,6 @@ class AttackUnit {
 }
 
 // ═══════════════════════════════════════════
-//  AttackAlert — with targetPlayerName
-// ═══════════════════════════════════════════
 class AttackAlert {
   final int movementId;
   final int attackerId;
@@ -534,15 +529,12 @@ class AttackAlert {
 
   String? get attackerAlly => attackerAlliance;
 
-  // ═══ Timing logic ═══
   DateTime get startedAt =>
       receivedAt.subtract(Duration(seconds: paidTime));
-
   DateTime get arrivalAt =>
       receivedAt.add(Duration(seconds: remainingSeconds));
 
   bool get isCancelled => cancelledAt != null;
-
   bool get isArrived =>
       !isCancelled && DateTime.now().isAfter(arrivalAt);
 
