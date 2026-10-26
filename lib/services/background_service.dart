@@ -1,7 +1,9 @@
-import 'dart:async';                                 // ═══ NEW: needed for unawaited ═══
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import '../gge_client.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../gge_client.dart';  // for TrafficLog
 
 @pragma('vm:entry-point')
 void ggeBackgroundCallback() {
@@ -9,19 +11,92 @@ void ggeBackgroundCallback() {
 }
 
 class _GgeTaskHandler extends TaskHandler {
+  WebSocket? _ws;
+  StreamSubscription? _sub;
+  int _msgCount = 0;
+  bool _connected = false;
+
+  static const String _url =
+      'wss://ep-live-mz-sa1-ae1-eg1-arab1-game.goodgamestudios.com/';
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    debugPrint('[BackgroundService] started');
-    TrafficLog.add('ST', '[BG] service started');
+    debugPrint('[BG WS] onStart');
+    await _save('STARTING');
+    _connect();
+  }
+
+  Future<void> _save(String s) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString('bg_ws_status', s);
+      await p.setString('bg_ws_time', DateTime.now().toIso8601String());
+      await p.setInt('bg_ws_msgs', _msgCount);
+    } catch (_) {}
+  }
+
+  Future<void> _connect() async {
+    try {
+      debugPrint('[BG WS] connecting...');
+      await _save('CONNECTING');
+
+      final ws = await WebSocket.connect(_url)
+          .timeout(const Duration(seconds: 20));
+
+      _ws = ws;
+      _connected = true;
+      debugPrint('[BG WS] CONNECTED ✓');
+      await _save('CONNECTED');
+
+      // Send verChk — same as main app
+      ws.add(
+          '<msg t="sys"><body action="verChk" r="0"><ver v="166" /></body></msg>');
+
+      _sub = ws.listen(
+        (data) {
+          _msgCount++;
+          final text = data.toString();
+          if (text.length < 80) {
+            debugPrint('[BG WS] RX: $text');
+          } else {
+            debugPrint('[BG WS] RX: ${text.substring(0, 80)}...');
+          }
+          _save('MSG_$_msgCount');
+        },
+        onDone: () {
+          debugPrint('[BG WS] disconnected');
+          _connected = false;
+          _save('DISCONNECTED');
+        },
+        onError: (e) {
+          debugPrint('[BG WS] error: $e');
+          _connected = false;
+          _save('ERROR: $e');
+        },
+      );
+    } catch (e) {
+      debugPrint('[BG WS] connect failed: $e');
+      _connected = false;
+      await _save('CONNECT_FAILED: $e');
+    }
   }
 
   @override
-  void onRepeatEvent(DateTime timestamp) {}
+  void onRepeatEvent(DateTime timestamp) {
+    debugPrint('[BG WS] heartbeat (connected=$_connected, msgs=$_msgCount)');
+    _save('HEARTBEAT_$_msgCount');
+  }
 
   @override
   Future<void> onDestroy(DateTime timestamp) async {
-    debugPrint('[BackgroundService] destroyed');
-    TrafficLog.add('ST', '[BG] service destroyed');
+    await _sub?.cancel();
+    try {
+      await _ws?.close();
+    } catch (_) {}
+    _ws = null;
+    _connected = false;
+    debugPrint('[BG WS] destroyed');
+    await _save('DESTROYED');
   }
 
   @override
@@ -81,14 +156,12 @@ class BackgroundService {
     try {
       await init();
 
-      // Request battery exemption — DON'T await (dialog can block)
       unawaited(
         FlutterForegroundTask.isIgnoringBatteryOptimizations
             .then((ignoring) async {
           if (!ignoring) {
             try {
-              await FlutterForegroundTask
-                  .requestIgnoreBatteryOptimization();
+              await FlutterForegroundTask.requestIgnoreBatteryOptimization();
             } catch (_) {}
           }
         }).catchError((_) {}),

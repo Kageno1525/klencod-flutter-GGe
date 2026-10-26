@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
@@ -23,10 +24,8 @@ void main() async {
   } catch (_) {}
   S.current = locale;
 
-  // Start app first — never block
   runApp(GgeApp(initialDark: dark));
 
-  // Background init (fire-and-forget, safe)
   unawaited(NotificationsService.init().catchError((e) {
     debugPrint('[Init] NotificationsService: $e');
   }));
@@ -59,6 +58,7 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _isDark = widget.initialDark;
     _locale = S.current;
+    unawaited(_logBgWsStatus());
   }
 
   @override
@@ -70,6 +70,24 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     GgeClient().onAppLifecycleChanged(state);
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_logBgWsStatus());
+    }
+  }
+
+  Future<void> _logBgWsStatus() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final status = p.getString('bg_ws_status');
+      final time = p.getString('bg_ws_time');
+      final msgs = p.getInt('bg_ws_msgs');
+      if (status != null) {
+        TrafficLog.add('ST',
+            '[BG Status] $status @ ${time ?? "?"} (msgs=${msgs ?? 0})');
+      } else {
+        TrafficLog.add('ST', '[BG Status] never ran');
+      }
+    } catch (_) {}
   }
 
   Future<void> toggleTheme() async {
