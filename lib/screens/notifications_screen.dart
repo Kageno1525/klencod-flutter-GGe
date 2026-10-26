@@ -258,10 +258,23 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 onTap: () async {
                   final granted =
                       await NotificationsService.requestPermission();
-                  if (!granted && mounted) {
-                    await NotificationsService.openNotificationSettings();
+                  if (mounted) {
+                    setState(() {});
+                    if (!granted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'لو النافذة ما ظهرتش — افتح إعدادات التطبيق وفعّل الإشعارات يدوياً',
+                            style: const TextStyle(
+                                decoration: TextDecoration.none),
+                          ),
+                          backgroundColor: AppTheme.orange,
+                          behavior: SnackBarBehavior.floating,
+                          duration: const Duration(seconds: 4),
+                        ),
+                      );
+                    }
                   }
-                  if (mounted) setState(() {});
                 },
                 borderRadius: BorderRadius.circular(10),
                 child: Container(

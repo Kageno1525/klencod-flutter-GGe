@@ -64,7 +64,6 @@ class NotificationsService {
             ))
             .timeout(const Duration(seconds: 2));
 
-        // Check existing permission (without prompting)
         _permissionGranted =
             await android.areNotificationsEnabled() ?? false;
         debugPrint('[Notifications] permission granted: $_permissionGranted');
@@ -75,8 +74,6 @@ class NotificationsService {
     }
   }
 
-  /// Request notification permission (Android 13+ shows system dialog).
-  /// Returns true if granted.
   static Future<bool> requestPermission() async {
     try {
       final android = _plugin.resolvePlatformSpecificImplementation<
@@ -88,7 +85,6 @@ class NotificationsService {
           .timeout(const Duration(seconds: 15), onTimeout: () => false);
       _permissionGranted = granted ?? false;
 
-      // Save that we asked once
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool(_permissionAskedKey, true);
@@ -121,16 +117,6 @@ class NotificationsService {
       return _permissionGranted;
     } catch (_) {
       return false;
-    }
-  }
-
-  static Future<void> openNotificationSettings() async {
-    try {
-      final android = _plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
-      await android?.openNotificationSettings();
-    } catch (e) {
-      debugPrint('[Notifications] openSettings failed: $e');
     }
   }
 
@@ -176,14 +162,12 @@ class NotificationsService {
       return;
     }
 
-    // Add to in-app history
     _history.insert(0, alert);
     if (_history.length > 100) {
       _history.removeRange(100, _history.length);
     }
     if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
 
-    // ═══ ALWAYS show system notification (sound is optional) ═══
     final unitsLine = alert.units.isEmpty
         ? 'Movement detected'
         : alert.units
