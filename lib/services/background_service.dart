@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';  // for TrafficLog
 
 @pragma('vm:entry-point')
 void ggeBackgroundCallback() {
+  // ═══ CRITICAL: init Flutter bindings in this isolate ═══
+  WidgetsFlutterBinding.ensureInitialized();
+  DartPluginRegistrant.ensureInitialized();
   FlutterForegroundTask.setTaskHandler(_GgeTaskHandler());
 }
 
@@ -26,13 +30,16 @@ class _GgeTaskHandler extends TaskHandler {
     _connect();
   }
 
+  /// Uses FlutterForegroundTask.saveData — works across isolates
   Future<void> _save(String s) async {
     try {
-      final p = await SharedPreferences.getInstance();
-      await p.setString('bg_ws_status', s);
-      await p.setString('bg_ws_time', DateTime.now().toIso8601String());
-      await p.setInt('bg_ws_msgs', _msgCount);
-    } catch (_) {}
+      await FlutterForegroundTask.saveData(key: 'bg_status', value: s);
+      await FlutterForegroundTask.saveData(
+          key: 'bg_time', value: DateTime.now().toIso8601String());
+      await FlutterForegroundTask.saveData(key: 'bg_msgs', value: _msgCount);
+    } catch (e) {
+      debugPrint('[BG WS] save error: $e');
+    }
   }
 
   Future<void> _connect() async {
@@ -210,5 +217,28 @@ class BackgroundService {
     try {
       await FlutterForegroundTask.requestIgnoreBatteryOptimization();
     } catch (_) {}
+  }
+
+  /// Read BG WS status from main isolate
+  static Future<Map<String, dynamic>> readStatus() async {
+    try {
+      final status =
+          await FlutterForegroundTask.getData<String>(key: 'bg_status');
+      final time =
+          await FlutterForegroundTask.getData<String>(key: 'bg_time');
+      final msgs =
+          await FlutterForegroundTask.getData<int>(key: 'bg_msgs');
+      return {
+        'status': status ?? 'never ran',
+        'time': time ?? '?',
+        'msgs': msgs ?? 0,
+      };
+    } catch (e) {
+      return {
+        'status': 'read error: $e',
+        'time': '?',
+        'msgs': 0,
+      };
+    }
   }
 }

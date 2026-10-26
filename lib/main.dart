@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
@@ -77,17 +76,12 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
 
   Future<void> _logBgWsStatus() async {
     try {
-      final p = await SharedPreferences.getInstance();
-      final status = p.getString('bg_ws_status');
-      final time = p.getString('bg_ws_time');
-      final msgs = p.getInt('bg_ws_msgs');
-      if (status != null) {
-        TrafficLog.add('ST',
-            '[BG Status] $status @ ${time ?? "?"} (msgs=${msgs ?? 0})');
-      } else {
-        TrafficLog.add('ST', '[BG Status] never ran');
-      }
-    } catch (_) {}
+      final info = await BackgroundService.readStatus();
+      TrafficLog.add('ST',
+          '[BG Status] ${info['status']} @ ${info['time']} (msgs=${info['msgs']})');
+    } catch (e) {
+      TrafficLog.add('ER', '[BG Status] read failed: $e');
+    }
   }
 
   Future<void> toggleTheme() async {
