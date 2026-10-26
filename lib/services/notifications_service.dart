@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui' show Color;  // ═══ NEW: needed for ledColor ═══
+import 'dart:ui' show Color;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -44,40 +44,63 @@ class NotificationsService {
       TrafficLog.add('ER', '[Notif] prefs load failed: $e');
     }
 
-    try {
-      const androidInit =
-          AndroidInitializationSettings('@mipmap/ic_launcher');
-      const init = InitializationSettings(android: androidInit);
-      await _plugin.initialize(init).timeout(const Duration(seconds: 3));
-      TrafficLog.add('ST', '[Notif] plugin initialized');
+    // ═══ FIX: try multiple icon resources ═══
+    const icons = <String>[
+      '@drawable/ic_launcher',              // matches manifest
+      '@mipmap/ic_launcher',                 // default Flutter
+      '@android:drawable/sym_def_app_icon',  // system fallback
+    ];
 
+    var initOk = false;
+    for (final icon in icons) {
+      try {
+        final androidInit = AndroidInitializationSettings(icon);
+        final init = InitializationSettings(android: androidInit);
+        await _plugin.initialize(init).timeout(const Duration(seconds: 3));
+        TrafficLog.add('ST', '[Notif] plugin initialized with $icon');
+        initOk = true;
+        break;
+      } catch (e) {
+        TrafficLog.add('ER', '[Notif] init failed with $icon: $e');
+      }
+    }
+
+    if (!initOk) {
+      TrafficLog.add('ER', '[Notif] ALL icon attempts failed — notifications disabled');
+      return;
+    }
+
+    try {
       final android = _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
-
       if (android != null) {
-        await android
-            .createNotificationChannel(const AndroidNotificationChannel(
-              _channelId,
-              'Attack Alerts',
-              description: 'Incoming attacks notifications',
-              importance: Importance.max,
-              playSound: true,
-              enableVibration: true,
-            ))
-            .timeout(const Duration(seconds: 2));
-        TrafficLog.add('ST', '[Notif] channel created');
+        try {
+          await android
+              .createNotificationChannel(const AndroidNotificationChannel(
+                _channelId,
+                'Attack Alerts',
+                description: 'Incoming attacks notifications',
+                importance: Importance.max,
+                playSound: true,
+                enableVibration: true,
+              ))
+              .timeout(const Duration(seconds: 2));
+          TrafficLog.add('ST', '[Notif] channel created');
+        } catch (e) {
+          TrafficLog.add('ER', '[Notif] channel create failed: $e');
+        }
 
         _permissionGranted =
             await android.areNotificationsEnabled() ?? false;
         TrafficLog.add('ST',
             '[Notif] permission granted: $_permissionGranted');
-      } else {
-        TrafficLog.add('ER', '[Notif] android plugin is null!');
       }
+      // Even if channel creation failed, plugin.initialize succeeded
       _ready = true;
       TrafficLog.add('ST', '[Notif] init complete (ready=true)');
     } catch (e) {
-      TrafficLog.add('ER', '[Notif] init error: $e');
+      TrafficLog.add('ER', '[Notif] init post-step error: $e');
+      _ready = true; // still allow show() attempts
     }
   }
 
@@ -97,7 +120,6 @@ class NotificationsService {
         await prefs.setBool(_permissionAskedKey, true);
       } catch (_) {}
 
-      // If permission was just granted, try init again
       if (_permissionGranted && !_ready) {
         await init();
       }
@@ -159,6 +181,11 @@ class NotificationsService {
     _subscribedClient = client;
     _sub = client.attackStream.listen(_onAttack);
     TrafficLog.add('ST', '[Notif] listening to attackStream');
+
+    // Retry init if it failed earlier
+    if (!_ready) {
+      unawaited(init());
+    }
   }
 
   static void stopListening() {
@@ -178,7 +205,6 @@ class NotificationsService {
 
     if (!_enabled) return;
 
-    // ═══ KEY FIX: ALWAYS add to in-app history ═══
     _history.insert(0, alert);
     if (_history.length > 100) {
       _history.removeRange(100, _history.length);
@@ -187,14 +213,9 @@ class NotificationsService {
     TrafficLog.add('ST',
         '[Notif] history updated (total=${_history.length})');
 
-    // Only system notification requires plugin readiness
-    if (!_ready) {
-      TrafficLog.add('ER',
-          '[Notif] plugin NOT ready — in-app only, no system notification');
-      unawaited(init());
-      return;
-    }
-
+    // ═══ FIX: try show even if _ready is false ═══
+    // If plugin.initialize succeeded but channel creation failed, 
+    // _plugin.show() might still work
     final unitsLine = alert.units.isEmpty
         ? 'Movement detected'
         : alert.units
@@ -227,8 +248,6 @@ class NotificationsService {
             fullScreenIntent: false,
             autoCancel: true,
             ongoing: false,
-            enableLights: true,
-            ledColor: const Color(0xFFFF0000), // ← now works
           ),
         ),
         payload: '${alert.movementId}',
@@ -236,7 +255,8 @@ class NotificationsService {
       TrafficLog.add('ST',
           '[Notif] system notification shown for mid=${alert.movementId}');
     } catch (e) {
-      TrafficLog.add('ER', '[Notif] show failed: $e');
+      TrafficLog.add('ER', '[Notif] show failed: $e — retrying init');
+      unawaited(init());
     }
   }
 

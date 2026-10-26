@@ -64,6 +64,9 @@ class GgeClient {
   static GgeClient? _instance;
   factory GgeClient() => _instance ??= GgeClient._internal();
 
+  // ═══ Allow WS reconnect even when app is in background ═══
+  static bool allowBackgroundReconnect = false;
+
   IOWebSocketChannel? _channel;
   StreamSubscription? _sub;
 
@@ -275,7 +278,6 @@ class GgeClient {
 
     if (_alertedMids.length > 500) _alertedMids.clear();
 
-    // ✅ FIX: cast to Map<String, dynamic>
     final owners = <int, Map<String, dynamic>>{};
     for (final o in (data['O'] as List? ?? [])) {
       if (o is Map) {
@@ -695,12 +697,16 @@ class GgeClient {
     _status('Init sequence done ✓');
   }
 
+  // ═══ FIX: reconnect allowed if background service is running ═══
   void _scheduleReconnect() {
-    if (_disposed || !_appForeground) return;
+    if (_disposed) return;
+    if (!_appForeground && !allowBackgroundReconnect) return;
     Future.delayed(const Duration(seconds: 3), () {
-      if (!_disposed && !_connected && _appForeground && isLoggedIn) {
-        autoReconnect();
-      }
+      if (_disposed) return;
+      if (_connected) return;
+      if (!_appForeground && !allowBackgroundReconnect) return;
+      if (!isLoggedIn) return;
+      autoReconnect();
     });
   }
 
@@ -1034,5 +1040,6 @@ class GgeClient {
     await _gamCtrl.close();
     await _attackCtrl.close();
     _instance = null;
+    allowBackgroundReconnect = false;
   }
 }

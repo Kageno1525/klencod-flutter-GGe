@@ -1,8 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import '../gge_client.dart';
 
-/// Top-level callback (required by flutter_foreground_task).
-/// Runs in a separate isolate, only job is to keep app alive.
 @pragma('vm:entry-point')
 void ggeBackgroundCallback() {
   FlutterForegroundTask.setTaskHandler(_GgeTaskHandler());
@@ -12,16 +11,16 @@ class _GgeTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     debugPrint('[BackgroundService] started');
+    TrafficLog.add('ST', '[BG] service started');
   }
 
   @override
-  void onRepeatEvent(DateTime timestamp) {
-    // Heartbeat — main isolate handles real work
-  }
+  void onRepeatEvent(DateTime timestamp) {}
 
   @override
   Future<void> onDestroy(DateTime timestamp) async {
     debugPrint('[BackgroundService] destroyed');
+    TrafficLog.add('ST', '[BG] service destroyed');
   }
 
   @override
@@ -73,7 +72,7 @@ class BackgroundService {
       ),
     );
     _initialized = true;
-    debugPrint('[BackgroundService] initialized');
+    TrafficLog.add('ST', '[BG] plugin initialized');
   }
 
   static Future<bool> start() async {
@@ -81,16 +80,18 @@ class BackgroundService {
     try {
       await init();
 
-      // Ask user to disable battery optimization (critical for OEMs like Xiaomi)
-      try {
-        final ignoring =
-            await FlutterForegroundTask.isIgnoringBatteryOptimizations;
-        if (!ignoring) {
-          await FlutterForegroundTask.requestIgnoreBatteryOptimization();
-        }
-      } catch (e) {
-        debugPrint('[BackgroundService] battery opt request failed: $e');
-      }
+      // Request battery exemption — DON'T await (dialog can block)
+      unawaited(
+        FlutterForegroundTask.isIgnoringBatteryOptimizations
+            .then((ignoring) async {
+          if (!ignoring) {
+            try {
+              await FlutterForegroundTask
+                  .requestIgnoreBatteryOptimization();
+            } catch (_) {}
+          }
+        }).catchError((_) {}),
+      );
 
       final service = await FlutterForegroundTask.startService(
         serviceId: 1001,
@@ -100,10 +101,11 @@ class BackgroundService {
       );
 
       _running = service != null;
-      debugPrint('[BackgroundService] start → $_running');
+      GgeClient.allowBackgroundReconnect = _running;
+      TrafficLog.add('ST', '[BG] start → $_running');
       return _running;
     } catch (e) {
-      debugPrint('[BackgroundService] start failed: $e');
+      TrafficLog.add('ER', '[BG] start failed: $e');
       return false;
     }
   }
@@ -113,19 +115,11 @@ class BackgroundService {
     try {
       await FlutterForegroundTask.stopService();
     } catch (e) {
-      debugPrint('[BackgroundService] stop failed: $e');
+      TrafficLog.add('ER', '[BG] stop failed: $e');
     }
     _running = false;
-  }
-
-  static Future<void> updateStatus(String text) async {
-    if (!_running) return;
-    try {
-      await FlutterForegroundTask.updateService(
-        notificationTitle: 'GGE Bot is active',
-        notificationText: text,
-      );
-    } catch (_) {}
+    GgeClient.allowBackgroundReconnect = false;
+    TrafficLog.add('ST', '[BG] stopped');
   }
 
   static Future<bool> isBatteryOptimized() async {

@@ -41,7 +41,6 @@ class _LoginScreenState extends State<LoginScreen> {
     _userCtrl.text = u ?? '';
     _passCtrl.text = p ?? '';
 
-    // ═══ NEW: Ask notifications permission on first launch ═══
     if (!_checkedPermissions) {
       _checkedPermissions = true;
       await _ensureNotificationPermission();
@@ -58,15 +57,12 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _ensureNotificationPermission() async {
     try {
-      // Check current state
       final granted = await NotificationsService.checkPermission();
       if (granted) return;
 
-      // Ask if not granted
       if (!mounted) return;
       final asked = await NotificationsService.hasAskedBefore();
       if (!asked) {
-        // First time → show explanation then request
         if (!mounted) return;
         final ok = await showDialog<bool>(
           context: context,
@@ -100,7 +96,6 @@ class _LoginScreenState extends State<LoginScreen> {
         if (ok != true) return;
       }
 
-      // Request from system
       await NotificationsService.requestPermission();
     } catch (_) {}
   }
@@ -133,9 +128,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
       await AppStorage.setLoggedIn(true);
 
-      // ═══ NEW: start notifications + foreground service ═══
+      // ═══ Notifications listening ═══
       NotificationsService.startListening();
-      await BackgroundService.start();
+
+      // ═══ FIX: fire-and-forget BackgroundService ═══
+      // (don't await — might show battery dialog and hang)
+      BackgroundService.start().catchError((e) {
+        // ignore errors from background service
+      });
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
