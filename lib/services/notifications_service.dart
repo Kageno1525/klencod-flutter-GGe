@@ -38,12 +38,14 @@ class NotificationsService {
 
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
+
+    // ✅ FIX: AndroidNotificationChannel has no `priority` parameter
+    // (priority only exists on AndroidNotificationDetails)
     await android?.createNotificationChannel(const AndroidNotificationChannel(
       _channelId,
       'Attack Alerts',
       description: 'Notifications when someone attacks you',
       importance: Importance.max,
-      priority: Priority.high,
       playSound: true,
       enableVibration: true,
     ));

@@ -70,13 +70,11 @@ class GgeClient {
   final StreamController<XtMessage> _xtCtrl = StreamController.broadcast();
   final StreamController<String> _rawCtrl = StreamController.broadcast();
   final StreamController<List<dynamic>> _gamCtrl = StreamController.broadcast();
-  // ═══ NEW ═══
   final StreamController<AttackAlert> _attackCtrl = StreamController.broadcast();
 
   Stream<XtMessage> get xtStream => _xtCtrl.stream;
   Stream<String> get rawStream => _rawCtrl.stream;
   Stream<List<dynamic>> get gamStream => _gamCtrl.stream;
-  // ═══ NEW ═══
   Stream<AttackAlert> get attackStream => _attackCtrl.stream;
 
   bool _connected = false;
@@ -97,7 +95,6 @@ class GgeClient {
   bool _appForeground = true;
   DateTime? _lastRxTime;
 
-  // ═══ NEW: attack tracking ═══
   int? _cachedPlayerId;
   final Set<int> _alertedMids = {};
 
@@ -135,7 +132,6 @@ class GgeClient {
   bool get gbdReceived => _gbdReceived;
   int? get mainCastleAreaId => _mainCastleAreaId;
 
-  // ═══ NEW ═══
   int? get cachedPlayerId => _cachedPlayerId;
   set cachedPlayerId(int? v) => _cachedPlayerId = v;
 
@@ -156,7 +152,6 @@ class GgeClient {
       try {
         final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
 
-        // ═══ NEW: extract PID from gbd.gpi ═══
         final gpi = data['gpi'];
         if (gpi is Map) {
           final pid = _asIntOrNull(gpi['PID']);
@@ -230,7 +225,6 @@ class GgeClient {
         final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
         final moves = data['M'] as List? ?? [];
         if (!_gamCtrl.isClosed) _gamCtrl.add(moves);
-        // ═══ NEW: process attacks ═══
         try {
           _processAttacks(data);
         } catch (e) {
@@ -242,7 +236,6 @@ class GgeClient {
     if (msg.command == 'gcl' && msg.payload != null) {
       try {
         final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
-        // ═══ NEW: extract PID from gcl (fallback) ═══
         final pid = _asIntOrNull(data['PID']);
         if (pid != null && pid > 0 && _cachedPlayerId == null) {
           _cachedPlayerId = pid;
@@ -276,16 +269,18 @@ class GgeClient {
     }
   }
 
-  // ═══ NEW: Attack processing ═══
   void _processAttacks(Map<String, dynamic> data) {
     final myPid = _cachedPlayerId;
     if (myPid == null || myPid <= 0) return;
 
     if (_alertedMids.length > 500) _alertedMids.clear();
 
+    // ✅ FIX: cast to Map<String, dynamic>
     final owners = <int, Map<String, dynamic>>{};
     for (final o in (data['O'] as List? ?? [])) {
-      if (o is Map) owners[_asInt(o['OID'])] = o;
+      if (o is Map) {
+        owners[_asInt(o['OID'])] = Map<String, dynamic>.from(o);
+      }
     }
 
     for (final m in (data['M'] as List? ?? [])) {
@@ -961,7 +956,6 @@ class GgeClient {
     _startBackgroundPolling();
   }
 
-  // Facade methods (screens use these)
   Future<List<OwnedCastle>> getCastles() => castleService.getCastles();
 
   Future<List<CastleUnit>> getCastleUnits(
