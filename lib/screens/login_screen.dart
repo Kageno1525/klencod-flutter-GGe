@@ -6,8 +6,8 @@ import 'package:gge/theme.dart';
 import 'package:gge/main.dart' show GgeApp, GgeAppState;
 import 'package:gge/screens/main_screen.dart' show MainScreen;
 import 'package:gge/widgets/animated_widgets.dart';
-// ═══ NEW ═══
 import 'package:gge/services/notifications_service.dart';
+import 'package:gge/services/background_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -24,6 +24,7 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _error;
   bool _autoTried = false;
   bool _obscure = true;
+  bool _checkedPermissions = false;
 
   @override
   void initState() {
@@ -40,6 +41,12 @@ class _LoginScreenState extends State<LoginScreen> {
     _userCtrl.text = u ?? '';
     _passCtrl.text = p ?? '';
 
+    // ═══ NEW: Ask notifications permission on first launch ═══
+    if (!_checkedPermissions) {
+      _checkedPermissions = true;
+      await _ensureNotificationPermission();
+    }
+
     if (!_autoTried &&
         isLoggedIn &&
         (u?.isNotEmpty == true) &&
@@ -47,6 +54,55 @@ class _LoginScreenState extends State<LoginScreen> {
       _autoTried = true;
       _login();
     }
+  }
+
+  Future<void> _ensureNotificationPermission() async {
+    try {
+      // Check current state
+      final granted = await NotificationsService.checkPermission();
+      if (granted) return;
+
+      // Ask if not granted
+      if (!mounted) return;
+      final asked = await NotificationsService.hasAskedBefore();
+      if (!asked) {
+        // First time → show explanation then request
+        if (!mounted) return;
+        final ok = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            backgroundColor: Theme.of(context).colorScheme.surface,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20)),
+            title: const Text('تفعيل الإشعارات',
+                style: TextStyle(decoration: TextDecoration.none)),
+            content: const Text(
+              'عشان نبهك أول ما حد يهجم عليك — لازم تسمح لنا نبعت إشعارات.\n\n'
+              'ده مهم جداً عشان تلحق تتصرف قبل وصول الجيش.',
+              style: TextStyle(decoration: TextDecoration.none, height: 1.5),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('مش دلوقتي'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.purple),
+                child: const Text('تفعيل',
+                    style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          ),
+        );
+        if (ok != true) return;
+      }
+
+      // Request from system
+      await NotificationsService.requestPermission();
+    } catch (_) {}
   }
 
   Future<void> _login() async {
@@ -77,8 +133,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
       await AppStorage.setLoggedIn(true);
 
-      // ═══ NEW: start notification listener after login ═══
+      // ═══ NEW: start notifications + foreground service ═══
       NotificationsService.startListening();
+      await BackgroundService.start();
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(

@@ -7,11 +7,11 @@ import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/screens/login_screen.dart';
 import 'package:gge/services/notifications_service.dart';
+import 'package:gge/services/background_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load saved prefs with timeout — never block app start
   bool dark = true;
   Locale locale = const Locale('ar');
   try {
@@ -23,13 +23,15 @@ void main() async {
   } catch (_) {}
   S.current = locale;
 
-  // ✅ Start the app FIRST — this is the critical part
+  // Start app first — never block
   runApp(GgeApp(initialDark: dark));
 
-  // ✅ Fire-and-forget notification init — MUST NOT block UI
-  // Errors are swallowed so they never crash the app
+  // Background init (fire-and-forget, safe)
   unawaited(NotificationsService.init().catchError((e) {
-    debugPrint('[Notifications] init failed: $e');
+    debugPrint('[Init] NotificationsService: $e');
+  }));
+  unawaited(BackgroundService.init().catchError((e) {
+    debugPrint('[Init] BackgroundService: $e');
   }));
 }
 

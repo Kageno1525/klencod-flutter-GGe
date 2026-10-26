@@ -12,6 +12,7 @@ class NotificationsService {
   static const _channelId = 'gge_attacks';
   static const _soundKey = 'notif_sound_enabled';
   static const _enabledKey = 'notif_enabled';
+  static const _permissionAskedKey = 'notif_permission_asked';
 
   static StreamSubscription<AttackAlert>? _sub;
   static GgeClient? _subscribedClient;
@@ -24,64 +25,112 @@ class NotificationsService {
 
   static bool _soundEnabled = true;
   static bool _enabled = true;
+  static bool _permissionGranted = false;
+  static bool _ready = false;
+
   static bool get soundEnabled => _soundEnabled;
   static bool get enabled => _enabled;
+  static bool get permissionGranted => _permissionGranted;
+  static bool get ready => _ready;
 
-  /// Safe init — never hangs, never throws.
   static Future<void> init() async {
     try {
-      // Load prefs
-      try {
-        final prefs = await SharedPreferences.getInstance()
-            .timeout(const Duration(seconds: 2));
-        _soundEnabled = prefs.getBool(_soundKey) ?? true;
-        _enabled = prefs.getBool(_enabledKey) ?? true;
-      } catch (e) {
-        debugPrint('[Notifications] prefs load failed: $e');
-      }
+      final prefs = await SharedPreferences.getInstance()
+          .timeout(const Duration(seconds: 2));
+      _soundEnabled = prefs.getBool(_soundKey) ?? true;
+      _enabled = prefs.getBool(_enabledKey) ?? true;
+    } catch (e) {
+      debugPrint('[Notifications] prefs load failed: $e');
+    }
 
-      // Initialize plugin
-      const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    try {
+      const androidInit =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
       const init = InitializationSettings(android: androidInit);
       await _plugin.initialize(init).timeout(const Duration(seconds: 3));
-      debugPrint('[Notifications] plugin initialized');
 
-      // Create channel
       final android = _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
 
       if (android != null) {
-        try {
-          await android
-              .createNotificationChannel(const AndroidNotificationChannel(
-                _channelId,
-                'Attack Alerts',
-                description: 'Notifications when someone attacks you',
-                importance: Importance.max,
-                playSound: true,
-                enableVibration: true,
-              ))
-              .timeout(const Duration(seconds: 2));
-          debugPrint('[Notifications] channel created');
-        } catch (e) {
-          debugPrint('[Notifications] channel create failed: $e');
-        }
+        await android
+            .createNotificationChannel(const AndroidNotificationChannel(
+              _channelId,
+              'Attack Alerts',
+              description: 'Incoming attacks notifications',
+              importance: Importance.max,
+              playSound: true,
+              enableVibration: true,
+            ))
+            .timeout(const Duration(seconds: 2));
 
-        // Request permission WITHOUT blocking main thread
-        // This shows a dialog — we don't await it in the call chain
-        unawaited(
-          android
-              .requestNotificationsPermission()
-              .timeout(const Duration(seconds: 5),
-                  onTimeout: () => false)
-              .catchError((e) {
-            debugPrint('[Notifications] permission request failed: $e');
-            return false;
-          }),
-        );
+        // Check existing permission (without prompting)
+        _permissionGranted =
+            await android.areNotificationsEnabled() ?? false;
+        debugPrint('[Notifications] permission granted: $_permissionGranted');
       }
+      _ready = true;
     } catch (e) {
       debugPrint('[Notifications] init error: $e');
+    }
+  }
+
+  /// Request notification permission (Android 13+ shows system dialog).
+  /// Returns true if granted.
+  static Future<bool> requestPermission() async {
+    try {
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (android == null) return false;
+
+      final granted = await android
+          .requestNotificationsPermission()
+          .timeout(const Duration(seconds: 15), onTimeout: () => false);
+      _permissionGranted = granted ?? false;
+
+      // Save that we asked once
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(_permissionAskedKey, true);
+      } catch (_) {}
+
+      debugPrint('[Notifications] permission result: $_permissionGranted');
+      return _permissionGranted;
+    } catch (e) {
+      debugPrint('[Notifications] requestPermission failed: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> hasAskedBefore() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(_permissionAskedKey) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> checkPermission() async {
+    try {
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (android == null) return false;
+      _permissionGranted =
+          await android.areNotificationsEnabled() ?? false;
+      return _permissionGranted;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> openNotificationSettings() async {
+    try {
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      await android?.openNotificationSettings();
+    } catch (e) {
+      debugPrint('[Notifications] openSettings failed: $e');
     }
   }
 
@@ -122,15 +171,19 @@ class NotificationsService {
 
   static Future<void> _onAttack(AttackAlert alert) async {
     if (!_enabled) return;
+    if (!_ready) {
+      debugPrint('[Notifications] plugin not ready — skipping');
+      return;
+    }
 
+    // Add to in-app history
     _history.insert(0, alert);
     if (_history.length > 100) {
       _history.removeRange(100, _history.length);
     }
     if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
 
-    if (!_soundEnabled) return;
-
+    // ═══ ALWAYS show system notification (sound is optional) ═══
     final unitsLine = alert.units.isEmpty
         ? 'Movement detected'
         : alert.units
@@ -140,31 +193,33 @@ class NotificationsService {
 
     final bigText = '${alert.remainingLabel} · ${alert.kingdomName}\n'
         'From: ${alert.attackerName}'
-        '${alert.attackerAlly != null ? " [${alert.attackerAlly}]" : ""}\n'
+        '${alert.attackerAlliance != null ? " [${alert.attackerAlliance}]" : ""}\n'
         'Total units: ${alert.totalUnits}\n$unitsLine';
 
     try {
       await _plugin.show(
         alert.movementId,
         '⚔️ Attack from ${alert.attackerName}',
-        '${alert.remainingLabel} remaining · '
-            '${alert.totalUnits > 0 ? "${alert.totalUnits} units" : ""}\n'
-            '$unitsLine',
+        '${alert.remainingLabel} · '
+            '${alert.totalUnits > 0 ? "${alert.totalUnits} units" : "movement"}',
         NotificationDetails(
           android: AndroidNotificationDetails(
             _channelId,
             'Attack Alerts',
             importance: Importance.max,
             priority: Priority.high,
-            playSound: true,
-            enableVibration: true,
+            playSound: _soundEnabled,
+            enableVibration: _soundEnabled,
             category: AndroidNotificationCategory.alarm,
             visibility: NotificationVisibility.public,
             styleInformation: BigTextStyleInformation(bigText),
+            fullScreenIntent: false,
+            autoCancel: true,
           ),
         ),
         payload: '${alert.movementId}',
       );
+      debugPrint('[Notifications] shown for mid=${alert.movementId}');
     } catch (e) {
       debugPrint('[Notifications] show failed: $e');
     }

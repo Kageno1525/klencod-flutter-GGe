@@ -10,10 +10,10 @@ import 'package:gge/screens/training_screen.dart';
 import 'package:gge/screens/smuggle_screen.dart';
 import 'package:gge/screens/commanders_screen.dart';
 import 'package:gge/screens/login_screen.dart';
-// ═══ NEW ═══
 import 'package:gge/screens/stats_screen.dart';
 import 'package:gge/screens/notifications_screen.dart';
 import 'package:gge/services/notifications_service.dart';
+import 'package:gge/services/background_service.dart';
 
 class MainScreen extends StatelessWidget {
   final GgeClient client;
@@ -272,7 +272,6 @@ class MainScreen extends StatelessWidget {
             ),
           ),
         ),
-        // ═══ NEW: Stats card ═══
         FadeSlideIn(
           delay: const Duration(milliseconds: 600),
           child: EnterTile(
@@ -287,7 +286,6 @@ class MainScreen extends StatelessWidget {
             ),
           ),
         ),
-        // ═══ NEW: Notifications card ═══
         FadeSlideIn(
           delay: const Duration(milliseconds: 700),
           child: EnterTile(
@@ -346,20 +344,25 @@ class MainScreen extends StatelessWidget {
         ],
       ),
     );
-    if (confirm == true && context.mounted) {
-      // ═══ NEW: stop notifications listener ═══
+    if (confirm != true || !context.mounted) return;
+
+    try {
+      await BackgroundService.stop();
+    } catch (_) {}
+    try {
       NotificationsService.stopListening();
       NotificationsService.clearHistory();
-      await AppStorage.setLoggedIn(false);
-      await AppStorage.setToken('');
-      await client.dispose();
-      if (context.mounted) {
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const LoginScreen()),
-          (_) => false,
-        );
-      }
-    }
+    } catch (_) {}
+
+    await AppStorage.setLoggedIn(false);
+    await AppStorage.setToken('');
+    await client.dispose();
+
+    if (!context.mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
   }
 }
 
