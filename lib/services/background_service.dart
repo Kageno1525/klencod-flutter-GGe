@@ -13,7 +13,7 @@ void ggeBackgroundCallback() {
   FlutterForegroundTask.setTaskHandler(_GgeTaskHandler());
 }
 
-// ═══ CRITICAL: keep reference so release tree-shaking can't strip callback ═══
+// ═══ keep reference so release tree-shaking can't strip callback ═══
 final _callbackRef = ggeBackgroundCallback;
 
 class _GgeTaskHandler extends TaskHandler {
@@ -70,9 +70,8 @@ class _GgeTaskHandler extends TaskHandler {
         (data) {
           _msgCount++;
           final text = data.toString();
-          final short = text.length > 80
-              ? '${text.substring(0, 80)}...'
-              : text;
+          final short =
+              text.length > 80 ? '${text.substring(0, 80)}...' : text;
           _log('RX[$_msgCount]: $short');
           _save('MSG_$_msgCount');
         },
@@ -95,22 +94,26 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   @override
-  Future<void> onRepeatEvent(DateTime timestamp) async {
+  void onRepeatEvent(DateTime timestamp) {
     _log('heartbeat connected=$_connected msgs=$_msgCount');
-    await _save('HEARTBEAT_$_msgCount');
+    _save('HEARTBEAT_$_msgCount');
   }
 
+  // ═══ FIX: 2 params required by v11 ═══
   @override
-  Future<void> onDestroy(DateTime timestamp) async {
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
     await _sub?.cancel();
     try {
       await _ws?.close();
     } catch (_) {}
     _ws = null;
     _connected = false;
-    _log('destroyed');
+    _log('destroyed (timeout=$isTimeout)');
     await _save('DESTROYED');
   }
+
+  @override
+  void onReceiveData(Object data) {}
 
   @override
   void onNotificationButtonPressed(String id) {}
@@ -177,17 +180,20 @@ class BackgroundService {
         }).catchError((_) {}),
       );
 
-      final result = await FlutterForegroundTask.startService(
+      // ═══ FIX: don't inspect result — check actual state ═══
+      await FlutterForegroundTask.startService(
         serviceId: 1001,
         notificationTitle: 'GGE Bot is active',
         notificationText: 'Watching for attacks...',
         callback: _callbackRef,
       );
 
-      // ═══ FIX: check the enum, not null ═══
-      _running = result == ServiceRequestResult.success;
+      // Give service a moment to boot
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      _running = await FlutterForegroundTask.isRunningService;
       GgeClient.allowBackgroundReconnect = _running;
-      TrafficLog.add('ST', '[BG] start → ${result.name}');
+      TrafficLog.add('ST', '[BG] start → running=$_running');
       return _running;
     } catch (e) {
       TrafficLog.add('ER', '[BG] start failed: $e');
