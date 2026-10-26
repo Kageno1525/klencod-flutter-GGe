@@ -6,6 +6,8 @@ import 'package:gge/theme.dart';
 import 'package:gge/main.dart' show GgeApp, GgeAppState;
 import 'package:gge/screens/main_screen.dart' show MainScreen;
 import 'package:gge/widgets/animated_widgets.dart';
+// ═══ NEW ═══
+import 'package:gge/services/notifications_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -74,6 +76,9 @@ class _LoginScreenState extends State<LoginScreen> {
       await _client.getCastles();
 
       await AppStorage.setLoggedIn(true);
+
+      // ═══ NEW: start notification listener after login ═══
+      NotificationsService.startListening();
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(

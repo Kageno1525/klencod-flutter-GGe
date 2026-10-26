@@ -117,7 +117,8 @@ class Lord {
     this.level = 1,
   });
 
-  String get displayName => name?.isNotEmpty == true ? name! : 'Lord ${visibleIndex + 1}';
+  String get displayName =>
+      name?.isNotEmpty == true ? name! : 'Lord ${visibleIndex + 1}';
 }
 
 // ═══════════════════════════════════════════
@@ -145,7 +146,7 @@ class LordMovement {
   });
 
   int get timeRemaining => totalTime - paidTime;
-  
+
   String get timeLabel {
     if (timeRemaining <= 0) return 'Arrived';
     final h = timeRemaining ~/ 3600;
@@ -158,11 +159,16 @@ class LordMovement {
 
   String get actionLabel {
     switch (type) {
-      case 0: return 'Attacking';
-      case 1: return 'Supporting / Smuggling';
-      case 2: return 'Returning';
-      case 3: return 'Transporting';
-      default: return 'Moving';
+      case 0:
+        return 'Attacking';
+      case 1:
+        return 'Supporting / Smuggling';
+      case 2:
+        return 'Returning';
+      case 3:
+        return 'Transporting';
+      default:
+        return 'Moving';
     }
   }
 }
@@ -329,7 +335,7 @@ class AppStorage {
   static const _kToken = 'login_token';
   static const _kDark = 'darkMode';
   static const _kLang = 'languageCode';
-  static const _kLoggedIn = 'is_logged_in'; 
+  static const _kLoggedIn = 'is_logged_in';
 
   static Future<String?> getUsername() async =>
       (await SharedPreferences.getInstance()).getString(_kUser);
@@ -368,4 +374,119 @@ class AppStorage {
     await p.remove(_kToken);
     await p.remove(_kLoggedIn);
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  ═══ NEW: Stats + Attack models ═══
+// ═══════════════════════════════════════════════════════════
+class CastleStats {
+  final int areaId;
+  final int kingdomId;
+  final String? name;
+  final int wood, stone, food, coal, oil, glass, iron, honey, mead, aqua;
+  final double deltaWood, deltaStone, deltaFood, deltaCoal, deltaOil,
+      deltaGlass, deltaIron, deltaHoney, deltaMead, deltaAqua;
+  final int maxWood, maxStone, maxFood, maxCoal, maxOil, maxGlass,
+      maxIron, maxHoney, maxMead, maxAqua;
+  final List<CastleUnit> units;
+  final List<CastleUnit> strongholdUnits;
+  final List<CastleUnit> hospitalUnits;
+  final List<CastleUnit> travelingUnits;
+  final int defense;
+  final int marketCarriages;
+  final bool hasBarracks, hasSiegeWorkshop, hasDefenseWorkshop, hasHospital;
+
+  CastleStats({
+    required this.areaId,
+    required this.kingdomId,
+    this.name,
+    required this.wood, required this.stone, required this.food,
+    required this.coal, required this.oil, required this.glass,
+    required this.iron, required this.honey, required this.mead,
+    required this.aqua,
+    required this.deltaWood, required this.deltaStone, required this.deltaFood,
+    required this.deltaCoal, required this.deltaOil, required this.deltaGlass,
+    required this.deltaIron, required this.deltaHoney, required this.deltaMead,
+    required this.deltaAqua,
+    required this.maxWood, required this.maxStone, required this.maxFood,
+    required this.maxCoal, required this.maxOil, required this.maxGlass,
+    required this.maxIron, required this.maxHoney, required this.maxMead,
+    required this.maxAqua,
+    required this.units,
+    required this.strongholdUnits,
+    required this.hospitalUnits,
+    required this.travelingUnits,
+    required this.defense,
+    required this.marketCarriages,
+    required this.hasBarracks,
+    required this.hasSiegeWorkshop,
+    required this.hasDefenseWorkshop,
+    required this.hasHospital,
+  });
+}
+
+class AttackUnit {
+  final int wodId;
+  final int amount;
+  final String position;
+  final String? name;
+
+  AttackUnit({
+    required this.wodId,
+    required this.amount,
+    required this.position,
+    this.name,
+  });
+
+  String get displayName => name ?? 'Unit #$wodId';
+}
+
+class AttackAlert {
+  final int movementId;
+  final int attackerId;
+  final String attackerName;
+  final String? attackerAlliance;
+  final int targetX, targetY;
+  final int kingdomId;
+  final int totalTime;
+  final int paidTime;
+  final List<AttackUnit> units;
+  final DateTime receivedAt;
+
+  AttackAlert({
+    required this.movementId,
+    required this.attackerId,
+    required this.attackerName,
+    this.attackerAlliance,
+    required this.targetX,
+    required this.targetY,
+    required this.kingdomId,
+    required this.totalTime,
+    required this.paidTime,
+    required this.units,
+    required this.receivedAt,
+  });
+
+  int get remainingSeconds => (totalTime - paidTime).clamp(0, 999999);
+  int get totalUnits => units.fold(0, (s, u) => s + u.amount);
+
+  String get remainingLabel {
+    final s = remainingSeconds;
+    if (s <= 0) return 'Arrived';
+    final h = s ~/ 3600;
+    final m = (s % 3600) ~/ 60;
+    final sec = s % 60;
+    if (h > 0) return '${h}h ${m}m';
+    if (m > 0) return '${m}m ${sec}s';
+    return '${sec}s';
+  }
+
+  String get kingdomName => switch (kingdomId) {
+        0 => 'Great Empire',
+        1 => 'Burning Sands',
+        2 => 'Everwinter',
+        3 => 'Fire Peaks',
+        4 => 'Storm Islands',
+        _ => 'K$kingdomId',
+      };
 }

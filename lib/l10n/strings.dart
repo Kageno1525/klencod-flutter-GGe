@@ -99,6 +99,19 @@ class S {
   static String get none     => _('none');
   static String get refresh  => _('refresh');
 
+  // ═══ NEW: Stats + Notifications ═══
+  static String get statsTitle              => _('statsTitle');
+  static String get statsDesc               => _('statsDesc');
+  static String get notificationsTitle      => _('notificationsTitle');
+  static String get notificationsDesc       => _('notificationsDesc');
+  static String get notificationsEnabled    => _('notificationsEnabled');
+  static String get notificationsEnabledDesc => _('notificationsEnabledDesc');
+  static String get soundAlert              => _('soundAlert');
+  static String get soundAlertDesc          => _('soundAlertDesc');
+  static String get noAlerts                => _('noAlerts');
+  static String get noAlertsDesc            => _('noAlertsDesc');
+  static String get noCastles               => _('noCastles');
+
   static const Map<String, Map<String, String>> _map = {
     'ar': {
       'appName': 'GGE Bot',
@@ -159,7 +172,7 @@ class S {
       'allLordsBusy': 'كل القادة مشغولين في مهمة حالياً، يرجى الانتظار.',
       'stationTime': 'وقت البقاء (ساعات)',
       'selectLord': 'اختر القائد',
-      'autoLord': 'اختيار تلقائي (تلقائي)',
+      'autoLord': 'اختيار تلقائي',
       'commanderBusy': 'مشغول',
       'commanderFree': 'متاح',
       'timeRemaining': 'الوقت المتبقي',
@@ -181,6 +194,18 @@ class S {
       'language': 'اللغة',
       'none': 'لا شيء',
       'refresh': 'تحديث',
+      // ═══ NEW ═══
+      'statsTitle': 'الإحصائيات',
+      'statsDesc': 'موارد، جنود، إنتاج',
+      'notificationsTitle': 'الإشعارات',
+      'notificationsDesc': 'تنبيهات الهجمات',
+      'notificationsEnabled': 'تفعيل الإشعارات',
+      'notificationsEnabledDesc': 'استقبال إشعارات عند الهجوم',
+      'soundAlert': 'صوت التنبيه',
+      'soundAlertDesc': 'تشغيل صوت عند وصول هجوم',
+      'noAlerts': 'مفيش تنبيهات',
+      'noAlertsDesc': 'مفيش هجمات لحد دلوقتي — كل حاجة تمام',
+      'noCastles': 'مفيش قلاع',
     },
     'en': {
       'appName': 'GGE Bot',
@@ -241,7 +266,7 @@ class S {
       'allLordsBusy': 'All lords are currently busy. Please wait.',
       'stationTime': 'Station Time (Hours)',
       'selectLord': 'Select Commander',
-      'autoLord': 'Auto Select (Default)',
+      'autoLord': 'Auto Select',
       'commanderBusy': 'Busy',
       'commanderFree': 'Available',
       'timeRemaining': 'Time Remaining',
@@ -263,6 +288,18 @@ class S {
       'language': 'Language',
       'none': 'None',
       'refresh': 'Refresh',
+      // ═══ NEW ═══
+      'statsTitle': 'Statistics',
+      'statsDesc': 'Resources, units, production',
+      'notificationsTitle': 'Notifications',
+      'notificationsDesc': 'Attack alerts',
+      'notificationsEnabled': 'Enable notifications',
+      'notificationsEnabledDesc': 'Receive alerts when attacked',
+      'soundAlert': 'Sound alerts',
+      'soundAlertDesc': 'Play sound when attack arrives',
+      'noAlerts': 'No alerts',
+      'noAlertsDesc': 'No attacks yet — everything is fine',
+      'noCastles': 'No castles',
     },
   };
 }

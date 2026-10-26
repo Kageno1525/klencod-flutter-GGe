@@ -5,12 +5,16 @@ import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/screens/login_screen.dart';
+// ═══ NEW ═══
+import 'package:gge/services/notifications_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final dark = await AppStorage.getDarkMode();
   final lang = await AppStorage.getLanguageCode();
   S.current = Locale(lang);
+  // ═══ NEW: init notifications ═══
+  await NotificationsService.init();
   runApp(GgeApp(initialDark: dark));
 }
 

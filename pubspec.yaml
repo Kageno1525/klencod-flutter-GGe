@@ -13,7 +13,10 @@ dependencies:
     sdk: flutter
   shared_preferences: ^2.2.2
   cupertino_icons: ^1.0.6
-  web_socket_channel: ^2.4.0  # ✅ رجعنا المكتبة الأصلية اللي كانت شغالة
+  web_socket_channel: ^2.4.0
+  # ═══ NEW ═══
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.10.0
 
 flutter:
   uses-material-design: true

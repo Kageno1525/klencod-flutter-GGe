@@ -10,6 +10,10 @@ import 'package:gge/screens/training_screen.dart';
 import 'package:gge/screens/smuggle_screen.dart';
 import 'package:gge/screens/commanders_screen.dart';
 import 'package:gge/screens/login_screen.dart';
+// ═══ NEW ═══
+import 'package:gge/screens/stats_screen.dart';
+import 'package:gge/screens/notifications_screen.dart';
+import 'package:gge/services/notifications_service.dart';
 
 class MainScreen extends StatelessWidget {
   final GgeClient client;
@@ -268,6 +272,36 @@ class MainScreen extends StatelessWidget {
             ),
           ),
         ),
+        // ═══ NEW: Stats card ═══
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 600),
+          child: EnterTile(
+            icon: Icons.analytics_rounded,
+            title: S.statsTitle,
+            subtitle: S.statsDesc,
+            gradient: AppTheme.successGradient,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => StatsScreen(client: client)),
+            ),
+          ),
+        ),
+        // ═══ NEW: Notifications card ═══
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 700),
+          child: EnterTile(
+            icon: Icons.notifications_active_rounded,
+            title: S.notificationsTitle,
+            subtitle: S.notificationsDesc,
+            gradient: AppTheme.dangerGradient,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => NotificationsScreen(client: client)),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -313,6 +347,9 @@ class MainScreen extends StatelessWidget {
       ),
     );
     if (confirm == true && context.mounted) {
+      // ═══ NEW: stop notifications listener ═══
+      NotificationsService.stopListening();
+      NotificationsService.clearHistory();
       await AppStorage.setLoggedIn(false);
       await AppStorage.setToken('');
       await client.dispose();

@@ -61,7 +61,6 @@ class TrafficLog {
 }
 
 class GgeClient {
-  // ✅ إصلاح: Singleton قابل لإعادة الإنشاء بعد dispose
   static GgeClient? _instance;
   factory GgeClient() => _instance ??= GgeClient._internal();
 
@@ -71,10 +70,14 @@ class GgeClient {
   final StreamController<XtMessage> _xtCtrl = StreamController.broadcast();
   final StreamController<String> _rawCtrl = StreamController.broadcast();
   final StreamController<List<dynamic>> _gamCtrl = StreamController.broadcast();
+  // ═══ NEW ═══
+  final StreamController<AttackAlert> _attackCtrl = StreamController.broadcast();
 
   Stream<XtMessage> get xtStream => _xtCtrl.stream;
   Stream<String> get rawStream => _rawCtrl.stream;
   Stream<List<dynamic>> get gamStream => _gamCtrl.stream;
+  // ═══ NEW ═══
+  Stream<AttackAlert> get attackStream => _attackCtrl.stream;
 
   bool _connected = false;
   bool get isConnected => _connected;
@@ -94,6 +97,10 @@ class GgeClient {
   bool _appForeground = true;
   DateTime? _lastRxTime;
 
+  // ═══ NEW: attack tracking ═══
+  int? _cachedPlayerId;
+  final Set<int> _alertedMids = {};
+
   final List<String> debugLog = [];
   void Function()? onLog;
   void Function(String)? onStatus;
@@ -106,9 +113,7 @@ class GgeClient {
   static bool _isPlausibleAllianceId(int? aid) =>
       aid != null && aid > 0 && aid < _maxPlausibleAllianceId;
 
-  // ═══════════════════════════════════════════════════════════
-  //  Services (lazy, singleton-per-client)
-  // ═══════════════════════════════════════════════════════════
+  // Services (lazy, singleton-per-client)
   late final CastleService castleService = CastleService(this);
   late final AllianceService allianceService = AllianceService(this);
   late final CatalogService catalogService = CatalogService();
@@ -119,9 +124,7 @@ class GgeClient {
   late final TransferService transferService =
       TransferService(this, commandersService);
 
-  // ═══════════════════════════════════════════════════════════
-  //  Getters للـ state — تستخدمها الخدمات
-  // ═══════════════════════════════════════════════════════════
+  // Getters/setters for services
   int? get cachedAllianceId => _cachedAllianceId;
   set cachedAllianceId(int? v) => _cachedAllianceId = v;
 
@@ -132,14 +135,15 @@ class GgeClient {
   bool get gbdReceived => _gbdReceived;
   int? get mainCastleAreaId => _mainCastleAreaId;
 
+  // ═══ NEW ═══
+  int? get cachedPlayerId => _cachedPlayerId;
+  set cachedPlayerId(int? v) => _cachedPlayerId = v;
+
   GgeClient._internal() {
     TrafficLog.add('ST', '🟢 GgeClient initialized');
     xtStream.listen(_handleXt);
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  XT message handler (gbd / jaa / slt / gam / gcl / ain)
-  // ═══════════════════════════════════════════════════════════
   void _handleXt(XtMessage msg) {
     if (msg.command == 'gbd') {
       TrafficLog.add('ST',
@@ -151,6 +155,16 @@ class GgeClient {
       }
       try {
         final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
+
+        // ═══ NEW: extract PID from gbd.gpi ═══
+        final gpi = data['gpi'];
+        if (gpi is Map) {
+          final pid = _asIntOrNull(gpi['PID']);
+          if (pid != null && pid > 0) {
+            _cachedPlayerId = pid;
+            TrafficLog.add('ST', '✅ PID from gbd.gpi: $pid');
+          }
+        }
 
         final gal = data['gal'];
         if (gal is Map) {
@@ -216,12 +230,23 @@ class GgeClient {
         final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
         final moves = data['M'] as List? ?? [];
         if (!_gamCtrl.isClosed) _gamCtrl.add(moves);
+        // ═══ NEW: process attacks ═══
+        try {
+          _processAttacks(data);
+        } catch (e) {
+          TrafficLog.add('ER', 'Attack process error: $e');
+        }
       } catch (_) {}
     }
 
     if (msg.command == 'gcl' && msg.payload != null) {
       try {
         final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
+        // ═══ NEW: extract PID from gcl (fallback) ═══
+        final pid = _asIntOrNull(data['PID']);
+        if (pid != null && pid > 0 && _cachedPlayerId == null) {
+          _cachedPlayerId = pid;
+        }
         final castles = data['C'] as List? ?? [];
         for (final k in castles) {
           for (final a in (k['AI'] as List? ?? [])) {
@@ -248,6 +273,94 @@ class GgeClient {
           }
         }
       } catch (_) {}
+    }
+  }
+
+  // ═══ NEW: Attack processing ═══
+  void _processAttacks(Map<String, dynamic> data) {
+    final myPid = _cachedPlayerId;
+    if (myPid == null || myPid <= 0) return;
+
+    if (_alertedMids.length > 500) _alertedMids.clear();
+
+    final owners = <int, Map<String, dynamic>>{};
+    for (final o in (data['O'] as List? ?? [])) {
+      if (o is Map) owners[_asInt(o['OID'])] = o;
+    }
+
+    for (final m in (data['M'] as List? ?? [])) {
+      if (m is! Map) continue;
+      final mov = m['M'] as Map<String, dynamic>?;
+      if (mov == null) continue;
+
+      if (_asInt(mov['T']) != 0) continue;
+
+      final ta = mov['TA'] as List?;
+      final sa = mov['SA'] as List?;
+      if (ta == null || ta.length < 5) continue;
+      if (sa == null || sa.length < 5) continue;
+
+      final targetPid = _asInt(ta[4]);
+      final sourcePid = _asInt(sa[4]);
+
+      if (targetPid != myPid) continue;
+      if (sourcePid == myPid) continue;
+
+      final mid = _asInt(mov['MID']);
+      if (mid <= 0) continue;
+
+      if (_alertedMids.contains(mid)) continue;
+      _alertedMids.add(mid);
+
+      final attacker = owners[sourcePid];
+      final name = _asString(attacker?['N']) ??
+          (sa.length > 10 ? _asString(sa[10]) : null) ??
+          'Unknown';
+      final alliance = _asString(attacker?['AN']);
+
+      final units = <AttackUnit>[];
+      final ga = m['GA'] as Map<String, dynamic>?;
+      if (ga != null) {
+        _extractUnits(ga['L'], 'left', units);
+        _extractUnits(ga['M'], 'middle', units);
+        _extractUnits(ga['R'], 'right', units);
+        _extractUnits(ga['RW'], 'courtyard', units);
+      }
+
+      final alert = AttackAlert(
+        movementId: mid,
+        attackerId: sourcePid,
+        attackerName: name,
+        attackerAlliance: alliance,
+        targetX: _asInt(ta[1]),
+        targetY: _asInt(ta[2]),
+        kingdomId: _asInt(mov['KID']),
+        totalTime: _asInt(mov['TT']),
+        paidTime: _asInt(mov['PT']),
+        units: units,
+        receivedAt: DateTime.now(),
+      );
+
+      if (!_attackCtrl.isClosed) _attackCtrl.add(alert);
+      TrafficLog.add('ST',
+          '🚨 Attack detected from $name → ${alert.remainingLabel}');
+    }
+  }
+
+  void _extractUnits(dynamic arr, String position, List<AttackUnit> out) {
+    if (arr is! List) return;
+    for (final u in arr) {
+      if (u is! List || u.length < 2) continue;
+      final id = _asInt(u[0]);
+      final amt = _asInt(u[1]);
+      if (id > 0 && amt > 0) {
+        out.add(AttackUnit(
+          wodId: id,
+          amount: amt,
+          position: position,
+          name: _cachedCatalog?[id]?.displayName,
+        ));
+      }
     }
   }
 
@@ -278,9 +391,6 @@ class GgeClient {
     return out;
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  Logging
-  // ═══════════════════════════════════════════════════════════
   void _log(String line) {
     debugLog.add(line);
     if (debugLog.length > 500) {
@@ -323,9 +433,7 @@ class GgeClient {
     return v.toString();
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  Public primitives (تستخدمها الخدمات)
-  // ═══════════════════════════════════════════════════════════
+  // Public primitives (used by services)
   void sendXt(String cmd, String payload) => _sendXt(cmd, payload);
 
   Future<XtMessage> sendXtAndWait(
@@ -358,9 +466,6 @@ class GgeClient {
         isAction: isAction,
       );
 
-  // ═══════════════════════════════════════════════════════════
-  //  Private helpers
-  // ═══════════════════════════════════════════════════════════
   Future<void> _throttle({int baseMs = 5000, bool isAction = true}) async {
     if (!isAction) return;
     final now = DateTime.now();
@@ -595,9 +700,6 @@ class GgeClient {
     _status('Init sequence done ✓');
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  AUTO-RECONNECT + TOKEN LOGIN
-  // ═══════════════════════════════════════════════════════════
   void _scheduleReconnect() {
     if (_disposed || !_appForeground) return;
     Future.delayed(const Duration(seconds: 3), () {
@@ -849,7 +951,7 @@ class GgeClient {
       await Future.delayed(const Duration(milliseconds: 100));
     }
     if (_gbdReceived) {
-      _status('gbd ✓ (AID=$_cachedAllianceId, '
+      _status('gbd ✓ (PID=$_cachedPlayerId, AID=$_cachedAllianceId, '
           'members=${_cachedAllianceMembers?.length ?? 0})');
     } else {
       _errorLog('gbd did NOT arrive within 3s');
@@ -859,10 +961,7 @@ class GgeClient {
     _startBackgroundPolling();
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  Facade methods — الشاشات بتستخدمهم، وبيحوّلوا للخدمات
-  //  (الشاشات مش هتتعدل خالص)
-  // ═══════════════════════════════════════════════════════════
+  // Facade methods (screens use these)
   Future<List<OwnedCastle>> getCastles() => castleService.getCastles();
 
   Future<List<CastleUnit>> getCastleUnits(
@@ -927,9 +1026,6 @@ class GgeClient {
 
   Future<int?> getMyAllianceId() => allianceService.getMyAllianceId();
 
-  // ═══════════════════════════════════════════════════════════
-  //  Dispose
-  // ═══════════════════════════════════════════════════════════
   Future<void> dispose() async {
     _disposed = true;
     _pollingTimer?.cancel();
@@ -942,7 +1038,7 @@ class GgeClient {
     await _xtCtrl.close();
     await _rawCtrl.close();
     await _gamCtrl.close();
-    // ✅ إصلاح: السماح بإنشاء instance جديد بعد dispose
+    await _attackCtrl.close();
     _instance = null;
   }
 }
