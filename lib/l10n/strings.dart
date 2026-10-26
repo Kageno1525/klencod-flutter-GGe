@@ -128,69 +128,367 @@ class S {
   static String get none     => _('none');
   static String get refresh  => _('refresh');
 
-  // ═══ Unit name translation ═══
+  // ═══════════════════════════════════════════════════════
+  //  Unit name translation — GGE Arabic in-game style
+  // ═══════════════════════════════════════════════════════
   static String unitName(String? englishName) {
     if (englishName == null || englishName.isEmpty) {
       return isAr ? 'جندي مجهول' : 'Unknown unit';
+    }
+    final unitMatch = RegExp(r'^Unit #(\d+)$').firstMatch(englishName);
+    if (unitMatch != null) {
+      return isAr ? 'جندي #${unitMatch.group(1)}' : englishName;
     }
     if (!isAr) return englishName;
     return _unitAr[englishName] ?? englishName;
   }
 
   static const Map<String, String> _unitAr = {
-    // ═══ Melee ═══
-    'Spearman': 'رمح',
-    'Swordsman': 'سياف',
-    'Halberdier': 'هالبرد',
+    // ═══════════════════════════════════════════════════════
+    //  CORE BARRACKS · MELEE OFFENSE
+    // ═══════════════════════════════════════════════════════
     'Maceman': 'صولجان',
+    'Swordsman': 'سياف',
+    'TwoHandedSwordWarrior': 'سياف بيدين',
+    'TwoHandedSwordsman': 'سياف بيدين',
+    'TwohandedSwordsman': 'سياف بيدين',
+    'TwoHandedSwordsMan': 'سياف بيدين',
     'Axeman': 'فأس',
-    'Pikeman': 'رمح طويل',
-    'TwoHandedSwordWarrior': 'سيف بيدين',
-    'TwohandedSwordWarrior': 'سيف بيدين',
-    'Knight': 'فارس',
+    'Halberdier': 'هالبرد',
+    'Spearman': 'رمح',
     'HeavySpearman': 'رمح ثقيل',
     'HeavySwordsman': 'سياف ثقيل',
     'HeavyHalberdier': 'هالبرد ثقيل',
-    'VeteranSpearman': 'رمح محترف',
-    'VeteranSwordsman': 'سياف محترف',
-    'VeteranHalberdier': 'هالبرد محترف',
-    // ═══ Ranged ═══
+    'HeavyMaceman': 'صولجان ثقيل',
+    'HeavyAxeman': 'فأس ثقيل',
+    'Pikeman': 'رمح طويل',
+
+    // ═══════════════════════════════════════════════════════
+    //  CORE BARRACKS · RANGED OFFENSE
+    // ═══════════════════════════════════════════════════════
     'Bowman': 'نشاب',
-    'Longbowman': 'قوس طويل',
     'Crossbowman': 'قوس مستعرض',
+    'Longbowman': 'قوس طويل',
     'Archer': 'رامي',
-    'HeavyCrossbowman': 'قوس ثقيل',
+    'HeavyCrossbowman': 'قوس مستعرض ثقيل',
+    'HeavyLongbowman': 'قوس طويل ثقيل',
+    'HeavyArcher': 'رامي ثقيل',
     'CavalryArcher': 'فارس رامي',
-    'VeteranBowman': 'نشاب محترف',
-    'VeteranCrossbowman': 'قوس محترف',
-    'VeteranArcher': 'رامي محترف',
-    'CrossbowmanElite': 'قوس نخبة',
-    // ═══ Defense ═══
+    'Shortbowman': 'نشاب قصير',
+
+    // ═══════════════════════════════════════════════════════
+    //  CORE BARRACKS · DEFENSE
+    // ═══════════════════════════════════════════════════════
     'Militia': 'ميليشيا',
+    'ArmedCitizen': 'مواطن مسلح',
     'Peasant': 'فلاح',
     'DefensiveArcher': 'رامي دفاعي',
     'WallArcher': 'رامي سور',
     'WallCrossbowman': 'قوس سور',
-    'WallSpadesman': 'مهندس سور',
+    'WallSpearman': 'رمح سور',
     'WallSwordsman': 'سياف سور',
     'WallMaceman': 'صولجان سور',
+    'WallSpadesman': 'مهندس سور',
+    'WallHalberdier': 'هالبرد سور',
     'MoatDefender': 'مدافع خندق',
     'MoatSpearman': 'رمح خندق',
+    'MoatCrossbowman': 'قوس خندق',
+    'MoatArcher': 'رامي خندق',
     'GateDefender': 'مدافع بوابة',
-    'GateSpadesman': 'مهندس بوابة',
+    'GateSpearman': 'رمح بوابة',
     'GateSwordsman': 'سياف بوابة',
-    // ═══ Tools ═══
+    'GateSpadesman': 'مهندس بوابة',
+    'GateCrossbowman': 'قوس بوابة',
+    'GateArcher': 'رامي بوابة',
+
+    // ═══════════════════════════════════════════════════════
+    //  VETERAN VARIANTS
+    // ═══════════════════════════════════════════════════════
+    'VeteranSpearman': 'رمح محترف',
+    'VeteranSwordsman': 'سياف محترف',
+    'VeteranMaceman': 'صولجان محترف',
+    'VeteranAxeman': 'فأس محترف',
+    'VeteranHalberdier': 'هالبرد محترف',
+    'VeteranPikeman': 'رمح طويل محترف',
+    'VeteranBowman': 'نشاب محترف',
+    'VeteranCrossbowman': 'قوس مستعرض محترف',
+    'VeteranLongbowman': 'قوس طويل محترف',
+    'VeteranArcher': 'رامي محترف',
+    'VeteranShortbowman': 'نشاب قصير محترف',
+    'VeteranTwoHandedSwordWarrior': 'سياف بيدين محترف',
+    'VeteranTwoHandedSwordsman': 'سياف بيدين محترف',
+    'VeteranTwohandedSwordsman': 'سياف بيدين محترف',
+    'VeteranHeavyCrossbowman': 'قوس مستعرض ثقيل محترف',
+    'VeteranHeavySpearman': 'رمح ثقيل محترف',
+    'VeteranHeavySwordsman': 'سياف ثقيل محترف',
+    'VeteranHeavyHalberdier': 'هالبرد ثقيل محترف',
+
+    // ═══════════════════════════════════════════════════════
+    //  RELIC (Level 7+ Barracks)
+    // ═══════════════════════════════════════════════════════
+    'RelicAxeman': 'فأس أثري',
+    'RelicShortbowman': 'نشاب قصير أثري',
+    'RelicHammerman': 'مطرقة أثرية',
+    'RelicLongbowman': 'قوس طويل أثري',
+    'RelicSpearman': 'رمح أثري',
+    'RelicMaceman': 'صولجان أثري',
+
+    // ═══════════════════════════════════════════════════════
+    //  ROYAL (Glory titles / Blade Coast)
+    // ═══════════════════════════════════════════════════════
+    'RoyalKnight': 'فارس ملكي',
+    'RoyalCrossbowman': 'قوس مستعرض ملكي',
+    'RoyalSentinel': 'حارس ملكي',
+    'RoyalScout': 'مستكشف ملكي',
+    'RoyalBowman': 'نشاب ملكي',
+    'RoyalSpearman': 'رمح ملكي',
+
+    // ═══════════════════════════════════════════════════════
+    //  ELITE (Master Blacksmith)
+    // ═══════════════════════════════════════════════════════
+    'EliteKnight': 'فارس نخبة',
+    'EliteCrossbowman': 'قوس مستعرض نخبة',
+    'EliteSpearman': 'رمح نخبة',
+    'EliteBowman': 'نشاب نخبة',
+    'EliteSwordsman': 'سياف نخبة',
+    'CrossbowmanElite': 'قوس مستعرض نخبة',
+
+    // ═══════════════════════════════════════════════════════
+    //  TRAVELLING (Map Pieces / Blade Coast)
+    // ═══════════════════════════════════════════════════════
+    'TravellingKnight': 'فارس مسافر',
+    'TravellingCrossbowman': 'قوس مستعرض مسافر',
+    'TravellingSpearman': 'رمح مسافر',
+    'TravellingBowman': 'نشاب مسافر',
+
+    // ═══════════════════════════════════════════════════════
+    //  IMPERIAL (Berimond)
+    // ═══════════════════════════════════════════════════════
+    'ImperialKnight': 'فارس إمبراطوري',
+    'ImperialMarksman': 'قناص إمبراطوري',
+    'ImperialGuardsman': 'حارس إمبراطوري',
+    'ImperialBowman': 'نشاب إمبراطوري',
+    'ImperialSpearman': 'رمح إمبراطوري',
+    'ImperialSwordsman': 'سياف إمبراطوري',
+
+    // ═══════════════════════════════════════════════════════
+    //  KHAN / NOMAD EVENT
+    // ═══════════════════════════════════════════════════════
+    'KhanGuards': 'حراس الخان',
+    'SaberCleaver': 'قطاع السيف',
+    'Slingshot': 'مقذاف',
+    'VeteranSaberCleaver': 'قطاع السيف محترف',
+    'VeteranSlingshot': 'مقذاف محترف',
+    'RenegadeLancer': 'رماح مارق',
+    'RenegadeSpearThrower': 'رامي رماح مارق',
+    'RenegadeSaberWarrior': 'محارب سيف مارق',
+    'RenegadeDesertBowman': 'نشاب صحراوي مارق',
+
+    // ═══════════════════════════════════════════════════════
+    //  SAMURAI EVENT
+    // ═══════════════════════════════════════════════════════
+    'RenegadeSaiWarrior': 'محارب ساي مارق',
+    'RenegadeKunaiThrower': 'رامي كوناي مارق',
+    'RenegadeKatanaWarrior': 'محارب كاتانا مارق',
+    'RenegadeBowMaster': 'سيد القوس مارق',
+
+    // ═══════════════════════════════════════════════════════
+    //  SHADOW MERCENARIES
+    // ═══════════════════════════════════════════════════════
+    'ShadowMaceman': 'صولجان الظل',
+    'ShadowCrossbowman': 'قوس مستعرض الظل',
+    'ShadowRogue': 'مارق الظل',
+    'ShadowFelon': 'مجرم الظل',
+    'ShadowScoundrel': 'وغد الظل',
+    'ShadowWretch': 'خسيس الظل',
+    'DemonShadow': 'ظل شيطاني',
+    'DeathlyShadow': 'ظل مميت',
+
+    // ═══════════════════════════════════════════════════════
+    //  HORROR (Fire Peaks)
+    // ═══════════════════════════════════════════════════════
+    'DemonHorror': 'رعب شيطاني',
+    'DeathlyHorror': 'رعب مميت',
+    'VeteranDemonHorror': 'رعب شيطاني محترف',
+    'VeteranDeathlyHorror': 'رعب مميت محترف',
+
+    // ═══════════════════════════════════════════════════════
+    //  STORM ISLANDS (Aquamarine)
+    // ═══════════════════════════════════════════════════════
+    'RenegadeStoneSmasher': 'ساحق الحجر مارق',
+    'RenegadeSharkToothWarrior': 'محارب سن القرش مارق',
+    'RenegadeSailRipper': 'ممزق الشراع مارق',
+    'RenegadeSwashbuckler': 'مبارز مارق',
+
+    // ═══════════════════════════════════════════════════════
+    //  EVERWINTER GLACIER (Charcoal)
+    // ═══════════════════════════════════════════════════════
+    'RenegadeNorsemanWarrior': 'محارب نورسمان مارق',
+    'RenegadeNorsemanBowman': 'نشاب نورسمان مارق',
+    'Barbarian': 'بربري',
+    'Wolfhound': 'كلب ذئب',
+
+    // ═══════════════════════════════════════════════════════
+    //  BURNING SANDS (Olive Oil)
+    // ═══════════════════════════════════════════════════════
+    'RenegadeCultistWarrior': 'محارب طائفي مارق',
+    'RenegadeCultistBowman': 'نشاب طائفي مارق',
+    'FlameBearer': 'حامل الشعلة',
+    'VeteranFlameBearer': 'حامل الشعلة محترف',
+    'CompositeBowman': 'نشاب مركب',
+    'VeteranCompositeBowman': 'نشاب مركب محترف',
+
+    // ═══════════════════════════════════════════════════════
+    //  BERIMOND
+    // ═══════════════════════════════════════════════════════
+    'Marksman': 'قناص',
+    'MuscleMan': 'رجل العضلات',
+    'LionWarrior': 'محارب الأسد',
+    'BearWarrior': 'محارب الدب',
+    'LionBowman': 'نشاب الأسد',
+    'BearBowman': 'نشاب الدب',
+
+    // ═══════════════════════════════════════════════════════
+    //  SOVEREIGN (Hall of Legends)
+    // ═══════════════════════════════════════════════════════
+    'ShieldMaiden': 'عذراء الدرع',
+    'ValkyrieRanger': 'فارسة فالكيري',
+    'ProtectorOfTheNorth': 'حامي الشمال',
+    'ValkyrieSniper': 'قناصة فالكيري',
+
+    // ═══════════════════════════════════════════════════════
+    //  SOVEREIGN — EVENT EDITIONS
+    // ═══════════════════════════════════════════════════════
+    'ForsakenMaiden': 'عذراء مهجورة',
+    'ForlornRanger': 'حارسة منبوذة',
+    'CandyCaneProtector': 'حامي عصا الحلوى',
+    'JollyGingerbreadSniper': 'قناص الزنجبيل المرح',
+    'EasterChampioness': 'بطلة الفصح',
+    'ValkyrieHuntress': 'صيادة فالكيري',
+    'GuardianOfSpring': 'حامي الربيع',
+    'CelestialMarksman': 'قناص سماوي',
+    'FruitPirate': 'قرصان الفواكه',
+    'SummerHuntress': 'صيادة الصيف',
+    'FruitBreaker': 'كاسر الفواكه',
+    'SummerMarksman': 'قناص الصيف',
+    'SteinSmasher': 'ساحق الكوب',
+    'CaskMarksmann': 'قناص البرميل',
+    'PretzelGuardian': 'حامي البريتزل',
+    'BavarianBrewer': 'صانع جعة بافاري',
+    'GlacialAmazonWarrior': 'محاربة أمازونية جليدية',
+    'GlacialAmazonArcher': 'رامية أمازونية جليدية',
+    'GlacialAmazonGuardian': 'حامية أمازونية جليدية',
+    'GlacialAmazonHuntress': 'صيادة أمازونية جليدية',
+    'ChristmasWarrior': 'محارب الكريسماس',
+    'ChristmasArcher': 'رامي الكريسماس',
+    'ChristmasGuardian': 'حامي الكريسماس',
+    'ChristmasHuntress': 'صيادة الكريسماس',
+
+    // ═══════════════════════════════════════════════════════
+    //  GLORY TITLE UNITS
+    // ═══════════════════════════════════════════════════════
+    'Berserker': 'بيرسيركر',
+    'SpearWoman': 'امرأة الرمح',
+
+    // ═══════════════════════════════════════════════════════
+    //  MASTER (Outer Realms)
+    // ═══════════════════════════════════════════════════════
+    'MasterSwordsman': 'سياف أستاذ',
+    'MasterArcher': 'رامي أستاذ',
+
+    // ═══════════════════════════════════════════════════════
+    //  SPRING / FOREST
+    // ═══════════════════════════════════════════════════════
+    'ForestWarrior': 'محارب الغابة',
+    'ForestHunter': 'صياد الغابة',
+    'ForestGuardian': 'حامي الغابة',
+    'ForestBowman': 'نشاب الغابة',
+    'SpringHuntress': 'صيادة الربيع',
+    'SpringFootsoldier': 'جندي ربيع',
+    'ShamrockHuntsman': 'صياد البرسيم',
+    'ShamrockAssassin': 'سفاح البرسيم',
+
+    // ═══════════════════════════════════════════════════════
+    //  HALLOWEEN
+    // ═══════════════════════════════════════════════════════
+    'PumpkinButcher': 'جزار اليقطين',
+    'RavenChomper': 'قاطع الغراب',
+    'SkeletonWarrior': 'محارب هيكلي',
+    'SkeletonBowman': 'نشاب هيكلي',
+    'SkeletalScytheman': 'حاصد هيكلي',
+    'SkeletalHunter': 'صياد هيكلي',
+    'Bonerattler': 'مقلق العظام',
+    'FireWitch': 'ساحرة النار',
+
+    // ═══════════════════════════════════════════════════════
+    //  WINTER
+    // ═══════════════════════════════════════════════════════
+    'GnomadWarrior': 'محارب جوال',
+    'GnomadArcher': 'رامي جوال',
+    'GingerbreadBrawler': 'مشاجر الزنجبيل',
+    'GingerbreadSniper': 'قناص الزنجبيل',
+
+    // ═══════════════════════════════════════════════════════
+    //  COWS OF TERROR
+    // ═══════════════════════════════════════════════════════
+    'CowBerdier': 'بقرة هالبرد',
+    'LongbowOx': 'ثور قوس طويل',
+
+    // ═══════════════════════════════════════════════════════
+    //  MARAUDER EVENT
+    // ═══════════════════════════════════════════════════════
+    'Marauder': 'سالب',
+    'Pyromaniac': 'مهووس بالنار',
+    'VeteranMarauder': 'سالب محترف',
+    'VeteranPyromaniac': 'مهووس بالنار محترف',
+
+    // ═══════════════════════════════════════════════════════
+    //  ICE CHAMPION
+    // ═══════════════════════════════════════════════════════
+    'MasterFrostBowman': 'نشاب الصقيع الأستاذ',
+    'FrostBowman': 'نشاب الصقيع',
+    'MasterBoneHuntress': 'صيادة العظام الأستاذة',
+    'BoneHuntress': 'صيادة العظام',
+
+    // ═══════════════════════════════════════════════════════
+    //  THORN KING
+    // ═══════════════════════════════════════════════════════
+    'DemonSlayer': 'قاتل الشياطين',
+    'Assassin': 'سفاح',
+
+    // ═══════════════════════════════════════════════════════
+    //  UNDERWORLD
+    // ═══════════════════════════════════════════════════════
+    'RenegadeCaveSmasher': 'ساحق الكهف مارق',
+    'RenegadeCaveHunter': 'صياد الكهف مارق',
+
+    // ═══════════════════════════════════════════════════════
+    //  BEEF / DRAGON UNITS
+    // ═══════════════════════════════════════════════════════
+    'FlamebreathBerserker': 'بيرسيركر نَفَس اللهب',
+    'GlasswingArcher': 'رامي الجناح الزجاجي',
+    'ScaleboundGuardian': 'حامي الحراشف',
+    'ScaleshardMarksman': 'قناص شظايا الحراشف',
+
+    // ═══════════════════════════════════════════════════════
+    //  SIEGE TOOLS
+    // ═══════════════════════════════════════════════════════
     'Ladder': 'سلم',
     'SiegeTower': 'برج حصار',
     'BatteringRam': 'كبش حصار',
     'Catapult': 'منجنيق',
     'Mantlet': 'متراس',
-    'FireArrow': 'سهم ناري',
-    'StoneThrower': 'رمّاي حجر',
     'IronMantlet': 'متراس حديدي',
+    'FireArrow': 'سهم ناري',
+    'StoneThrower': 'رامي حجر',
     'Banner': 'راية',
     'Chest': 'صندوق',
-    // ═══ Wall items ═══
+    'Belfry': 'برج خشبي',
+    'ProtectionRune': 'رونية حماية',
+
+    // ═══════════════════════════════════════════════════════
+    //  WALL STRUCTURES
+    // ═══════════════════════════════════════════════════════
     'Wall': 'سور',
     'Gate': 'بوابة',
     'Moat': 'خندق',
