@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
-import 'package:gge/main.dart' show GgeApp;
+import 'package:gge/main.dart' show GgeApp, GgeAppState;
 import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
