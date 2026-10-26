@@ -1,9 +1,9 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/services/notifications_service.dart';
-import 'package:gge/services/background_service.dart';
 import 'package:gge/screens/notifications_settings_screen.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
@@ -191,7 +191,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ─── Header ───
             Row(
               children: [
                 Container(
@@ -227,27 +226,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          if (alert.attackerAlliance != null &&
-                              alert.attackerAlliance!.isNotEmpty) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: AppTheme.orange.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                alert.attackerAlliance!,
-                                style: const TextStyle(
-                                    color: AppTheme.orange,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                    decoration: TextDecoration.none),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
                           if (isAlly) ...[
                             const SizedBox(width: 6),
                             Container(
@@ -289,13 +267,18 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                 ),
               ],
             ),
-
-            // ─── Quick info chips ───
             const SizedBox(height: 10),
             Wrap(
               spacing: 6,
               runSpacing: 6,
               children: [
+                if (alert.attackerAlliance != null &&
+                    alert.attackerAlliance!.isNotEmpty)
+                  InfoChip(
+                    icon: Icons.group_rounded,
+                    label: alert.attackerAlliance!,
+                    color: AppTheme.orange,
+                  ),
                 if (alert.attackerCastleName != null &&
                     alert.attackerCastleName!.isNotEmpty)
                   InfoChip(
@@ -303,16 +286,13 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                     label: alert.attackerCastleName!,
                     color: AppTheme.blue,
                   ),
-                if (alert.totalUnits > 0)
-                  InfoChip(
-                    icon: Icons.shield_rounded,
-                    label: '${alert.totalUnits} ${S.units}',
-                    color: AppTheme.purple,
-                  ),
+                InfoChip(
+                  icon: Icons.shield_rounded,
+                  label: '${alert.totalUnits} ${S.units}',
+                  color: AppTheme.purple,
+                ),
               ],
             ),
-
-            // ─── Actions ───
             const SizedBox(height: 10),
             Row(
               children: [
@@ -321,7 +301,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                     icon: Icons.info_outline_rounded,
                     label: S.details,
                     color: AppTheme.blue,
-                    onTap: () => _showDetails(alert),
+                    onTap: () => _showDetails(context, alert),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -387,7 +367,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         backgroundColor: Theme.of(context).colorScheme.surface,
         shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(S.delete, style: const TextStyle(decoration: TextDecoration.none)),
+        title: Text(S.delete,
+            style: const TextStyle(decoration: TextDecoration.none)),
         content: Text(S.deleteAlertConfirm,
             style: const TextStyle(decoration: TextDecoration.none)),
         actions: [
@@ -409,190 +390,356 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     }
   }
 
-  void _showDetails(AttackAlert alert) {
-    showModalBottomSheet(
+  void _showDetails(BuildContext context, AttackAlert alert) {
+    showGeneralDialog(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _AlertDetailsSheet(alert: alert),
+      barrierDismissible: true,
+      barrierLabel: 'Close',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 280),
+      pageBuilder: (_, __, ___) => _AlertDetailsDialog(alert: alert),
+      transitionBuilder: (context, animation, _, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
+        return FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.08),
+              end: Offset.zero,
+            ).animate(curved),
+            child: child,
+          ),
+        );
+      },
     );
   }
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Details sheet
+//  Details Dialog — blur + X + clean sections
 // ═══════════════════════════════════════════════════════════
-class _AlertDetailsSheet extends StatelessWidget {
+class _AlertDetailsDialog extends StatelessWidget {
   final AttackAlert alert;
-  const _AlertDetailsSheet({required this.alert});
+  const _AlertDetailsDialog({required this.alert});
 
   @override
   Widget build(BuildContext context) {
-    final defense =
-        GgeClient().cachedStatsByArea?[alert.targetAreaId];
+    final isAlly = alert.isAllianceAttack;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final screenH = MediaQuery.of(context).size.height;
+    final bottomPad = MediaQuery.of(context).padding.bottom;
+    final topPad = MediaQuery.of(context).padding.top;
+    final defense = GgeClient().cachedStatsByArea?[alert.targetAreaId];
 
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.85,
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          children: [
-            const SizedBox(height: 10),
-            Container(
-              width: 44,
-              height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.subTextColor(context).withOpacity(0.2),
-                borderRadius: BorderRadius.circular(2),
+    return Material(
+      color: Colors.transparent,
+      child: Stack(
+        children: [
+          // Blur backdrop
+          Positioned.fill(
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                child: Container(color: Colors.black.withOpacity(0.55)),
               ),
             ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          ),
+
+          // Sheet content
+          Positioned(
+            left: 12,
+            right: 12,
+            top: topPad + 40,
+            bottom: bottomPad + 12,
+            child: Container(
+              constraints: BoxConstraints(maxHeight: screenH * 0.88),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1C1E29) : Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.3),
+                    blurRadius: 40,
+                    offset: const Offset(0, 20),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(24),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    // ─── Attacker ───
-                    _infoRow(context,
-                        icon: Icons.person_rounded,
-                        label: S.isAr ? 'المهاجم' : 'Attacker',
-                        value: alert.attackerName,
-                        color: AppTheme.red),
-                    if (alert.attackerAlliance != null &&
-                        alert.attackerAlliance!.isNotEmpty)
-                      _infoRow(context,
-                          icon: Icons.group_rounded,
-                          label: S.isAr ? 'التحالف' : 'Alliance',
-                          value: alert.attackerAlliance!,
-                          color: AppTheme.orange),
-                    if (alert.attackerCastleName != null &&
-                        alert.attackerCastleName!.isNotEmpty)
-                      _infoRow(context,
-                          icon: Icons.castle_rounded,
-                          label: S.attackerCastle,
-                          value:
-                              '${alert.attackerCastleName!} (${alert.attackerX}, ${alert.attackerY})',
-                          color: AppTheme.blue),
-                    _infoRow(context,
-                        icon: Icons.map_rounded,
-                        label: S.isAr ? 'الخريطة' : 'Map',
-                        value: alert.kingdomName,
-                        color: AppTheme.teal),
-                    if (alert.targetCastleName != null &&
-                        alert.targetCastleName!.isNotEmpty)
-                      _infoRow(context,
-                          icon: Icons.flag_rounded,
-                          label: S.targetCastle,
-                          value:
-                              '${alert.targetCastleName!} (${alert.targetX}, ${alert.targetY})',
-                          color: AppTheme.purple),
-                    _infoRow(context,
-                        icon: Icons.timer_rounded,
-                        label: S.timeRemaining,
-                        value: alert.remainingLabel,
-                        color: AppTheme.orange),
-                    _infoRow(context,
-                        icon: Icons.shield_rounded,
-                        label: S.isAr ? 'إجمالي الجنود' : 'Total units',
-                        value: '${alert.totalUnits}',
-                        color: AppTheme.red),
-
-                    const SizedBox(height: 20),
-
-                    // ─── Attacking units ───
-                    _sectionTitle(context, S.attackingUnits,
-                        Icons.gavel_rounded, AppTheme.red),
-                    const SizedBox(height: 10),
-                    if (alert.units.isEmpty)
-                      _noData(context)
-                    else
-                      ...alert.units.map((u) => _unitRow(
-                            context,
-                            name: S.unitName(u.displayName),
-                            amount: u.amount,
-                            icon: Icons.gavel_rounded,
-                            color: AppTheme.red,
-                          )),
-
-                    const SizedBox(height: 20),
-
-                    // ─── Defense info ───
-                    _sectionTitle(context, S.defenseInfo,
-                        Icons.shield_moon_rounded, AppTheme.teal),
-                    const SizedBox(height: 10),
-                    if (defense == null)
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: AppTheme.orange.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                              color: AppTheme.orange.withOpacity(0.3)),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.info_outline_rounded,
-                                color: AppTheme.orange, size: 18),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                S.defenseNotAvailable,
-                                style: TextStyle(
-                                    color: AppTheme.textColor(context),
-                                    fontSize: 12,
-                                    decoration: TextDecoration.none),
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(18, 14, 14, 18),
+                      decoration: BoxDecoration(
+                        gradient: isAlly
+                            ? AppTheme.successGradient
+                            : AppTheme.dangerGradient,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 40,
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.5),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
                               ),
+                              const Spacer(),
+                              _closeBtn(context),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.22),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Icon(
+                                  isAlly
+                                      ? Icons.shield_moon_rounded
+                                      : Icons.gavel_rounded,
+                                  color: Colors.white,
+                                  size: 22,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      isAlly
+                                          ? (S.isAr
+                                              ? 'هجوم على عضو تحالف'
+                                              : 'Ally under attack')
+                                          : (S.isAr
+                                              ? 'هجوم عليك'
+                                              : 'Attack on you'),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        decoration: TextDecoration.none,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      alert.remainingLabel,
+                                      style: TextStyle(
+                                        color:
+                                            Colors.white.withOpacity(0.85),
+                                        fontSize: 12,
+                                        decoration: TextDecoration.none,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // Content
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            // Attacker info
+                            _sectionLabel(
+                              context,
+                              S.isAr ? 'معلومات المهاجم' : 'Attacker info',
+                              Icons.person_rounded,
+                              AppTheme.red,
                             ),
+                            const SizedBox(height: 8),
+                            _infoRow(context,
+                                icon: Icons.person_rounded,
+                                label: S.isAr ? 'الاسم' : 'Name',
+                                value: alert.attackerName,
+                                color: AppTheme.red),
+                            if (alert.attackerAlliance != null &&
+                                alert.attackerAlliance!.isNotEmpty)
+                              _infoRow(context,
+                                  icon: Icons.group_rounded,
+                                  label: S.isAr ? 'التحالف' : 'Alliance',
+                                  value: alert.attackerAlliance!,
+                                  color: AppTheme.orange)
+                            else
+                              _infoRow(context,
+                                  icon: Icons.group_rounded,
+                                  label: S.isAr ? 'التحالف' : 'Alliance',
+                                  value:
+                                      S.isAr ? 'بدون تحالف' : 'No alliance',
+                                  color: AppTheme.subTextColor(context)),
+                            if (alert.attackerCastleName != null &&
+                                alert.attackerCastleName!.isNotEmpty)
+                              _infoRow(context,
+                                  icon: Icons.castle_rounded,
+                                  label: S.attackerCastle,
+                                  value:
+                                      '${alert.attackerCastleName!}\n(${alert.attackerX}, ${alert.attackerY})',
+                                  color: AppTheme.blue),
+
+                            const SizedBox(height: 16),
+
+                            // Attack info
+                            _sectionLabel(
+                              context,
+                              S.isAr ? 'معلومات الهجوم' : 'Attack info',
+                              Icons.gavel_rounded,
+                              AppTheme.purple,
+                            ),
+                            const SizedBox(height: 8),
+                            _infoRow(context,
+                                icon: Icons.map_rounded,
+                                label: S.isAr ? 'الخريطة' : 'Map',
+                                value: alert.kingdomName,
+                                color: AppTheme.teal),
+                            if (alert.targetCastleName != null &&
+                                alert.targetCastleName!.isNotEmpty)
+                              _infoRow(context,
+                                  icon: Icons.flag_rounded,
+                                  label: S.targetCastle,
+                                  value:
+                                      '${alert.targetCastleName!}\n(${alert.targetX}, ${alert.targetY})',
+                                  color: AppTheme.purple),
+                            _infoRow(context,
+                                icon: Icons.timer_rounded,
+                                label: S.timeRemaining,
+                                value: alert.remainingLabel,
+                                color: AppTheme.orange),
+                            _infoRow(context,
+                                icon: Icons.groups_rounded,
+                                label: S.isAr
+                                    ? 'إجمالي الجنود'
+                                    : 'Total units',
+                                value:
+                                    '${alert.totalUnits} ${S.isAr ? "جندي" : "units"}',
+                                color: AppTheme.red),
+
+                            const SizedBox(height: 16),
+
+                            // Attacking Units — ✅ ياخد List<AttackUnit>
+                            _sectionLabel(
+                              context,
+                              S.attackingUnits,
+                              Icons.military_tech_rounded,
+                              AppTheme.red,
+                            ),
+                            const SizedBox(height: 8),
+                            if (alert.units.isEmpty)
+                              _noDataCard(
+                                context,
+                                S.isAr
+                                    ? 'لم تصل تفاصيل الجنود بعد'
+                                    : 'Unit details not received yet',
+                              )
+                            else
+                              ..._buildAttackUnitRows(
+                                context,
+                                alert.units,
+                                color: AppTheme.red,
+                              ),
+
+                            const SizedBox(height: 16),
+
+                            // Defense
+                            _sectionLabel(
+                              context,
+                              S.defenseInfo,
+                              Icons.shield_moon_rounded,
+                              AppTheme.teal,
+                            ),
+                            const SizedBox(height: 8),
+                            if (defense == null)
+                              _noDataCard(context, S.defenseNotAvailable)
+                            else ...[
+                              _infoRow(context,
+                                  icon: Icons.security_rounded,
+                                  label: S.defenseStat,
+                                  value: '${defense.defense}',
+                                  color: AppTheme.teal),
+                              const SizedBox(height: 8),
+                              if (defense.units.isEmpty)
+                                _noDataCard(
+                                    context,
+                                    S.isAr
+                                        ? 'لا توجد وحدات دفاع'
+                                        : 'No defense units')
+                              else
+                                ..._buildCastleUnitRows(
+                                  context,
+                                  defense.units,
+                                  color: AppTheme.teal,
+                                ),
+                            ],
+
+                            const SizedBox(height: 10),
                           ],
                         ),
-                      )
-                    else ...[
-                      _infoRow(context,
-                          icon: Icons.security_rounded,
-                          label: S.defenseStat,
-                          value: '${defense.defense}',
-                          color: AppTheme.teal),
-                      const SizedBox(height: 8),
-                      if (defense.units.isEmpty)
-                        _noData(context)
-                      else
-                        ...defense.units.map((u) => _unitRow(
-                              context,
-                              name: S.unitName(u.displayName),
-                              amount: u.amount,
-                              icon: u.icon,
-                              color: u.roleColor,
-                            )),
-                    ],
-
-                    const SizedBox(height: 20),
+                      ),
+                    ),
                   ],
                 ),
               ),
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _closeBtn(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => Navigator.of(context).pop(),
+        child: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.25),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withOpacity(0.4)),
+          ),
+          child:
+              const Icon(Icons.close_rounded, color: Colors.white, size: 20),
         ),
       ),
     );
   }
 
-  Widget _sectionTitle(
-      BuildContext context, String title, IconData icon, Color color) {
+  Widget _sectionLabel(
+      BuildContext context, String text, IconData icon, Color color) {
     return Row(
       children: [
-        Icon(icon, color: color, size: 18),
-        const SizedBox(width: 8),
+        Icon(icon, color: color, size: 16),
+        const SizedBox(width: 6),
         Text(
-          title,
+          text,
           style: TextStyle(
               color: AppTheme.textColor(context),
               fontWeight: FontWeight.bold,
-              fontSize: 14,
+              fontSize: 13,
               decoration: TextDecoration.none),
         ),
       ],
@@ -607,35 +754,39 @@ class _AlertDetailsSheet extends StatelessWidget {
     required Color color,
   }) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.25)),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.22)),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 16),
-          const SizedBox(width: 10),
-          Text(
-            '$label:',
-            style: TextStyle(
-                color: AppTheme.subTextColor(context),
-                fontSize: 12,
-                decoration: TextDecoration.none),
+          Icon(icon, color: color, size: 15),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: Text(
+              label,
+              style: TextStyle(
+                  color: AppTheme.subTextColor(context),
+                  fontSize: 11.5,
+                  decoration: TextDecoration.none),
+            ),
           ),
           const SizedBox(width: 8),
           Expanded(
+            flex: 3,
             child: Text(
               value,
               style: TextStyle(
                   color: AppTheme.textColor(context),
-                  fontSize: 13,
+                  fontSize: 12,
                   fontWeight: FontWeight.bold,
                   decoration: TextDecoration.none),
               textAlign: TextAlign.end,
-              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -643,24 +794,65 @@ class _AlertDetailsSheet extends StatelessWidget {
     );
   }
 
+  // ═══ للـ AttackUnit (هجوم) ═══
+  List<Widget> _buildAttackUnitRows(
+    BuildContext context,
+    List<AttackUnit> attackUnits, {
+    required Color color,
+  }) {
+    final grouped = <String, int>{};
+    for (final u in attackUnits) {
+      final name = S.unitName(u.displayName);
+      grouped[name] = (grouped[name] ?? 0) + u.amount;
+    }
+    return grouped.entries
+        .map((e) =>
+            _unitRow(context, name: e.key, amount: e.value, color: color))
+        .toList();
+  }
+
+  // ═══ للـ CastleUnit (دفاع) ═══
+  List<Widget> _buildCastleUnitRows(
+    BuildContext context,
+    List<CastleUnit> castleUnits, {
+    required Color color,
+  }) {
+    final grouped = <String, int>{};
+    for (final u in castleUnits) {
+      final name = S.unitName(u.displayName);
+      grouped[name] = (grouped[name] ?? 0) + u.amount;
+    }
+    return grouped.entries
+        .map((e) =>
+            _unitRow(context, name: e.key, amount: e.value, color: color))
+        .toList();
+  }
+
   Widget _unitRow(
     BuildContext context, {
     required String name,
     required int amount,
-    required IconData icon,
     required Color color,
   }) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      margin: const EdgeInsets.only(bottom: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
         color: color.withOpacity(0.06),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.2)),
+        border: Border.all(color: color.withOpacity(0.18)),
       ),
       child: Row(
         children: [
-          Icon(icon, color: color, size: 16),
+          Container(
+            width: 26,
+            height: 26,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(Icons.gavel_rounded, color: color, size: 13),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -672,32 +864,40 @@ class _AlertDetailsSheet extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          Text(
-            '$amount',
-            style: TextStyle(
-                color: color,
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-                decoration: TextDecoration.none),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '$amount',
+              style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  decoration: TextDecoration.none),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _noData(BuildContext context) {
+  Widget _noDataCard(BuildContext context, String message) {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppTheme.subTextColor(context).withOpacity(0.06),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Text(
-        S.isAr ? 'لا توجد بيانات' : 'No data',
+        message,
         textAlign: TextAlign.center,
         style: TextStyle(
             color: AppTheme.subTextColor(context),
-            fontSize: 12,
+            fontSize: 11.5,
             decoration: TextDecoration.none),
       ),
     );

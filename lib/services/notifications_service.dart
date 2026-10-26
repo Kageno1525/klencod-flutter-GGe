@@ -190,7 +190,6 @@ class NotificationsService {
     if (!_listCtrl.isClosed) _listCtrl.add([]);
   }
 
-  // ═══ NEW: individual delete ═══
   static void removeAlert(int movementId) {
     _history.removeWhere((a) => a.movementId == movementId);
     if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
@@ -200,30 +199,48 @@ class NotificationsService {
     if (!_enabled) return;
     if (alert.isAllianceAttack && !_allianceAttacksEnabled) return;
 
-    _history.insert(0, alert);
-    if (_history.length > 100) {
-      _history.removeRange(100, _history.length);
+    // ═══ Check for existing alert (update scenario) ═══
+    final existingIdx = _history.indexWhere(
+      (a) => a.movementId == alert.movementId,
+    );
+
+    if (existingIdx >= 0) {
+      _history[existingIdx] = alert;
+      TrafficLog.add('ST',
+          '[Notif] alert UPDATED mid=${alert.movementId} units=${alert.units.length}');
+    } else {
+      _history.insert(0, alert);
+      if (_history.length > 100) {
+        _history.removeRange(100, _history.length);
+      }
+      TrafficLog.add('ST',
+          '[Notif] alert INSERTED mid=${alert.movementId} units=${alert.units.length}');
     }
+
     if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
 
     if (!_ready) return;
+
+    final allianceStr = (alert.attackerAlliance != null &&
+            alert.attackerAlliance!.isNotEmpty)
+        ? ' [${alert.attackerAlliance}]'
+        : '';
 
     final unitsLine = alert.units.isEmpty
         ? 'Movement detected'
         : alert.units
             .map((u) => '${u.displayName}: ${u.amount}')
-            .take(3)
+            .take(5)
             .join(' · ');
 
     final bigText = '${alert.remainingLabel} · ${alert.kingdomName}\n'
-        'From: ${alert.attackerName}'
-        '${alert.attackerAlliance != null ? " [${alert.attackerAlliance}]" : ""}\n'
+        'From: ${alert.attackerName}$allianceStr\n'
         'Total units: ${alert.totalUnits}\n$unitsLine';
 
     try {
       await _plugin.show(
         alert.movementId,
-        '${alert.isAllianceAttack ? "🛡️" : "⚔️"} Attack from ${alert.attackerName}',
+        '${alert.isAllianceAttack ? "🛡️" : "⚔️"} ${alert.attackerName}$allianceStr',
         '${alert.remainingLabel} · '
             '${alert.totalUnits > 0 ? "${alert.totalUnits} units" : "movement"}',
         NotificationDetails(
@@ -243,7 +260,9 @@ class NotificationsService {
         ),
         payload: '${alert.movementId}',
       );
-    } catch (_) {}
+    } catch (e) {
+      TrafficLog.add('ER', '[Notif] show failed: $e');
+    }
   }
 
   static Future<void> dispose() async {

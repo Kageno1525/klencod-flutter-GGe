@@ -98,9 +98,11 @@ class GgeClient {
   DateTime? _lastRxTime;
 
   int? _cachedPlayerId;
-  final Set<int> _alertedMids = {};
 
-  // ═══ NEW: cached stats ═══
+  // ═══ Track alerts by movement ID to allow unit updates ═══
+  final Map<int, AttackAlert> _latestAlertByMid = {};
+
+  // ═══ Cached stats by areaId ═══
   Map<int, CastleStats>? _cachedStatsByArea;
   Map<int, CastleStats>? get cachedStatsByArea => _cachedStatsByArea;
   set cachedStatsByArea(Map<int, CastleStats>? v) => _cachedStatsByArea = v;
@@ -273,12 +275,10 @@ class GgeClient {
     }
   }
 
-  // ═══ UPDATED: rich attack processing ═══
+  // ═══ UPDATED: units update support ═══
   void _processAttacks(Map<String, dynamic> data) {
     final myPid = _cachedPlayerId;
     if (myPid == null || myPid <= 0) return;
-
-    if (_alertedMids.length > 500) _alertedMids.clear();
 
     final owners = <int, Map<String, dynamic>>{};
     for (final o in (data['O'] as List? ?? [])) {
@@ -298,7 +298,6 @@ class GgeClient {
       if (m is! Map) continue;
       final mov = m['M'] as Map<String, dynamic>?;
       if (mov == null) continue;
-
       if (_asInt(mov['T']) != 0) continue;
 
       final ta = mov['TA'] as List?;
@@ -314,14 +313,30 @@ class GgeClient {
           allyIds.contains(targetPid) &&
           sourcePid != myPid &&
           !allyIds.contains(sourcePid);
-
       if (!isMeAttacked && !isAllyAttacked) continue;
 
       final mid = _asInt(mov['MID']);
       if (mid <= 0) continue;
 
-      if (_alertedMids.contains(mid)) continue;
-      _alertedMids.add(mid);
+      // ═══ Extract units FIRST ═══
+      final units = <AttackUnit>[];
+      final ga = m['GA'] as Map<String, dynamic>?;
+      if (ga != null) {
+        _extractUnits(ga['L'], 'left', units);
+        _extractUnits(ga['M'], 'middle', units);
+        _extractUnits(ga['R'], 'right', units);
+        _extractUnits(ga['RW'], 'courtyard', units);
+      }
+
+      final existing = _latestAlertByMid[mid];
+
+      if (existing != null) {
+        // Already alerted
+        if (units.isEmpty) continue;
+        if (existing.units.isNotEmpty) continue;
+        TrafficLog.add('ST',
+            '🔁 Units arrived for mid=$mid (${units.length} types, ${units.fold<int>(0, (s, u) => s + u.amount)} units)');
+      }
 
       final attacker = owners[sourcePid];
       final attackerName = _asString(attacker?['N']) ??
@@ -335,15 +350,6 @@ class GgeClient {
 
       final targetCastleName = ta.length > 10 ? _asString(ta[10]) : null;
       final targetAreaId = ta.length > 3 ? _asInt(ta[3]) : 0;
-
-      final units = <AttackUnit>[];
-      final ga = m['GA'] as Map<String, dynamic>?;
-      if (ga != null) {
-        _extractUnits(ga['L'], 'left', units);
-        _extractUnits(ga['M'], 'middle', units);
-        _extractUnits(ga['R'], 'right', units);
-        _extractUnits(ga['RW'], 'courtyard', units);
-      }
 
       final alert = AttackAlert(
         movementId: mid,
@@ -362,14 +368,21 @@ class GgeClient {
         totalTime: _asInt(mov['TT']),
         paidTime: _asInt(mov['PT']),
         units: units,
-        receivedAt: DateTime.now(),
+        receivedAt: existing?.receivedAt ?? DateTime.now(),
         isAllianceAttack: isAllyAttacked,
       );
 
+      if (_latestAlertByMid.length >= 30) {
+        _latestAlertByMid.remove(_latestAlertByMid.keys.first);
+      }
+      _latestAlertByMid[mid] = alert;
       if (!_attackCtrl.isClosed) _attackCtrl.add(alert);
-      final tag = isAllyAttacked ? '🛡️ Ally' : '🚨';
-      TrafficLog.add('ST',
-          '$tag Attack from $attackerName → ${alert.remainingLabel}');
+
+      if (existing == null) {
+        final tag = isAllyAttacked ? '🛡️ Ally' : '🚨';
+        TrafficLog.add('ST',
+            '$tag Attack from $attackerName [${attackerAlliance ?? "no ally"}] → ${alert.remainingLabel}');
+      }
     }
   }
 
