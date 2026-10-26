@@ -40,7 +40,7 @@ class NotificationsService {
       _soundEnabled = prefs.getBool(_soundKey) ?? true;
       _enabled = prefs.getBool(_enabledKey) ?? true;
     } catch (e) {
-      debugPrint('[Notifications] prefs load failed: $e');
+      TrafficLog.add('ER', '[Notif] prefs load failed: $e');
     }
 
     try {
@@ -48,6 +48,7 @@ class NotificationsService {
           AndroidInitializationSettings('@mipmap/ic_launcher');
       const init = InitializationSettings(android: androidInit);
       await _plugin.initialize(init).timeout(const Duration(seconds: 3));
+      TrafficLog.add('ST', '[Notif] plugin initialized');
 
       final android = _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
@@ -63,14 +64,19 @@ class NotificationsService {
               enableVibration: true,
             ))
             .timeout(const Duration(seconds: 2));
+        TrafficLog.add('ST', '[Notif] channel created');
 
         _permissionGranted =
             await android.areNotificationsEnabled() ?? false;
-        debugPrint('[Notifications] permission granted: $_permissionGranted');
+        TrafficLog.add('ST',
+            '[Notif] permission granted: $_permissionGranted');
+      } else {
+        TrafficLog.add('ER', '[Notif] android plugin is null!');
       }
       _ready = true;
+      TrafficLog.add('ST', '[Notif] init complete (ready=true)');
     } catch (e) {
-      debugPrint('[Notifications] init error: $e');
+      TrafficLog.add('ER', '[Notif] init error: $e');
     }
   }
 
@@ -90,10 +96,16 @@ class NotificationsService {
         await prefs.setBool(_permissionAskedKey, true);
       } catch (_) {}
 
-      debugPrint('[Notifications] permission result: $_permissionGranted');
+      // If permission was just granted, try init again
+      if (_permissionGranted && !_ready) {
+        await init();
+      }
+
+      TrafficLog.add('ST',
+          '[Notif] permission result: $_permissionGranted');
       return _permissionGranted;
     } catch (e) {
-      debugPrint('[Notifications] requestPermission failed: $e');
+      TrafficLog.add('ER', '[Notif] requestPermission failed: $e');
       return false;
     }
   }
@@ -138,10 +150,14 @@ class NotificationsService {
 
   static void startListening() {
     final client = GgeClient();
-    if (identical(_subscribedClient, client) && _sub != null) return;
+    if (identical(_subscribedClient, client) && _sub != null) {
+      TrafficLog.add('ST', '[Notif] already listening');
+      return;
+    }
     _sub?.cancel();
     _subscribedClient = client;
     _sub = client.attackStream.listen(_onAttack);
+    TrafficLog.add('ST', '[Notif] listening to attackStream');
   }
 
   static void stopListening() {
@@ -156,17 +172,30 @@ class NotificationsService {
   }
 
   static Future<void> _onAttack(AttackAlert alert) async {
-    if (!_enabled) return;
-    if (!_ready) {
-      debugPrint('[Notifications] plugin not ready — skipping');
-      return;
-    }
+    // ═══ NEW: always log so we know it fired ═══
+    TrafficLog.add('ST',
+        '[Notif] _onAttack fired (enabled=$_enabled, ready=$_ready)');
 
+    if (!_enabled) return;
+
+    // ═══ KEY FIX: ALWAYS add to in-app history ═══
+    // Even if the plugin failed, the user must see the attack in the app
     _history.insert(0, alert);
     if (_history.length > 100) {
       _history.removeRange(100, _history.length);
     }
     if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
+    TrafficLog.add('ST',
+        '[Notif] history updated (total=${_history.length})');
+
+    // Only system notification requires plugin readiness
+    if (!_ready) {
+      TrafficLog.add('ER',
+          '[Notif] plugin NOT ready — in-app only, no system notification');
+      // Try init once
+      unawaited(init());
+      return;
+    }
 
     final unitsLine = alert.units.isEmpty
         ? 'Movement detected'
@@ -199,13 +228,17 @@ class NotificationsService {
             styleInformation: BigTextStyleInformation(bigText),
             fullScreenIntent: false,
             autoCancel: true,
+            ongoing: false,
+            enableLights: true,
+            ledColor: const Color(0xFFFF0000),
           ),
         ),
         payload: '${alert.movementId}',
       );
-      debugPrint('[Notifications] shown for mid=${alert.movementId}');
+      TrafficLog.add('ST',
+          '[Notif] system notification shown for mid=${alert.movementId}');
     } catch (e) {
-      debugPrint('[Notifications] show failed: $e');
+      TrafficLog.add('ER', '[Notif] show failed: $e');
     }
   }
 

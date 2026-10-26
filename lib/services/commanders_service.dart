@@ -27,6 +27,8 @@ class CommandersService {
     final gamResp = await conn.sendXtAndWait('gam', '{}', responseCmd: 'gam');
     final movementsMap = <int, LordMovement>{};
 
+    final myPid = conn.cachedPlayerId;
+
     if (gamResp.resultCode == 0 && gamResp.payload != null) {
       final data = jsonDecode(gamResp.payload!) as Map<String, dynamic>;
       final ownersMap = <int, String>{};
@@ -41,20 +43,37 @@ class CommandersService {
         final pt = _asInt(mov['PT']);
         if (tt <= pt) continue;
         final ta = mov['TA'] as List?;
+        final sa = mov['SA'] as List?;
         if (ta == null || ta.length < 5) continue;
-        final targetPlayerId = _asInt(ta[4]);
+        if (sa == null || sa.length < 5) continue;
+
+        final targetPid = _asInt(ta[4]);
+        final sourcePid = _asInt(sa[4]);
+        final movType = _asInt(mov['T']);
+
+        // ═══ KEY FIX: filter by ownership ═══
+        // A movement belongs to ME if:
+        //   - I am the SOURCE (outgoing attack/support/transport)
+        //   - OR I am the TARGET of a RETURNING movement (type 2)
+        final isOutgoing = myPid != null && sourcePid == myPid;
+        final isReturning =
+            myPid != null && targetPid == myPid && movType == 2;
+        if (!isOutgoing && !isReturning) continue;
+
         String targetName = (ta[10] as String?) ?? '';
         if (targetName.isEmpty) {
-          targetName = ownersMap[targetPlayerId] ?? 'Unknown Target';
+          targetName = ownersMap[targetPid] ?? 'Unknown';
         }
+
         final um = m['UM'] as Map<String, dynamic>?;
         int? lid = _asIntOrNull((um?['L'] as Map?)?['ID']);
         lid ??= _asIntOrNull(mov['LID']);
         lid ??= _asIntOrNull(m['LID']);
+
         if (lid != null && lid >= 0) {
           movementsMap[lid] = LordMovement(
             movementId: _asInt(mov['MID']),
-            type: _asInt(mov['T']),
+            type: movType,
             totalTime: tt,
             paidTime: pt,
             targetX: _asInt(ta[1]),
@@ -73,7 +92,9 @@ class CommandersService {
         movement: movementsMap[lord.id],
       ));
     }
-    result.sort((a, b) => a.lord.visibleIndex.compareTo(b.lord.visibleIndex));
+
+    result.sort(
+        (a, b) => a.lord.visibleIndex.compareTo(b.lord.visibleIndex));
     return result;
   }
 
