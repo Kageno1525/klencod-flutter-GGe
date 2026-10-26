@@ -4,7 +4,7 @@ import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/services/notifications_service.dart';
 import 'package:gge/services/background_service.dart';
-import 'package:gge/services/settings_guide_service.dart';
+import 'package:gge/screens/notifications_settings_screen.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
 
@@ -18,18 +18,11 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen>
     with WidgetsBindingObserver {
-  bool _batteryOptimized = true;
-  bool _oemRestricted = false;
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     NotificationsService.startListening();
-    Future.microtask(() async {
-      await NotificationsService.checkPermission();
-      await _refreshSettingsState();
-    });
   }
 
   @override
@@ -40,23 +33,9 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // re-check when user comes back from system settings
     if (state == AppLifecycleState.resumed) {
-      _refreshSettingsState();
+      NotificationsService.checkPermission();
     }
-  }
-
-  Future<void> _refreshSettingsState() async {
-    final bat = await SettingsGuideService.isBatteryOptimized();
-    final notif = await NotificationsService.checkPermission();
-    final oem = await SettingsGuideService.isOemRestricted();
-    if (!mounted) return;
-    setState(() {
-      _batteryOptimized = bat;
-      _oemRestricted = oem;
-    });
-    // ignore: unused_local_variable
-    final _ = notif;
   }
 
   @override
@@ -70,21 +49,21 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               children: [
                 _header(context),
                 Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: _refreshSettingsState,
-                    color: AppTheme.purple,
-                    child: ListView(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                      children: [
-                        _setupGuideCard(context),
-                        const SizedBox(height: 12),
-                        _serviceCard(context),
-                        const SizedBox(height: 12),
-                        _settingsCard(context),
-                        const SizedBox(height: 12),
-                        _historySection(context),
-                      ],
-                    ),
+                  child: StreamBuilder<List<AttackAlert>>(
+                    stream: NotificationsService.historyStream,
+                    initialData: NotificationsService.history,
+                    builder: (_, snap) {
+                      final alerts = snap.data ?? [];
+                      if (alerts.isEmpty) return _emptyView(context);
+                      return ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                        itemCount: alerts.length,
+                        itemBuilder: (_, i) => FadeSlideIn(
+                          delay: Duration(milliseconds: 40 + i * 40),
+                          child: _alertCard(alerts[i]),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ],
@@ -121,7 +100,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                   ),
                 ),
                 Text(
-                  '${NotificationsService.history.length} alerts',
+                  '${NotificationsService.history.length} ${S.isAr ? "تنبيه" : "alerts"}',
                   style: TextStyle(
                     fontSize: 11,
                     color: AppTheme.subTextColor(context),
@@ -131,6 +110,20 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               ],
             ),
           ),
+          AppIconBtn(
+            icon: Icons.settings_rounded,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      NotificationsSettingsScreen(client: widget.client),
+                ),
+              );
+            },
+            size: 42,
+          ),
+          const SizedBox(width: 8),
           AppIconBtn(
             icon: Icons.delete_sweep_rounded,
             color: AppTheme.red,
@@ -145,490 +138,51 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  SETUP GUIDE — checklist with auto-detection
-  // ═══════════════════════════════════════════════════════════
-  Widget _setupGuideCard(BuildContext context) {
-    final notifDone = NotificationsService.permissionGranted;
-    final batteryDone = !_batteryOptimized;
-
-    final allDone = notifDone && batteryDone;
-
-    return AppTheme.glassCard(
-      context: context,
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  gradient: allDone
-                      ? AppTheme.successGradient
-                      : AppTheme.orangeGradient,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  allDone
-                      ? Icons.check_circle_rounded
-                      : Icons.assignment_rounded,
-                  color: Colors.white,
-                  size: 18,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      allDone
-                          ? 'الإعدادات جاهزة ✓'
-                          : 'إعدادات مطلوبة',
-                      style: TextStyle(
-                        color: AppTheme.textColor(context),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                    Text(
-                      allDone
-                          ? 'كل حاجة متظبطة، الإشعارات شغالة'
-                          : 'اتبع الخطوات دي مرة واحدة',
-                      style: TextStyle(
-                        color: AppTheme.subTextColor(context),
-                        fontSize: 11,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-
-          _setupItem(
-            context: context,
-            icon: Icons.notifications_active_rounded,
-            title: 'صلاحية الإشعارات',
-            subtitle: notifDone
-                ? 'مفعّلة ✓'
-                : 'مطلوبة عشان توصلك التنبيهات',
-            done: notifDone,
-            actionLabel: notifDone ? 'تعديل' : 'فتح',
-            actionColor: notifDone ? AppTheme.blue : AppTheme.red,
-            onTap: () async {
-              await SettingsGuideService.openNotificationSettings();
-              await Future.delayed(const Duration(seconds: 1));
-              await _refreshSettingsState();
-            },
-          ),
-          Divider(
-              height: 1,
-              color: AppTheme.subTextColor(context).withOpacity(0.08)),
-          _setupItem(
-            context: context,
-            icon: Icons.battery_saver_rounded,
-            title: 'إيقاف تحسين البطارية',
-            subtitle: batteryDone
-                ? 'متوقف ✓ — النظام مش هيقتل التطبيق'
-                : 'مطلوب عشان التطبيق يشتغل في الخلفية',
-            done: batteryDone,
-            actionLabel: batteryDone ? 'تعديل' : 'فتح',
-            actionColor: batteryDone ? AppTheme.blue : AppTheme.orange,
-            onTap: () async {
-              await SettingsGuideService.openBatteryOptimization();
-              await Future.delayed(const Duration(seconds: 2));
-              await _refreshSettingsState();
-            },
-          ),
-          if (_oemRestricted) ...[
-            Divider(
-                height: 1,
-                color: AppTheme.subTextColor(context).withOpacity(0.08)),
-            _setupItem(
-              context: context,
-              icon: Icons.rocket_launch_rounded,
-              title: 'Autostart (تشغيل تلقائي)',
-              subtitle:
-                  'جهازك (${_oemRestricted ? "Xiaomi/OPPO/etc" : "Android"}) محتاج تفعيلها يدوياً',
-              done: null,
-              actionLabel: 'فتح',
-              actionColor: AppTheme.purple,
-              onTap: () async {
-                await SettingsGuideService.openAutostart();
-              },
-            ),
-          ],
-          Divider(
-              height: 1,
-              color: AppTheme.subTextColor(context).withOpacity(0.08)),
-          _setupItem(
-            context: context,
-            icon: Icons.lock_rounded,
-            title: 'قفل التطبيق في Recent Apps',
-            subtitle: 'اسحب التطبيق لأسفل واضغط 🔒 عشان ما يتقفلش',
-            done: null,
-            actionLabel: 'شرح',
-            actionColor: AppTheme.teal,
-            onTap: () => _showLockGuide(context),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _setupItem({
-    required BuildContext context,
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required bool? done,
-    required String actionLabel,
-    required Color actionColor,
-    required VoidCallback onTap,
-  }) {
-    final Color iconColor;
-    final IconData statusIcon;
-
-    if (done == true) {
-      iconColor = AppTheme.green;
-      statusIcon = Icons.check_circle_rounded;
-    } else if (done == false) {
-      iconColor = AppTheme.red;
-      statusIcon = Icons.cancel_rounded;
-    } else {
-      iconColor = AppTheme.orange;
-      statusIcon = Icons.info_rounded;
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: iconColor.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: iconColor, size: 18),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        title,
-                        style: TextStyle(
-                          color: AppTheme.textColor(context),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12.5,
-                          decoration: TextDecoration.none,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(statusIcon, color: iconColor, size: 14),
-                  ],
-                ),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: AppTheme.subTextColor(context),
-                    fontSize: 10.5,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: onTap,
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: actionColor.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: actionColor.withOpacity(0.4)),
-              ),
-              child: Text(
-                actionLabel,
-                style: TextStyle(
-                  color: actionColor,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.none,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showLockGuide(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            const Icon(Icons.lock_rounded, color: AppTheme.teal),
-            const SizedBox(width: 8),
-            const Text('قفل التطبيق',
-                style: TextStyle(decoration: TextDecoration.none)),
-          ],
-        ),
-        content: const Text(
-          '1. اضغط زر الـ Home عشان تطلع من التطبيق\n'
-          '2. افتح شاشة الـ Recent Apps (الزرار اللي جنب الـ Home)\n'
-          '3. اسحب التطبيق لأسفل → هتلاقي أيقونة 🔒\n'
-          '4. اضغطها عشان التطبيق يفضل شغال\n\n'
-          'ده بيمنع النظام من إغلاقه تلقائي.',
-          style: TextStyle(decoration: TextDecoration.none, height: 1.6),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('فهمت'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  //  SERVICE CARD
-  // ═══════════════════════════════════════════════════════════
-  Widget _serviceCard(BuildContext context) {
-    final running = BackgroundService.isRunning;
-    return AppTheme.glassCard(
-      context: context,
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              gradient: running
-                  ? AppTheme.successGradient
-                  : const LinearGradient(
-                      colors: [Colors.grey, Colors.grey],
-                    ),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(
-              running ? Icons.shield_moon_rounded : Icons.shield_outlined,
-              color: Colors.white,
-              size: 22,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  running ? 'الحماية شغالة' : 'الحماية متوقفة',
-                  style: TextStyle(
-                    color: AppTheme.textColor(context),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-                Text(
-                  running
-                      ? 'التطبيق شغال في الخلفية'
-                      : 'شغّلها عشان الإشعارات تشتغل في الخلفية',
-                  style: TextStyle(
-                    color: AppTheme.subTextColor(context),
-                    fontSize: 11,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Switch(
-            value: running,
-            onChanged: (v) async {
-              if (v) {
-                await BackgroundService.start();
-              } else {
-                await BackgroundService.stop();
-              }
-              if (mounted) setState(() {});
-            },
-            activeColor: AppTheme.green,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _settingsCard(BuildContext context) {
-    return AppTheme.glassCard(
-      context: context,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-      child: Column(
-        children: [
-          _toggleRow(
-            icon: Icons.notifications_active_rounded,
-            title: S.notificationsEnabled,
-            subtitle: S.notificationsEnabledDesc,
-            value: NotificationsService.enabled,
-            onChanged: (v) async {
-              await NotificationsService.setEnabled(v);
-              if (mounted) setState(() {});
-            },
-          ),
-          Divider(color: AppTheme.subTextColor(context).withOpacity(0.1)),
-          _toggleRow(
-            icon: Icons.volume_up_rounded,
-            title: S.soundAlert,
-            subtitle: S.soundAlertDesc,
-            value: NotificationsService.soundEnabled,
-            onChanged: (v) async {
-              await NotificationsService.setSound(v);
-              if (mounted) setState(() {});
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _toggleRow({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required bool value,
-    required Future<void> Function(bool) onChanged,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: AppTheme.purple.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: AppTheme.purple, size: 18),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                      color: AppTheme.textColor(context),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                      decoration: TextDecoration.none),
-                ),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                      color: AppTheme.subTextColor(context),
-                      fontSize: 10.5,
-                      decoration: TextDecoration.none),
-                ),
-              ],
-            ),
-          ),
-          Switch(
-            value: value,
-            onChanged: (v) => onChanged(v),
-            activeColor: AppTheme.purple,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _historySection(BuildContext context) {
-    return StreamBuilder<List<AttackAlert>>(
-      stream: NotificationsService.historyStream,
-      initialData: NotificationsService.history,
-      builder: (_, snap) {
-        final alerts = snap.data ?? [];
-        if (alerts.isEmpty) return _emptyView(context);
-        return Column(
-          children: alerts
-              .map((a) => FadeSlideIn(
-                    delay: const Duration(milliseconds: 60),
-                    child: _alertCard(a),
-                  ))
-              .toList(),
-        );
-      },
-    );
-  }
-
   Widget _emptyView(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 40),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(22),
-            decoration: BoxDecoration(
-              color: AppTheme.purple.withOpacity(0.12),
-              shape: BoxShape.circle,
-              border: Border.all(color: AppTheme.purple.withOpacity(0.3)),
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(22),
+              decoration: BoxDecoration(
+                color: AppTheme.purple.withOpacity(0.12),
+                shape: BoxShape.circle,
+                border: Border.all(color: AppTheme.purple.withOpacity(0.3)),
+              ),
+              child: Icon(Icons.shield_moon_rounded,
+                  size: 56, color: AppTheme.purple.withOpacity(0.7)),
             ),
-            child: Icon(Icons.shield_moon_rounded,
-                size: 56, color: AppTheme.purple.withOpacity(0.7)),
-          ),
-          const SizedBox(height: 20),
-          Text(
-            S.noAlerts,
-            style: TextStyle(
-                color: AppTheme.textColor(context),
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                decoration: TextDecoration.none),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            S.noAlertsDesc,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                color: AppTheme.subTextColor(context),
-                fontSize: 12,
-                decoration: TextDecoration.none),
-          ),
-        ],
+            const SizedBox(height: 20),
+            Text(
+              S.noAlerts,
+              style: TextStyle(
+                  color: AppTheme.textColor(context),
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              S.noAlertsDesc,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: AppTheme.subTextColor(context),
+                  fontSize: 12,
+                  decoration: TextDecoration.none),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _alertCard(AttackAlert alert) {
     final isIncoming = alert.remainingSeconds > 0;
+    final isAlly = alert.isAllianceAttack;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       child: AppTheme.glassCard(
@@ -637,33 +191,87 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ─── Header ───
             Row(
               children: [
                 Container(
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    gradient: AppTheme.dangerGradient,
+                    gradient: isAlly
+                        ? AppTheme.successGradient
+                        : AppTheme.dangerGradient,
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Icons.gavel_rounded,
-                      color: Colors.white, size: 22),
+                  child: Icon(
+                    isAlly ? Icons.shield_moon_rounded : Icons.gavel_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        alert.attackerName,
-                        style: TextStyle(
-                            color: AppTheme.textColor(context),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                            decoration: TextDecoration.none),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              alert.attackerName,
+                              style: TextStyle(
+                                  color: AppTheme.textColor(context),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                  decoration: TextDecoration.none),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (alert.attackerAlliance != null &&
+                              alert.attackerAlliance!.isNotEmpty) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppTheme.orange.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                alert.attackerAlliance!,
+                                style: const TextStyle(
+                                    color: AppTheme.orange,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    decoration: TextDecoration.none),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                          if (isAlly) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppTheme.teal.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                S.allianceMember,
+                                style: const TextStyle(
+                                    color: AppTheme.teal,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    decoration: TextDecoration.none),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
+                      const SizedBox(height: 3),
                       Text(
-                        '${alert.kingdomName} · (${alert.targetX}, ${alert.targetY})',
+                        '${alert.kingdomName} · ${alert.attackerX},${alert.attackerY}',
                         style: TextStyle(
                             color: AppTheme.subTextColor(context),
                             fontSize: 10.5,
@@ -681,32 +289,416 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                 ),
               ],
             ),
-            if (alert.units.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: alert.units.map((u) {
-                  return InfoChip(
+
+            // ─── Quick info chips ───
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if (alert.attackerCastleName != null &&
+                    alert.attackerCastleName!.isNotEmpty)
+                  InfoChip(
+                    icon: Icons.castle_rounded,
+                    label: alert.attackerCastleName!,
+                    color: AppTheme.blue,
+                  ),
+                if (alert.totalUnits > 0)
+                  InfoChip(
                     icon: Icons.shield_rounded,
-                    label: '${u.displayName} ${u.amount}',
+                    label: '${alert.totalUnits} ${S.units}',
                     color: AppTheme.purple,
-                  );
-                }).toList(),
-              ),
-            ],
-            if (alert.totalUnits > 0) ...[
-              const SizedBox(height: 8),
-              Text(
-                '${alert.totalUnits} ${S.units}',
-                style: TextStyle(
-                    color: AppTheme.subTextColor(context),
-                    fontSize: 11,
-                    decoration: TextDecoration.none),
-              ),
-            ],
+                  ),
+              ],
+            ),
+
+            // ─── Actions ───
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _actionBtn(
+                    icon: Icons.info_outline_rounded,
+                    label: S.details,
+                    color: AppTheme.blue,
+                    onTap: () => _showDetails(alert),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _actionBtn(
+                    icon: Icons.delete_outline_rounded,
+                    label: S.delete,
+                    color: AppTheme.red,
+                    onTap: () => _confirmDelete(alert),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _actionBtn({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: color.withOpacity(0.3)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 14, color: color),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete(AttackAlert alert) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(S.delete, style: const TextStyle(decoration: TextDecoration.none)),
+        content: Text(S.deleteAlertConfirm,
+            style: const TextStyle(decoration: TextDecoration.none)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(S.cancel),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
+            child: Text(S.delete,
+                style: const TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      NotificationsService.removeAlert(alert.movementId);
+    }
+  }
+
+  void _showDetails(AttackAlert alert) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _AlertDetailsSheet(alert: alert),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Details sheet
+// ═══════════════════════════════════════════════════════════
+class _AlertDetailsSheet extends StatelessWidget {
+  final AttackAlert alert;
+  const _AlertDetailsSheet({required this.alert});
+
+  @override
+  Widget build(BuildContext context) {
+    final defense =
+        GgeClient().cachedStatsByArea?[alert.targetAreaId];
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 44,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppTheme.subTextColor(context).withOpacity(0.2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // ─── Attacker ───
+                    _infoRow(context,
+                        icon: Icons.person_rounded,
+                        label: S.isAr ? 'المهاجم' : 'Attacker',
+                        value: alert.attackerName,
+                        color: AppTheme.red),
+                    if (alert.attackerAlliance != null &&
+                        alert.attackerAlliance!.isNotEmpty)
+                      _infoRow(context,
+                          icon: Icons.group_rounded,
+                          label: S.isAr ? 'التحالف' : 'Alliance',
+                          value: alert.attackerAlliance!,
+                          color: AppTheme.orange),
+                    if (alert.attackerCastleName != null &&
+                        alert.attackerCastleName!.isNotEmpty)
+                      _infoRow(context,
+                          icon: Icons.castle_rounded,
+                          label: S.attackerCastle,
+                          value:
+                              '${alert.attackerCastleName!} (${alert.attackerX}, ${alert.attackerY})',
+                          color: AppTheme.blue),
+                    _infoRow(context,
+                        icon: Icons.map_rounded,
+                        label: S.isAr ? 'الخريطة' : 'Map',
+                        value: alert.kingdomName,
+                        color: AppTheme.teal),
+                    if (alert.targetCastleName != null &&
+                        alert.targetCastleName!.isNotEmpty)
+                      _infoRow(context,
+                          icon: Icons.flag_rounded,
+                          label: S.targetCastle,
+                          value:
+                              '${alert.targetCastleName!} (${alert.targetX}, ${alert.targetY})',
+                          color: AppTheme.purple),
+                    _infoRow(context,
+                        icon: Icons.timer_rounded,
+                        label: S.timeRemaining,
+                        value: alert.remainingLabel,
+                        color: AppTheme.orange),
+                    _infoRow(context,
+                        icon: Icons.shield_rounded,
+                        label: S.isAr ? 'إجمالي الجنود' : 'Total units',
+                        value: '${alert.totalUnits}',
+                        color: AppTheme.red),
+
+                    const SizedBox(height: 20),
+
+                    // ─── Attacking units ───
+                    _sectionTitle(context, S.attackingUnits,
+                        Icons.gavel_rounded, AppTheme.red),
+                    const SizedBox(height: 10),
+                    if (alert.units.isEmpty)
+                      _noData(context)
+                    else
+                      ...alert.units.map((u) => _unitRow(
+                            context,
+                            name: S.unitName(u.displayName),
+                            amount: u.amount,
+                            icon: Icons.gavel_rounded,
+                            color: AppTheme.red,
+                          )),
+
+                    const SizedBox(height: 20),
+
+                    // ─── Defense info ───
+                    _sectionTitle(context, S.defenseInfo,
+                        Icons.shield_moon_rounded, AppTheme.teal),
+                    const SizedBox(height: 10),
+                    if (defense == null)
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: AppTheme.orange.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                              color: AppTheme.orange.withOpacity(0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.info_outline_rounded,
+                                color: AppTheme.orange, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                S.defenseNotAvailable,
+                                style: TextStyle(
+                                    color: AppTheme.textColor(context),
+                                    fontSize: 12,
+                                    decoration: TextDecoration.none),
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    else ...[
+                      _infoRow(context,
+                          icon: Icons.security_rounded,
+                          label: S.defenseStat,
+                          value: '${defense.defense}',
+                          color: AppTheme.teal),
+                      const SizedBox(height: 8),
+                      if (defense.units.isEmpty)
+                        _noData(context)
+                      else
+                        ...defense.units.map((u) => _unitRow(
+                              context,
+                              name: S.unitName(u.displayName),
+                              amount: u.amount,
+                              icon: u.icon,
+                              color: u.roleColor,
+                            )),
+                    ],
+
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(
+      BuildContext context, String title, IconData icon, Color color) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 18),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: TextStyle(
+              color: AppTheme.textColor(context),
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+              decoration: TextDecoration.none),
+        ),
+      ],
+    );
+  }
+
+  Widget _infoRow(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 16),
+          const SizedBox(width: 10),
+          Text(
+            '$label:',
+            style: TextStyle(
+                color: AppTheme.subTextColor(context),
+                fontSize: 12,
+                decoration: TextDecoration.none),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                  color: AppTheme.textColor(context),
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none),
+              textAlign: TextAlign.end,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _unitRow(
+    BuildContext context, {
+    required String name,
+    required int amount,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 16),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              name,
+              style: TextStyle(
+                  color: AppTheme.textColor(context),
+                  fontSize: 12,
+                  decoration: TextDecoration.none),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Text(
+            '$amount',
+            style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+                decoration: TextDecoration.none),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _noData(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.subTextColor(context).withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        S.isAr ? 'لا توجد بيانات' : 'No data',
+        textAlign: TextAlign.center,
+        style: TextStyle(
+            color: AppTheme.subTextColor(context),
+            fontSize: 12,
+            decoration: TextDecoration.none),
       ),
     );
   }

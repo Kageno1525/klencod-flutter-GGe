@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // ═══════════════════════════════════════════
-//  OwnedCastle
-// ═══════════════════════════════════════════
 class OwnedCastle {
   final int kingdomId;
   final int areaType;
@@ -40,8 +38,6 @@ class OwnedCastle {
   String get fullLabel => '$displayName · $kingdomName';
 }
 
-// ═══════════════════════════════════════════
-//  UnitCatalogEntry
 // ═══════════════════════════════════════════
 class UnitCatalogEntry {
   final int wodId;
@@ -80,8 +76,6 @@ class UnitCatalogEntry {
 }
 
 // ═══════════════════════════════════════════
-//  CastleUnit
-// ═══════════════════════════════════════════
 class CastleUnit {
   final int wodId;
   final int amount;
@@ -108,8 +102,6 @@ class CastleUnit {
 }
 
 // ═══════════════════════════════════════════
-//  Lord
-// ═══════════════════════════════════════════
 class Lord {
   final int id;
   final int visibleIndex;
@@ -129,8 +121,6 @@ class Lord {
       name?.isNotEmpty == true ? name! : 'Lord ${visibleIndex + 1}';
 }
 
-// ═══════════════════════════════════════════
-//  LordMovement
 // ═══════════════════════════════════════════
 class LordMovement {
   final int movementId;
@@ -169,22 +159,15 @@ class LordMovement {
 
   String get actionLabel {
     switch (type) {
-      case 0:
-        return 'Attacking';
-      case 1:
-        return 'Supporting / Smuggling';
-      case 2:
-        return 'Returning';
-      case 3:
-        return 'Transporting';
-      default:
-        return 'Moving';
+      case 0: return 'Attacking';
+      case 1: return 'Supporting / Smuggling';
+      case 2: return 'Returning';
+      case 3: return 'Transporting';
+      default: return 'Moving';
     }
   }
 }
 
-// ═══════════════════════════════════════════
-//  CommanderInfo
 // ═══════════════════════════════════════════
 class CommanderInfo {
   final Lord lord;
@@ -196,8 +179,6 @@ class CommanderInfo {
 }
 
 // ═══════════════════════════════════════════
-//  XtMessage
-// ═══════════════════════════════════════════
 class XtMessage {
   final String command;
   final int roomId;
@@ -208,8 +189,6 @@ class XtMessage {
   XtMessage(this.command, this.roomId, this.resultCode, this.payload, this.raw);
 }
 
-// ═══════════════════════════════════════════
-//  AllyCastle
 // ═══════════════════════════════════════════
 class AllyCastle {
   final int kingdomId;
@@ -245,8 +224,6 @@ class AllyCastle {
   String get displayLabel => '$typeName · $kingdomName ($x,$y)';
 }
 
-// ═══════════════════════════════════════════
-//  AllyMember
 // ═══════════════════════════════════════════
 class AllyMember {
   final int playerId;
@@ -308,8 +285,6 @@ class AllyMember {
 }
 
 // ═══════════════════════════════════════════
-//  GGE errors
-// ═══════════════════════════════════════════
 const Map<int, String> ggeErrors = {
   0: 'Success',
   1: 'General error',
@@ -346,8 +321,6 @@ const Map<int, String> ggeErrors = {
 
 String errorName(int code) => ggeErrors[code] ?? 'Error $code';
 
-// ═══════════════════════════════════════════
-//  AppStorage
 // ═══════════════════════════════════════════
 class AppStorage {
   static const _kUser = 'username';
@@ -397,7 +370,7 @@ class AppStorage {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Stats models
+//  CastleStats
 // ═══════════════════════════════════════════════════════════
 class CastleStats {
   final int areaId;
@@ -445,9 +418,7 @@ class CastleStats {
   });
 
   int get totalUnits => units.fold<int>(0, (s, u) => s + u.amount);
-
-  int get totalTraveling =>
-      travelingUnits.fold<int>(0, (s, u) => s + u.amount);
+  int get totalTraveling => travelingUnits.fold<int>(0, (s, u) => s + u.amount);
 
   String get kingdomName => switch (kingdomId) {
         0 => 'Great Empire',
@@ -460,7 +431,7 @@ class CastleStats {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Attack alert models
+//  AttackUnit
 // ═══════════════════════════════════════════════════════════
 class AttackUnit {
   final int wodId;
@@ -487,41 +458,52 @@ class AttackUnit {
   }
 }
 
+// ═══════════════════════════════════════════════════════════
+//  AttackAlert (updated)
+// ═══════════════════════════════════════════════════════════
 class AttackAlert {
   final int movementId;
   final int attackerId;
   final String attackerName;
-  final String? attackerAlliance;   // canonical name
+  final String? attackerAlliance;
+  final String? attackerCastleName;
+  final int attackerAreaId;
+  final int attackerX, attackerY;
   final int targetX, targetY;
+  final String? targetCastleName;
+  final int targetAreaId;
   final int kingdomId;
   final int totalTime;
   final int paidTime;
   final List<AttackUnit> units;
   final DateTime receivedAt;
+  final bool isAllianceAttack;
 
   AttackAlert({
     required this.movementId,
     required this.attackerId,
     required this.attackerName,
     this.attackerAlliance,
+    this.attackerCastleName,
+    this.attackerAreaId = 0,
+    this.attackerX = 0,
+    this.attackerY = 0,
     required this.targetX,
     required this.targetY,
+    this.targetCastleName,
+    this.targetAreaId = 0,
     required this.kingdomId,
     required this.totalTime,
     required this.paidTime,
     required this.units,
     required this.receivedAt,
+    this.isAllianceAttack = false,
   });
 
-  // ✅ Alias for backward compat (used in some service code)
   String? get attackerAlly => attackerAlliance;
-
   int get remainingSeconds => (totalTime - paidTime).clamp(0, 999999);
-
   int get totalUnits => units.fold(0, (s, u) => s + u.amount);
-
   bool get hasUnits => units.isNotEmpty;
-
   bool get isCritical => remainingSeconds > 0 && remainingSeconds < 300;
 
   String get remainingLabel {
@@ -544,13 +526,11 @@ class AttackAlert {
         _ => 'K$kingdomId',
       };
 
-  /// Short one-line summary for notifications.
   String get shortSummary {
     final unitsPart = hasUnits ? ' · $totalUnits units' : '';
     return '$attackerName → $remainingLabel$unitsPart';
   }
 
-  /// All units grouped by name (useful for showing aggregated data).
   Map<String, int> get groupedUnits {
     final map = <String, int>{};
     for (final u in units) {

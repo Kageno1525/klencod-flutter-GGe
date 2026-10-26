@@ -9,7 +9,29 @@ class StatsService {
   Future<List<CastleStats>> getAllCastleStats({
     Map<int, UnitCatalogEntry>? catalog,
   }) async {
-    final resp = await conn.sendXtAndWait('dcl', '{"CD":1}', responseCmd: 'dcl');
+    // 1. Get castle names from gcl
+    final names = <int, String>{};
+    try {
+      final gclResp =
+          await conn.sendXtAndWait('gcl', '{}', responseCmd: 'gcl');
+      if (gclResp.resultCode == 0 && gclResp.payload != null) {
+        final gclData =
+            jsonDecode(gclResp.payload!) as Map<String, dynamic>;
+        for (final k in (gclData['C'] as List? ?? [])) {
+          for (final areaObj in (k['AI'] as List? ?? [])) {
+            final ai = areaObj['AI'] as List?;
+            if (ai == null || ai.length < 11) continue;
+            final aid = _asInt(ai[3]);
+            final name = ai[10] as String? ?? '';
+            if (aid > 0 && name.isNotEmpty) names[aid] = name;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 2. Get detailed stats from dcl
+    final resp =
+        await conn.sendXtAndWait('dcl', '{"CD":1}', responseCmd: 'dcl');
     if (resp.resultCode != 0) {
       throw Exception('dcl: ${errorName(resp.resultCode)}');
     }
@@ -22,10 +44,16 @@ class StatsService {
     for (final k in (data['C'] as List? ?? [])) {
       final kid = _asInt(k['KID']);
       for (final a in (k['AI'] as List? ?? [])) {
-        final stats = _parseArea(a, kid, catalog);
+        final stats = _parseArea(a, kid, catalog, names);
         if (stats != null) out.add(stats);
       }
     }
+
+    // ═══ Cache for notifications details ═══
+    final cacheMap = <int, CastleStats>{};
+    for (final s in out) cacheMap[s.areaId] = s;
+    conn.cachedStatsByArea = cacheMap;
+
     return out;
   }
 
@@ -33,6 +61,7 @@ class StatsService {
     dynamic a,
     int kid,
     Map<int, UnitCatalogEntry>? catalog,
+    Map<int, String> names,
   ) {
     if (a is! Map) return null;
     final aid = _asInt(a['AID']);
@@ -56,6 +85,7 @@ class StatsService {
     return CastleStats(
       areaId: aid,
       kingdomId: kid,
+      name: names[aid],
       wood: _asInt(a['W']),
       stone: _asInt(a['S']),
       food: _asInt(a['F']),
@@ -66,17 +96,18 @@ class StatsService {
       honey: _asInt(a['HONEY']),
       mead: _asInt(a['MEAD']),
       aqua: _asInt(a['A']),
-      deltaWood: _asNum(gpa?['DW']) / 10,
-      deltaStone: _asNum(gpa?['DS']) / 10,
-      deltaFood: _asNum(gpa?['DF']) / 10,
-      deltaCoal: _asNum(gpa?['DC']) / 10,
-      deltaOil: _asNum(gpa?['DO']) / 10,
-      deltaGlass: _asNum(gpa?['DG']) / 10,
-      deltaIron: _asNum(gpa?['DI']) / 10,
-      deltaHoney: _asNum(gpa?['DHONEY']) / 10,
-      deltaMead: _asNum(gpa?['DMEAD']) / 10,
-      deltaAqua: _asNum(gpa?['DA']) / 10,
-      maxWood: _asInt(gpa?['MRF']),
+      // ✅ FIXED: no /10 — DW is already per hour
+      deltaWood: _asNum(gpa?['DW']),
+      deltaStone: _asNum(gpa?['DS']),
+      deltaFood: _asNum(gpa?['DF']),
+      deltaCoal: _asNum(gpa?['DC']),
+      deltaOil: _asNum(gpa?['DO']),
+      deltaGlass: _asNum(gpa?['DG']),
+      deltaIron: _asNum(gpa?['DI']),
+      deltaHoney: _asNum(gpa?['DHONEY']),
+      deltaMead: _asNum(gpa?['DMEAD']),
+      deltaAqua: _asNum(gpa?['DA']),
+      maxWood: _asInt(gpa?['MRW']),  // ✅ FIXED: MRW not MRF
       maxStone: _asInt(gpa?['MRS']),
       maxFood: _asInt(gpa?['MRF']),
       maxCoal: _asInt(gpa?['MRC']),
@@ -105,7 +136,6 @@ class StatsService {
     if (v is String) return int.tryParse(v) ?? def;
     return def;
   }
-
   static int? _asIntOrNull(dynamic v) {
     if (v == null) return null;
     if (v is int) return v;
@@ -113,7 +143,6 @@ class StatsService {
     if (v is String) return int.tryParse(v);
     return null;
   }
-
   static double _asNum(dynamic v) {
     if (v is num) return v.toDouble();
     if (v is String) return double.tryParse(v) ?? 0;

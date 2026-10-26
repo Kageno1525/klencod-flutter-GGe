@@ -32,8 +32,8 @@ class _StatsScreenState extends State<StatsScreen> {
     });
     try {
       final catalog = await widget.client.loadCatalog();
-      final stats = await StatsService(widget.client)
-          .getAllCastleStats(catalog: catalog);
+      final stats =
+          await StatsService(widget.client).getAllCastleStats(catalog: catalog);
       if (!mounted) return;
       setState(() {
         _castles = stats;
@@ -46,6 +46,12 @@ class _StatsScreenState extends State<StatsScreen> {
         _error = '$e';
       });
     }
+  }
+
+  String _fmt(num n) {
+    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
+    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
+    return n.toStringAsFixed(0);
   }
 
   @override
@@ -61,8 +67,8 @@ class _StatsScreenState extends State<StatsScreen> {
                 Expanded(
                   child: _loading
                       ? const Center(
-                          child: CircularProgressIndicator(
-                              color: AppTheme.purple))
+                          child:
+                              CircularProgressIndicator(color: AppTheme.purple))
                       : _error != null
                           ? _errorView(context)
                           : _castles.isEmpty
@@ -75,8 +81,8 @@ class _StatsScreenState extends State<StatsScreen> {
                                         16, 8, 16, 24),
                                     itemCount: _castles.length,
                                     itemBuilder: (_, i) => FadeSlideIn(
-                                      delay: Duration(
-                                          milliseconds: 80 + i * 60),
+                                      delay:
+                                          Duration(milliseconds: 80 + i * 60),
                                       child: _castleCard(_castles[i]),
                                     ),
                                   ),
@@ -116,7 +122,7 @@ class _StatsScreenState extends State<StatsScreen> {
                   ),
                 ),
                 Text(
-                  '${_castles.length} castles',
+                  '${_castles.length} ${S.isAr ? "قلعة" : "castles"}',
                   style: TextStyle(
                     fontSize: 11,
                     color: AppTheme.subTextColor(context),
@@ -186,7 +192,6 @@ class _StatsScreenState extends State<StatsScreen> {
   }
 
   Widget _castleCard(CastleStats c) {
-    final totalUnits = c.units.fold<int>(0, (s, u) => s + u.amount);
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       child: AppTheme.glassCard(
@@ -221,7 +226,7 @@ class _StatsScreenState extends State<StatsScreen> {
                             decoration: TextDecoration.none),
                       ),
                       Text(
-                        '${_kingdomName(c.kingdomId)} · Def ${c.defense}',
+                        '${_kingdomName(c.kingdomId)} · ${S.defenseStat}: ${c.defense}',
                         style: TextStyle(
                             color: AppTheme.subTextColor(context),
                             fontSize: 11,
@@ -232,7 +237,7 @@ class _StatsScreenState extends State<StatsScreen> {
                 ),
                 InfoChip(
                   icon: Icons.groups_rounded,
-                  label: '$totalUnits',
+                  label: _fmt(c.totalUnits),
                   color: AppTheme.teal,
                 ),
               ],
@@ -274,7 +279,7 @@ class _StatsScreenState extends State<StatsScreen> {
                     icon: u.info?.role == 'ranged'
                         ? Icons.gps_fixed_rounded
                         : Icons.gavel_rounded,
-                    label: '${u.displayName} ${u.amount}',
+                    label: '${S.unitName(u.displayName)} ${u.amount}',
                     color: u.roleColor,
                   );
                 }).toList(),
@@ -322,7 +327,7 @@ class _StatsScreenState extends State<StatsScreen> {
               ),
               if (delta > 0)
                 Text(
-                  '+${delta.toStringAsFixed(0)}/h',
+                  '+${_fmt(delta)}/${S.perHour}',
                   style: TextStyle(
                       color: color,
                       fontSize: 9,
@@ -333,12 +338,6 @@ class _StatsScreenState extends State<StatsScreen> {
         ],
       ),
     );
-  }
-
-  String _fmt(int n) {
-    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
-    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
-    return '$n';
   }
 
   String _kingdomName(int kid) => switch (kid) {

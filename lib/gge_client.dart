@@ -64,7 +64,6 @@ class GgeClient {
   static GgeClient? _instance;
   factory GgeClient() => _instance ??= GgeClient._internal();
 
-  // ═══ Allow WS reconnect even when app is in background ═══
   static bool allowBackgroundReconnect = false;
 
   IOWebSocketChannel? _channel;
@@ -101,6 +100,11 @@ class GgeClient {
   int? _cachedPlayerId;
   final Set<int> _alertedMids = {};
 
+  // ═══ NEW: cached stats ═══
+  Map<int, CastleStats>? _cachedStatsByArea;
+  Map<int, CastleStats>? get cachedStatsByArea => _cachedStatsByArea;
+  set cachedStatsByArea(Map<int, CastleStats>? v) => _cachedStatsByArea = v;
+
   final List<String> debugLog = [];
   void Function()? onLog;
   void Function(String)? onStatus;
@@ -113,7 +117,6 @@ class GgeClient {
   static bool _isPlausibleAllianceId(int? aid) =>
       aid != null && aid > 0 && aid < _maxPlausibleAllianceId;
 
-  // Services (lazy, singleton-per-client)
   late final CastleService castleService = CastleService(this);
   late final AllianceService allianceService = AllianceService(this);
   late final CatalogService catalogService = CatalogService();
@@ -124,13 +127,11 @@ class GgeClient {
   late final TransferService transferService =
       TransferService(this, commandersService);
 
-  // Getters/setters for services
   int? get cachedAllianceId => _cachedAllianceId;
   set cachedAllianceId(int? v) => _cachedAllianceId = v;
 
   List<AllyMember>? get cachedAllianceMembers => _cachedAllianceMembers;
-  set cachedAllianceMembers(List<AllyMember>? v) =>
-      _cachedAllianceMembers = v;
+  set cachedAllianceMembers(List<AllyMember>? v) => _cachedAllianceMembers = v;
 
   bool get gbdReceived => _gbdReceived;
   int? get mainCastleAreaId => _mainCastleAreaId;
@@ -272,6 +273,7 @@ class GgeClient {
     }
   }
 
+  // ═══ UPDATED: rich attack processing ═══
   void _processAttacks(Map<String, dynamic> data) {
     final myPid = _cachedPlayerId;
     if (myPid == null || myPid <= 0) return;
@@ -282,6 +284,13 @@ class GgeClient {
     for (final o in (data['O'] as List? ?? [])) {
       if (o is Map) {
         owners[_asInt(o['OID'])] = Map<String, dynamic>.from(o);
+      }
+    }
+
+    final allyIds = <int>{};
+    if (_cachedAllianceMembers != null) {
+      for (final m in _cachedAllianceMembers!) {
+        allyIds.add(m.playerId);
       }
     }
 
@@ -300,8 +309,13 @@ class GgeClient {
       final targetPid = _asInt(ta[4]);
       final sourcePid = _asInt(sa[4]);
 
-      if (targetPid != myPid) continue;
-      if (sourcePid == myPid) continue;
+      final isMeAttacked = targetPid == myPid && sourcePid != myPid;
+      final isAllyAttacked = !isMeAttacked &&
+          allyIds.contains(targetPid) &&
+          sourcePid != myPid &&
+          !allyIds.contains(sourcePid);
+
+      if (!isMeAttacked && !isAllyAttacked) continue;
 
       final mid = _asInt(mov['MID']);
       if (mid <= 0) continue;
@@ -310,10 +324,17 @@ class GgeClient {
       _alertedMids.add(mid);
 
       final attacker = owners[sourcePid];
-      final name = _asString(attacker?['N']) ??
+      final attackerName = _asString(attacker?['N']) ??
           (sa.length > 10 ? _asString(sa[10]) : null) ??
           'Unknown';
-      final alliance = _asString(attacker?['AN']);
+      final attackerAlliance = _asString(attacker?['AN']);
+      final attackerCastleName = sa.length > 10 ? _asString(sa[10]) : null;
+      final attackerAreaId = sa.length > 3 ? _asInt(sa[3]) : 0;
+      final attackerX = _asInt(sa[1]);
+      final attackerY = _asInt(sa[2]);
+
+      final targetCastleName = ta.length > 10 ? _asString(ta[10]) : null;
+      final targetAreaId = ta.length > 3 ? _asInt(ta[3]) : 0;
 
       final units = <AttackUnit>[];
       final ga = m['GA'] as Map<String, dynamic>?;
@@ -327,20 +348,28 @@ class GgeClient {
       final alert = AttackAlert(
         movementId: mid,
         attackerId: sourcePid,
-        attackerName: name,
-        attackerAlliance: alliance,
+        attackerName: attackerName,
+        attackerAlliance: attackerAlliance,
+        attackerCastleName: attackerCastleName,
+        attackerAreaId: attackerAreaId,
+        attackerX: attackerX,
+        attackerY: attackerY,
         targetX: _asInt(ta[1]),
         targetY: _asInt(ta[2]),
+        targetCastleName: targetCastleName,
+        targetAreaId: targetAreaId,
         kingdomId: _asInt(mov['KID']),
         totalTime: _asInt(mov['TT']),
         paidTime: _asInt(mov['PT']),
         units: units,
         receivedAt: DateTime.now(),
+        isAllianceAttack: isAllyAttacked,
       );
 
       if (!_attackCtrl.isClosed) _attackCtrl.add(alert);
+      final tag = isAllyAttacked ? '🛡️ Ally' : '🚨';
       TrafficLog.add('ST',
-          '🚨 Attack detected from $name → ${alert.remainingLabel}');
+          '$tag Attack from $attackerName → ${alert.remainingLabel}');
     }
   }
 
@@ -430,7 +459,6 @@ class GgeClient {
     return v.toString();
   }
 
-  // Public primitives (used by services)
   void sendXt(String cmd, String payload) => _sendXt(cmd, payload);
 
   Future<XtMessage> sendXtAndWait(
@@ -697,7 +725,6 @@ class GgeClient {
     _status('Init sequence done ✓');
   }
 
-  // ═══ FIX: reconnect allowed if background service is running ═══
   void _scheduleReconnect() {
     if (_disposed) return;
     if (!_appForeground && !allowBackgroundReconnect) return;
