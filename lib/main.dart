@@ -1,0 +1,88 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:gge/gge_client.dart';
+import 'package:gge/l10n/strings.dart';
+import 'package:gge/models.dart';
+import 'package:gge/theme.dart';
+import 'package:gge/screens/login_screen.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final dark = await AppStorage.getDarkMode();
+  final lang = await AppStorage.getLanguageCode();
+  S.current = Locale(lang);
+  runApp(GgeApp(initialDark: dark));
+}
+
+class GgeApp extends StatefulWidget {
+  final bool initialDark;
+  const GgeApp({super.key, required this.initialDark});
+
+  static GgeAppState of(BuildContext context) =>
+      context.findAncestorStateOfType<GgeAppState>()!;
+
+  @override
+  State<GgeApp> createState() => GgeAppState();
+}
+
+class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
+  late bool _isDark;
+  late Locale _locale;
+
+  bool get isDark => _isDark;
+  Locale get locale => _locale;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _isDark = widget.initialDark;
+    _locale = S.current;
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    GgeClient().onAppLifecycleChanged(state);
+  }
+
+  Future<void> toggleTheme() async {
+    setState(() => _isDark = !_isDark);
+    await AppStorage.setDarkMode(_isDark);
+  }
+
+  Future<void> toggleLocale() async {
+    final newCode = S.isAr ? 'en' : 'ar';
+    S.current = Locale(newCode);
+    await AppStorage.setLanguageCode(newCode);
+    setState(() => _locale = S.current);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'GGE Bot',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: _isDark ? ThemeMode.dark : ThemeMode.light,
+      locale: _locale,
+      supportedLocales: const [Locale('ar'), Locale('en')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      builder: (context, child) => Directionality(
+        textDirection: S.isAr ? TextDirection.rtl : TextDirection.ltr,
+        child: child!,
+      ),
+      home: const LoginScreen(),
+    );
+  }
+}

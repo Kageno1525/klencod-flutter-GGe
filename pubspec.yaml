@@ -1,0 +1,19 @@
+name: gge
+description: A professional bot for Goodgame Empire.
+publish_to: 'none'
+version: 2.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  shared_preferences: ^2.2.2
+  cupertino_icons: ^1.0.6
+  web_socket_channel: ^2.4.0  # ✅ رجعنا المكتبة الأصلية اللي كانت شغالة
+
+flutter:
+  uses-material-design: true

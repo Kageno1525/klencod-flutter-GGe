@@ -1,0 +1,361 @@
+import 'package:flutter/material.dart';
+import 'package:gge/gge_client.dart';
+import 'package:gge/l10n/strings.dart';
+import 'package:gge/main.dart' show GgeApp;
+import 'package:gge/models.dart';
+import 'package:gge/theme.dart';
+import 'package:gge/widgets/animated_widgets.dart';
+import 'package:gge/screens/transfer_screen.dart';
+import 'package:gge/screens/training_screen.dart';
+import 'package:gge/screens/smuggle_screen.dart';
+import 'package:gge/screens/commanders_screen.dart';
+import 'package:gge/screens/login_screen.dart';
+
+class MainScreen extends StatelessWidget {
+  final GgeClient client;
+  const MainScreen({super.key, required this.client});
+
+  @override
+  Widget build(BuildContext context) {
+    final app = GgeApp.of(context);
+
+    return Scaffold(
+      body: Stack(
+        children: [
+          AppTheme.background(context),
+          SafeArea(
+            child: Column(
+              children: [
+                _header(context, app),
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                    children: [
+                      _heroCard(context),
+                      const SizedBox(height: 20),
+                      _gridSection(context),
+                      const SizedBox(height: 24),
+                      _footer(context),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _header(BuildContext context, GgeAppState app) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              gradient: AppTheme.primaryGradient,
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.purple.withOpacity(0.4),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: const Icon(Icons.castle_rounded,
+                color: Colors.white, size: 24),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  S.appName,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.textColor(context),
+                    letterSpacing: -0.3,
+                    decoration: TextDecoration.none,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  S.mainTitle,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppTheme.subTextColor(context),
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.none,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          AppIconBtn(
+            icon: Icons.translate_rounded,
+            onTap: app.toggleLocale,
+            size: 40,
+          ),
+          const SizedBox(width: 8),
+          AppIconBtn(
+            icon: app.isDark
+                ? Icons.light_mode_rounded
+                : Icons.dark_mode_rounded,
+            onTap: app.toggleTheme,
+            size: 40,
+          ),
+          const SizedBox(width: 8),
+          AppIconBtn(
+            icon: Icons.logout_rounded,
+            onTap: () => _confirmLogout(context, client),
+            color: AppTheme.red,
+            size: 40,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _heroCard(BuildContext context) {
+    return FadeSlideIn(
+      delay: const Duration(milliseconds: 100),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF3F51B5), Color(0xFF6C5CE7)],
+          ),
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF6C5CE7).withOpacity(0.35),
+              blurRadius: 28,
+              offset: const Offset(0, 14),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.22),
+                    borderRadius: BorderRadius.circular(12),
+                    border:
+                        Border.all(color: Colors.white.withOpacity(0.2)),
+                  ),
+                  child: const Icon(Icons.auto_awesome_rounded,
+                      color: Colors.white, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        S.welcome,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Empire Automation',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.8),
+                          fontSize: 11,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: const [
+                _Pill(icon: Icons.bolt_rounded, label: 'Live'),
+                _Pill(icon: Icons.shield_rounded, label: 'Anti-Ban'),
+                _Pill(icon: Icons.sync_rounded, label: 'Auto-Reconnect'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _gridSection(BuildContext context) {
+    return GridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 2,
+      mainAxisSpacing: 14,
+      crossAxisSpacing: 14,
+      childAspectRatio: 0.92,
+      children: [
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 200),
+          child: EnterTile(
+            icon: Icons.swap_horiz_rounded,
+            title: S.transferTroops,
+            subtitle: S.transferDesc,
+            gradient: AppTheme.primaryGradient,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => TransferScreen(client: client)),
+            ),
+          ),
+        ),
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 300),
+          child: EnterTile(
+            icon: Icons.military_tech_rounded,
+            title: S.trainTroops,
+            subtitle: S.trainDesc,
+            gradient: AppTheme.secondaryGradient,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => TrainingScreen(client: client)),
+            ),
+          ),
+        ),
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 400),
+          child: EnterTile(
+            icon: Icons.local_shipping_rounded,
+            title: S.smuggleTroops,
+            subtitle: S.smuggleDesc,
+            gradient: AppTheme.cosmosGradient,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => SmuggleScreen(client: client)),
+            ),
+          ),
+        ),
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 500),
+          child: EnterTile(
+            icon: Icons.people_alt_rounded,
+            title: S.commanders,
+            subtitle: S.cmdDesc,
+            gradient: AppTheme.orangeGradient,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => CommandersScreen(client: client)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _footer(BuildContext context) {
+    return Center(
+      child: Text(
+        'KAGENO',
+        style: TextStyle(
+          color: AppTheme.subTextColor(context).withOpacity(0.5),
+          fontSize: 11,
+          letterSpacing: 4,
+          fontWeight: FontWeight.bold,
+          decoration: TextDecoration.none,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmLogout(BuildContext context, GgeClient client) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20)),
+        title: Text(S.logout,
+            style: const TextStyle(decoration: TextDecoration.none)),
+        content: Text(S.logoutConfirm,
+            style: const TextStyle(decoration: TextDecoration.none)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(S.cancel),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
+            child: Text(S.logout,
+                style: const TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true && context.mounted) {
+      await AppStorage.setLoggedIn(false);
+      await AppStorage.setToken('');
+      await client.dispose();
+      if (context.mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (_) => false,
+        );
+      }
+    }
+  }
+}
+
+class _Pill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _Pill({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.18),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withOpacity(0.15)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: Colors.white),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 10.5,
+              fontWeight: FontWeight.bold,
+              decoration: TextDecoration.none,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
