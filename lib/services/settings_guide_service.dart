@@ -1,253 +1,158 @@
-import 'dart:async';
-import 'dart:ui' show Color;
+import 'dart:io';
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../gge_client.dart';
-import '../models.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-class NotificationsService {
-  NotificationsService._();
+class SettingsGuideService {
+  SettingsGuideService._();
 
-  static final _plugin = FlutterLocalNotificationsPlugin();
-  static const _channelId = 'gge_attacks';
-  static const _soundKey = 'notif_sound_enabled';
-  static const _enabledKey = 'notif_enabled';
-  static const _allianceKey = 'notif_alliance_attacks';
-  static const _permissionAskedKey = 'notif_permission_asked';
+  static const String _pkg = 'com.kageno.gge';
 
-  static StreamSubscription<AttackAlert>? _sub;
-  static GgeClient? _subscribedClient;
-
-  static final List<AttackAlert> _history = [];
-  static final StreamController<List<AttackAlert>> _listCtrl =
-      StreamController.broadcast();
-  static Stream<List<AttackAlert>> get historyStream => _listCtrl.stream;
-  static List<AttackAlert> get history => List.unmodifiable(_history);
-
-  static bool _soundEnabled = true;
-  static bool _enabled = true;
-  static bool _allianceAttacksEnabled = false;
-  static bool _permissionGranted = false;
-  static bool _ready = false;
-
-  static bool get soundEnabled => _soundEnabled;
-  static bool get enabled => _enabled;
-  static bool get allianceAttacksEnabled => _allianceAttacksEnabled;
-  static bool get permissionGranted => _permissionGranted;
-  static bool get ready => _ready;
-
-  static Future<void> init() async {
+  // ═══ Battery Optimization ═══
+  static Future<bool> isBatteryOptimized() async {
     try {
-      final prefs = await SharedPreferences.getInstance()
-          .timeout(const Duration(seconds: 2));
-      _soundEnabled = prefs.getBool(_soundKey) ?? true;
-      _enabled = prefs.getBool(_enabledKey) ?? true;
-      _allianceAttacksEnabled = prefs.getBool(_allianceKey) ?? false;
+      final ignoring =
+          await FlutterForegroundTask.isIgnoringBatteryOptimizations;
+      return !ignoring;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  static Future<void> openBatteryOptimization() async {
+    try {
+      await FlutterForegroundTask.requestIgnoreBatteryOptimization();
     } catch (e) {
-      TrafficLog.add('ER', '[Notif] prefs load failed: $e');
-    }
-
-    const icons = <String>[
-      '@drawable/ic_launcher',
-      '@mipmap/ic_launcher',
-      '@android:drawable/sym_def_app_icon',
-    ];
-
-    var initOk = false;
-    for (final icon in icons) {
-      try {
-        final androidInit = AndroidInitializationSettings(icon);
-        final init = InitializationSettings(android: androidInit);
-        await _plugin.initialize(init).timeout(const Duration(seconds: 3));
-        TrafficLog.add('ST', '[Notif] plugin initialized with $icon');
-        initOk = true;
-        break;
-      } catch (e) {
-        TrafficLog.add('ER', '[Notif] init failed with $icon: $e');
-      }
-    }
-
-    if (!initOk) {
-      TrafficLog.add('ER', '[Notif] ALL icon attempts failed');
-      return;
-    }
-
-    try {
-      final android = _plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
-      if (android != null) {
-        try {
-          await android
-              .createNotificationChannel(const AndroidNotificationChannel(
-                _channelId,
-                'Attack Alerts',
-                description: 'Incoming attacks notifications',
-                importance: Importance.max,
-                playSound: true,
-                enableVibration: true,
-              ))
-              .timeout(const Duration(seconds: 2));
-        } catch (_) {}
-
-        _permissionGranted =
-            await android.areNotificationsEnabled() ?? false;
-      }
-      _ready = true;
-    } catch (e) {
-      TrafficLog.add('ER', '[Notif] init post-step error: $e');
-      _ready = true;
+      debugPrint('[SettingsGuide] battery open failed: $e');
+      await _openAppSettings();
     }
   }
 
-  static Future<bool> requestPermission() async {
+  // ═══ Notification Settings ═══
+  static Future<void> openNotificationSettings() async {
+    if (!Platform.isAndroid) return;
     try {
-      final android = _plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
-      if (android == null) return false;
-
-      final granted = await android
-          .requestNotificationsPermission()
-          .timeout(const Duration(seconds: 15), onTimeout: () => false);
-      _permissionGranted = granted ?? false;
-
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool(_permissionAskedKey, true);
-      } catch (_) {}
-
-      if (_permissionGranted && !_ready) await init();
-      return _permissionGranted;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<bool> hasAskedBefore() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getBool(_permissionAskedKey) ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<bool> checkPermission() async {
-    try {
-      final android = _plugin.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
-      if (android == null) return false;
-      _permissionGranted =
-          await android.areNotificationsEnabled() ?? false;
-      return _permissionGranted;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<void> setSound(bool v) async {
-    _soundEnabled = v;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_soundKey, v);
-    } catch (_) {}
-  }
-
-  static Future<void> setEnabled(bool v) async {
-    _enabled = v;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_enabledKey, v);
-    } catch (_) {}
-  }
-
-  static Future<void> setAllianceAttacksEnabled(bool v) async {
-    _allianceAttacksEnabled = v;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_allianceKey, v);
-    } catch (_) {}
-  }
-
-  static void startListening() {
-    final client = GgeClient();
-    if (identical(_subscribedClient, client) && _sub != null) return;
-    _sub?.cancel();
-    _subscribedClient = client;
-    _sub = client.attackStream.listen(_onAttack);
-    TrafficLog.add('ST', '[Notif] listening');
-    if (!_ready) unawaited(init());
-  }
-
-  static void stopListening() {
-    _sub?.cancel();
-    _sub = null;
-    _subscribedClient = null;
-  }
-
-  static void clearHistory() {
-    _history.clear();
-    if (!_listCtrl.isClosed) _listCtrl.add([]);
-  }
-
-  static void removeAlert(int movementId) {
-    _history.removeWhere((a) => a.movementId == movementId);
-    if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
-  }
-
-  static Future<void> _onAttack(AttackAlert alert) async {
-    if (!_enabled) return;
-    // Filter alliance attacks based on toggle
-    if (alert.isAllianceAttack && !_allianceAttacksEnabled) return;
-
-    _history.insert(0, alert);
-    if (_history.length > 100) {
-      _history.removeRange(100, _history.length);
-    }
-    if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
-
-    if (!_ready) return;
-
-    final unitsLine = alert.units.isEmpty
-        ? 'Movement detected'
-        : alert.units
-            .map((u) => '${u.displayName}: ${u.amount}')
-            .take(3)
-            .join(' · ');
-
-    final bigText = '${alert.remainingLabel} · ${alert.kingdomName}\n'
-        'From: ${alert.attackerName}'
-        '${alert.attackerAlliance != null ? " [${alert.attackerAlliance}]" : ""}\n'
-        'Total units: ${alert.totalUnits}\n$unitsLine';
-
-    try {
-      await _plugin.show(
-        alert.movementId,
-        '${alert.isAllianceAttack ? "🛡️" : "⚔️"} Attack from ${alert.attackerName}',
-        '${alert.remainingLabel} · '
-            '${alert.totalUnits > 0 ? "${alert.totalUnits} units" : "movement"}',
-        NotificationDetails(
-          android: AndroidNotificationDetails(
-            _channelId,
-            'Attack Alerts',
-            importance: Importance.max,
-            priority: Priority.high,
-            playSound: _soundEnabled,
-            enableVibration: _soundEnabled,
-            category: AndroidNotificationCategory.alarm,
-            visibility: NotificationVisibility.public,
-            styleInformation: BigTextStyleInformation(bigText),
-            fullScreenIntent: false,
-            autoCancel: true,
-          ),
-        ),
-        payload: '${alert.movementId}',
+      final intent = AndroidIntent(
+        action: 'android.settings.APP_NOTIFICATION_SETTINGS',
+        arguments: {
+          'android.provider.extra.APP_PACKAGE': _pkg,
+        },
       );
-    } catch (_) {}
+      await intent.launch();
+    } catch (e) {
+      debugPrint('[SettingsGuide] notif open failed: $e');
+      await _openAppSettings();
+    }
   }
 
-  static Future<void> dispose() async {
-    stopListening();
-    await _listCtrl.close();
+  // ═══ App Settings ═══
+  static Future<void> _openAppSettings() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final intent = AndroidIntent(
+        action: 'android.settings.APPLICATION_DETAILS_SETTINGS',
+        data: 'package:$_pkg',
+      );
+      await intent.launch();
+    } catch (e) {
+      debugPrint('[SettingsGuide] app settings failed: $e');
+    }
+  }
+
+  // ═══ Autostart (OEM-specific) ═══
+  static Future<void> openAutostart() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      final brand = info.brand.toLowerCase();
+      final manufacturer = info.manufacturer.toLowerCase();
+
+      AndroidIntent? intent;
+
+      if (brand.contains('xiaomi') ||
+          manufacturer.contains('xiaomi') ||
+          brand.contains('redmi') ||
+          brand.contains('poco')) {
+        intent = AndroidIntent(
+          action: 'miui.intent.action.OP_AUTO_START',
+          package: 'com.miui.securitycenter',
+          componentName:
+              'com.miui.securitycenter/com.miui.permcenter.autostart.AutoStartManagementActivity',
+        );
+      } else if (brand.contains('oppo') ||
+          manufacturer.contains('oppo') ||
+          manufacturer.contains('realme') ||
+          brand.contains('realme')) {
+        intent = AndroidIntent(
+          action:
+              'com.coloros.safecenter.permission.startup.StartupAppListActivity',
+        );
+      } else if (brand.contains('vivo') ||
+          manufacturer.contains('vivo') ||
+          brand.contains('iqoo')) {
+        intent = AndroidIntent(
+          action:
+              'com.vivo.permissionmanager.activity.BgStartUpManagerActivity',
+        );
+      } else if (brand.contains('huawei') ||
+          manufacturer.contains('huawei') ||
+          brand.contains('honor')) {
+        intent = AndroidIntent(
+          action:
+              'com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity',
+        );
+      } else if (brand.contains('asus') || manufacturer.contains('asus')) {
+        intent = AndroidIntent(
+          action: 'com.asus.mobilemanager.entry.FunctionActivity',
+          package: 'com.asus.mobilemanager',
+        );
+      } else if (brand.contains('oneplus') ||
+          manufacturer.contains('oneplus')) {
+        intent = AndroidIntent(
+          action:
+              'com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity',
+        );
+      }
+
+      if (intent != null) {
+        await intent.launch();
+      } else {
+        await _openAppSettings();
+      }
+    } catch (e) {
+      debugPrint('[SettingsGuide] autostart failed: $e');
+      await _openAppSettings();
+    }
+  }
+
+  // ═══ Device info ═══
+  static Future<String> getDeviceName() async {
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      return '${info.manufacturer} ${info.model}'.trim();
+    } catch (_) {
+      return 'Android';
+    }
+  }
+
+  static Future<bool> isOemRestricted() async {
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      final brand = info.brand.toLowerCase();
+      final manufacturer = info.manufacturer.toLowerCase();
+      return brand.contains('xiaomi') ||
+          manufacturer.contains('xiaomi') ||
+          brand.contains('oppo') ||
+          manufacturer.contains('oppo') ||
+          brand.contains('vivo') ||
+          manufacturer.contains('vivo') ||
+          brand.contains('huawei') ||
+          manufacturer.contains('huawei') ||
+          brand.contains('oneplus') ||
+          manufacturer.contains('oneplus');
+    } catch (_) {
+      return false;
+    }
   }
 }

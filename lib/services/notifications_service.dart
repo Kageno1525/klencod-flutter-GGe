@@ -13,6 +13,7 @@ class NotificationsService {
   static const _channelId = 'gge_attacks';
   static const _soundKey = 'notif_sound_enabled';
   static const _enabledKey = 'notif_enabled';
+  static const _allianceKey = 'notif_alliance_attacks';
   static const _permissionAskedKey = 'notif_permission_asked';
 
   static StreamSubscription<AttackAlert>? _sub;
@@ -26,11 +27,13 @@ class NotificationsService {
 
   static bool _soundEnabled = true;
   static bool _enabled = true;
+  static bool _allianceAttacksEnabled = false;
   static bool _permissionGranted = false;
   static bool _ready = false;
 
   static bool get soundEnabled => _soundEnabled;
   static bool get enabled => _enabled;
+  static bool get allianceAttacksEnabled => _allianceAttacksEnabled;
   static bool get permissionGranted => _permissionGranted;
   static bool get ready => _ready;
 
@@ -40,15 +43,15 @@ class NotificationsService {
           .timeout(const Duration(seconds: 2));
       _soundEnabled = prefs.getBool(_soundKey) ?? true;
       _enabled = prefs.getBool(_enabledKey) ?? true;
+      _allianceAttacksEnabled = prefs.getBool(_allianceKey) ?? false;
     } catch (e) {
       TrafficLog.add('ER', '[Notif] prefs load failed: $e');
     }
 
-    // ═══ FIX: try multiple icon resources ═══
     const icons = <String>[
-      '@drawable/ic_launcher',              // matches manifest
-      '@mipmap/ic_launcher',                 // default Flutter
-      '@android:drawable/sym_def_app_icon',  // system fallback
+      '@drawable/ic_launcher',
+      '@mipmap/ic_launcher',
+      '@android:drawable/sym_def_app_icon',
     ];
 
     var initOk = false;
@@ -66,7 +69,7 @@ class NotificationsService {
     }
 
     if (!initOk) {
-      TrafficLog.add('ER', '[Notif] ALL icon attempts failed — notifications disabled');
+      TrafficLog.add('ER', '[Notif] ALL icon attempts failed');
       return;
     }
 
@@ -85,22 +88,15 @@ class NotificationsService {
                 enableVibration: true,
               ))
               .timeout(const Duration(seconds: 2));
-          TrafficLog.add('ST', '[Notif] channel created');
-        } catch (e) {
-          TrafficLog.add('ER', '[Notif] channel create failed: $e');
-        }
+        } catch (_) {}
 
         _permissionGranted =
             await android.areNotificationsEnabled() ?? false;
-        TrafficLog.add('ST',
-            '[Notif] permission granted: $_permissionGranted');
       }
-      // Even if channel creation failed, plugin.initialize succeeded
       _ready = true;
-      TrafficLog.add('ST', '[Notif] init complete (ready=true)');
     } catch (e) {
       TrafficLog.add('ER', '[Notif] init post-step error: $e');
-      _ready = true; // still allow show() attempts
+      _ready = true;
     }
   }
 
@@ -120,15 +116,9 @@ class NotificationsService {
         await prefs.setBool(_permissionAskedKey, true);
       } catch (_) {}
 
-      if (_permissionGranted && !_ready) {
-        await init();
-      }
-
-      TrafficLog.add('ST',
-          '[Notif] permission result: $_permissionGranted');
+      if (_permissionGranted && !_ready) await init();
       return _permissionGranted;
-    } catch (e) {
-      TrafficLog.add('ER', '[Notif] requestPermission failed: $e');
+    } catch (_) {
       return false;
     }
   }
@@ -171,21 +161,22 @@ class NotificationsService {
     } catch (_) {}
   }
 
+  static Future<void> setAllianceAttacksEnabled(bool v) async {
+    _allianceAttacksEnabled = v;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_allianceKey, v);
+    } catch (_) {}
+  }
+
   static void startListening() {
     final client = GgeClient();
-    if (identical(_subscribedClient, client) && _sub != null) {
-      TrafficLog.add('ST', '[Notif] already listening');
-      return;
-    }
+    if (identical(_subscribedClient, client) && _sub != null) return;
     _sub?.cancel();
     _subscribedClient = client;
     _sub = client.attackStream.listen(_onAttack);
-    TrafficLog.add('ST', '[Notif] listening to attackStream');
-
-    // Retry init if it failed earlier
-    if (!_ready) {
-      unawaited(init());
-    }
+    TrafficLog.add('ST', '[Notif] listening');
+    if (!_ready) unawaited(init());
   }
 
   static void stopListening() {
@@ -199,23 +190,24 @@ class NotificationsService {
     if (!_listCtrl.isClosed) _listCtrl.add([]);
   }
 
-  static Future<void> _onAttack(AttackAlert alert) async {
-    TrafficLog.add('ST',
-        '[Notif] _onAttack fired (enabled=$_enabled, ready=$_ready)');
+  // ═══ NEW: individual delete ═══
+  static void removeAlert(int movementId) {
+    _history.removeWhere((a) => a.movementId == movementId);
+    if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
+  }
 
+  static Future<void> _onAttack(AttackAlert alert) async {
     if (!_enabled) return;
+    if (alert.isAllianceAttack && !_allianceAttacksEnabled) return;
 
     _history.insert(0, alert);
     if (_history.length > 100) {
       _history.removeRange(100, _history.length);
     }
     if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
-    TrafficLog.add('ST',
-        '[Notif] history updated (total=${_history.length})');
 
-    // ═══ FIX: try show even if _ready is false ═══
-    // If plugin.initialize succeeded but channel creation failed, 
-    // _plugin.show() might still work
+    if (!_ready) return;
+
     final unitsLine = alert.units.isEmpty
         ? 'Movement detected'
         : alert.units
@@ -231,7 +223,7 @@ class NotificationsService {
     try {
       await _plugin.show(
         alert.movementId,
-        '⚔️ Attack from ${alert.attackerName}',
+        '${alert.isAllianceAttack ? "🛡️" : "⚔️"} Attack from ${alert.attackerName}',
         '${alert.remainingLabel} · '
             '${alert.totalUnits > 0 ? "${alert.totalUnits} units" : "movement"}',
         NotificationDetails(
@@ -247,17 +239,11 @@ class NotificationsService {
             styleInformation: BigTextStyleInformation(bigText),
             fullScreenIntent: false,
             autoCancel: true,
-            ongoing: false,
           ),
         ),
         payload: '${alert.movementId}',
       );
-      TrafficLog.add('ST',
-          '[Notif] system notification shown for mid=${alert.movementId}');
-    } catch (e) {
-      TrafficLog.add('ER', '[Notif] show failed: $e — retrying init');
-      unawaited(init());
-    }
+    } catch (_) {}
   }
 
   static Future<void> dispose() async {
