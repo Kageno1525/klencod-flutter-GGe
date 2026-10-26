@@ -1173,7 +1173,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  u.displayName,
+                  S.unitName(u.displayName),   // ✅ Arabic
                   style: TextStyle(
                       color: AppTheme.textColor(context),
                       fontWeight: FontWeight.bold,
@@ -1243,7 +1243,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
 }
 
 // ═════════════════════════════════════════════════════════════
-//  Traffic Log Bottom Sheet (restyled)
+//  Traffic Log Bottom Sheet
 // ═════════════════════════════════════════════════════════════
 class _TrafficLogSheet extends StatefulWidget {
   const _TrafficLogSheet();

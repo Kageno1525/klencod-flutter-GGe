@@ -293,6 +293,7 @@ class GgeClient {
           targetY: existing.targetY,
           targetCastleName: existing.targetCastleName,
           targetAreaId: existing.targetAreaId,
+          targetPlayerName: existing.targetPlayerName,   // ✅
           kingdomId: existing.kingdomId,
           totalTime: existing.totalTime,
           paidTime: existing.paidTime,
@@ -386,6 +387,20 @@ class GgeClient {
       final targetCastleName = ta.length > 10 ? _asString(ta[10]) : null;
       final targetAreaId = ta.length > 3 ? _asInt(ta[3]) : 0;
 
+      // ✅ NEW: resolve target player name for alliance attacks
+      final targetOwner = owners[targetPid];
+      String? targetPlayerName = _asString(targetOwner?['N']);
+      if (targetPlayerName == null || targetPlayerName.isEmpty) {
+        if (_cachedAllianceMembers != null) {
+          for (final ally in _cachedAllianceMembers!) {
+            if (ally.playerId == targetPid) {
+              targetPlayerName = ally.name;
+              break;
+            }
+          }
+        }
+      }
+
       final alert = AttackAlert(
         movementId: mid,
         attackerId: sourcePid,
@@ -399,6 +414,7 @@ class GgeClient {
         targetY: _asInt(ta[2]),
         targetCastleName: targetCastleName,
         targetAreaId: targetAreaId,
+        targetPlayerName: targetPlayerName,   // ✅
         kingdomId: _asInt(mov['KID']),
         totalTime: _asInt(mov['TT']),
         paidTime: _asInt(mov['PT']),
@@ -1046,8 +1062,12 @@ class GgeClient {
   ) =>
       castleService.getCastleUnits(kingdomId, areaId, catalog);
 
-  Future<Map<int, UnitCatalogEntry>> loadCatalog({bool forceReload = false}) =>
-      catalogService.load(forceReload: forceReload);
+  // ✅ FIX: cache catalog so attack unit names resolve
+  Future<Map<int, UnitCatalogEntry>> loadCatalog({bool forceReload = false}) async {
+    final catalog = await catalogService.load(forceReload: forceReload);
+    _cachedCatalog = catalog;
+    return catalog;
+  }
 
   Future<List<CommanderInfo>> getCommanders() =>
       commandersService.getCommanders();

@@ -213,7 +213,8 @@ class _TransferScreenState extends State<TransferScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
+        content: Text(msg,
+            style: const TextStyle(decoration: TextDecoration.none)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
       ));
@@ -516,7 +517,8 @@ class _TransferScreenState extends State<TransferScreen> {
       child: _loadingCommanders
           ? const Center(
               child: SizedBox(
-                width: 20, height: 20,
+                width: 20,
+                height: 20,
                 child: CircularProgressIndicator(
                     strokeWidth: 2, color: AppTheme.purple),
               ),
@@ -729,7 +731,7 @@ class _TransferScreenState extends State<TransferScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  u.displayName,
+                  S.unitName(u.displayName), // ✅ Arabic
                   style: TextStyle(
                     color: AppTheme.textColor(context),
                     fontWeight: FontWeight.bold,
@@ -795,10 +797,7 @@ class _TransferScreenState extends State<TransferScreen> {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                gradient: AppTheme.teal.withOpacity(0.15) ==
-                        AppTheme.teal.withOpacity(0.15)
-                    ? AppTheme.successGradient
-                    : null,
+                gradient: AppTheme.successGradient,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Icon(Icons.keyboard_double_arrow_up_rounded,

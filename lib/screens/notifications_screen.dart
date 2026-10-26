@@ -26,7 +26,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     NotificationsService.startListening();
-    // ═══ Live countdown: rebuild every second ═══
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -192,8 +191,10 @@ class _NotificationsScreenState extends State<NotificationsScreen>
     final isAlly = alert.isAllianceAttack;
     final isCancelled = alert.isCancelled;
     final isArrived = alert.isArrived;
+    final targetName = alert.targetPlayerName;
+    final showTarget =
+        isAlly && targetName != null && targetName.isNotEmpty;
 
-    // Status pill
     final Color statusColor;
     final IconData statusIcon;
     final String statusLabel;
@@ -264,6 +265,24 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
+                          // ✅ NEW: show victim name for alliance attacks
+                          if (showTarget) ...[
+                            const SizedBox(width: 4),
+                            const Icon(Icons.arrow_forward_rounded,
+                                size: 14, color: AppTheme.teal),
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                targetName,
+                                style: const TextStyle(
+                                    color: AppTheme.teal,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    decoration: TextDecoration.none),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                           if (isAlly) ...[
                             const SizedBox(width: 6),
                             Container(
@@ -296,7 +315,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                     ],
                   ),
                 ),
-                // Status pill
                 Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 10, vertical: 6),
@@ -338,7 +356,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Started
                   Row(
                     children: [
                       const Icon(Icons.play_arrow_rounded,
@@ -364,7 +381,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                     ],
                   ),
                   const SizedBox(height: 5),
-                  // Arrived / Cancelled
                   if (isCancelled)
                     Row(
                       children: [
@@ -602,7 +618,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Details Dialog — blur + X + timing info
+//  Details Dialog
 // ═══════════════════════════════════════════════════════════
 class _AlertDetailsDialog extends StatelessWidget {
   final AttackAlert alert;
@@ -618,6 +634,9 @@ class _AlertDetailsDialog extends StatelessWidget {
     final bottomPad = MediaQuery.of(context).padding.bottom;
     final topPad = MediaQuery.of(context).padding.top;
     final defense = GgeClient().cachedStatsByArea?[alert.targetAreaId];
+    final showTarget = isAlly &&
+        alert.targetPlayerName != null &&
+        alert.targetPlayerName!.isNotEmpty;
 
     return Material(
       color: Colors.transparent,
@@ -655,7 +674,6 @@ class _AlertDetailsDialog extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Header
                     Container(
                       padding: const EdgeInsets.fromLTRB(18, 14, 14, 18),
                       decoration: BoxDecoration(
@@ -748,14 +766,12 @@ class _AlertDetailsDialog extends StatelessWidget {
                       ),
                     ),
 
-                    // Content
                     Flexible(
                       child: SingleChildScrollView(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            // ═══ Timing Section ═══
                             _sectionLabel(
                               context,
                               S.isAr ? 'التوقيت' : 'Timing',
@@ -766,7 +782,6 @@ class _AlertDetailsDialog extends StatelessWidget {
                             _timingBlock(context),
                             const SizedBox(height: 16),
 
-                            // Attacker
                             _sectionLabel(
                               context,
                               S.isAr ? 'معلومات المهاجم' : 'Attacker info',
@@ -802,9 +817,20 @@ class _AlertDetailsDialog extends StatelessWidget {
                                       '${alert.attackerCastleName!}\n(${alert.attackerX}, ${alert.attackerY})',
                                   color: AppTheme.blue),
 
+                            // ✅ NEW: target player info for alliance attacks
+                            if (showTarget) ...[
+                              const SizedBox(height: 8),
+                              _infoRow(context,
+                                  icon: Icons.person_pin_circle_rounded,
+                                  label: S.isAr
+                                      ? 'اللاعب المستهدف'
+                                      : 'Target player',
+                                  value: alert.targetPlayerName!,
+                                  color: AppTheme.teal),
+                            ],
+
                             const SizedBox(height: 16),
 
-                            // Attack info
                             _sectionLabel(
                               context,
                               S.isAr ? 'معلومات الهجوم' : 'Attack info',
@@ -828,7 +854,6 @@ class _AlertDetailsDialog extends StatelessWidget {
 
                             const SizedBox(height: 16),
 
-                            // Attacking Units
                             _sectionLabel(
                               context,
                               S.attackingUnits,
@@ -856,7 +881,6 @@ class _AlertDetailsDialog extends StatelessWidget {
 
                             const SizedBox(height: 16),
 
-                            // Defense
                             _sectionLabel(
                               context,
                               S.defenseInfo,

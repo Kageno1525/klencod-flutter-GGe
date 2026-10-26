@@ -11,16 +11,32 @@ class CommandersService {
         await conn.sendXtAndWait('gli', '{}', responseCmd: 'gli');
     if (lordsResp.resultCode != 0) return [];
 
-    final lordsList = (jsonDecode(lordsResp.payload!)['C'] as List?) ?? [];
+    final decoded = jsonDecode(lordsResp.payload!) as Map<String, dynamic>;
     final lords = <Lord>[];
-    for (final l in lordsList) {
+
+    // Barons (B) — special commanders
+    final barons = (decoded['B'] as List?) ?? [];
+    for (final l in barons) {
+      if (l is! Map) continue;
+      lords.add(Lord(
+        id: _asInt(l['ID']),
+        visibleIndex: _asInt(l['VIS']),
+        factionId: 0,
+        name: l['N'] as String?,
+        isBaron: true,
+      ));
+    }
+
+    // Regular Commanders (C)
+    final commanders = (decoded['C'] as List?) ?? [];
+    for (final l in commanders) {
       if (l is! Map) continue;
       lords.add(Lord(
         id: _asInt(l['ID']),
         visibleIndex: _asInt(l['VIS']),
         factionId: _asInt(l['FID']),
-        name: l['NOM'] as String?,
-        level: _asInt(l['LVL']),
+        name: l['N'] as String?,       // ✅ FIX: N not NOM
+        isBaron: false,
       ));
     }
 
@@ -28,6 +44,7 @@ class CommandersService {
     final movementsMap = <int, LordMovement>{};
 
     final myPid = conn.cachedPlayerId;
+    final fetchedAt = DateTime.now();
 
     if (gamResp.resultCode == 0 && gamResp.payload != null) {
       final data = jsonDecode(gamResp.payload!) as Map<String, dynamic>;
@@ -41,7 +58,14 @@ class CommandersService {
         if (mov == null) continue;
         final tt = _asInt(mov['TT']);
         final pt = _asInt(mov['PT']);
-        if (tt <= pt) continue;
+        final movType = _asInt(mov['T']);
+
+        // ✅ FIX: only skip COMPLETED return/transport.
+        // T=0 (attack) and T=1 (support/smuggle) must ALWAYS show
+        // if present in gam — commander is busy either in-flight
+        // OR stationed at ally's castle (this was the bug).
+        if ((movType == 2 || movType == 3) && tt <= pt) continue;
+
         final ta = mov['TA'] as List?;
         final sa = mov['SA'] as List?;
         if (ta == null || ta.length < 5) continue;
@@ -49,12 +73,7 @@ class CommandersService {
 
         final targetPid = _asInt(ta[4]);
         final sourcePid = _asInt(sa[4]);
-        final movType = _asInt(mov['T']);
 
-        // ═══ KEY FIX: filter by ownership ═══
-        // A movement belongs to ME if:
-        //   - I am the SOURCE (outgoing attack/support/transport)
-        //   - OR I am the TARGET of a RETURNING movement (type 2)
         final isOutgoing = myPid != null && sourcePid == myPid;
         final isReturning =
             myPid != null && targetPid == myPid && movType == 2;
@@ -80,6 +99,7 @@ class CommandersService {
             targetY: _asInt(ta[2]),
             targetKid: _asInt(mov['KID']),
             targetPlayerName: targetName,
+            fetchedAt: fetchedAt,
           );
         }
       }
@@ -93,8 +113,12 @@ class CommandersService {
       ));
     }
 
-    result.sort(
-        (a, b) => a.lord.visibleIndex.compareTo(b.lord.visibleIndex));
+    result.sort((a, b) {
+      if (a.lord.isBaron != b.lord.isBaron) {
+        return a.lord.isBaron ? -1 : 1;
+      }
+      return a.lord.visibleIndex.compareTo(b.lord.visibleIndex);
+    });
     return result;
   }
 

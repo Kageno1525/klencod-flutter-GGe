@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:ui' show Color;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
+import '../l10n/strings.dart';
 import '../models.dart';
 
 class NotificationsService {
@@ -199,7 +199,6 @@ class NotificationsService {
     if (!_enabled) return;
     if (alert.isAllianceAttack && !_allianceAttacksEnabled) return;
 
-    // Check if this is an update to an existing alert
     final existingIdx = _history.indexWhere(
       (a) => a.movementId == alert.movementId,
     );
@@ -216,7 +215,6 @@ class NotificationsService {
 
     if (!_listCtrl.isClosed) _listCtrl.add(List.unmodifiable(_history));
 
-    // Don't show system notification on updates
     if (isUpdate) {
       TrafficLog.add('ST',
           '[Notif] alert UPDATED mid=${alert.movementId} (cancelled=${alert.isCancelled})');
@@ -230,23 +228,36 @@ class NotificationsService {
         ? ' [${alert.attackerAlliance}]'
         : '';
 
+    final targetName = alert.targetPlayerName;
+    final hasTarget = alert.isAllianceAttack &&
+        targetName != null &&
+        targetName.isNotEmpty;
+
     final unitsLine = alert.units.isEmpty
-        ? 'Movement detected'
+        ? (S.isAr ? 'حركة مرصودة' : 'Movement detected')
         : alert.units
-            .map((u) => '${u.displayName}: ${u.amount}')
+            .map((u) => '${S.unitName(u.displayName)}: ${u.amount}')
             .take(5)
             .join(' · ');
 
     final bigText = '${alert.remainingLabel} · ${alert.kingdomName}\n'
-        'From: ${alert.attackerName}$allianceStr\n'
-        'Total units: ${alert.totalUnits}\n$unitsLine';
+        '${S.isAr ? "من" : "From"}: ${alert.attackerName}$allianceStr'
+        '${hasTarget ? "\n${S.isAr ? "على" : "To"}: $targetName" : ""}\n'
+        '${S.isAr ? "إجمالي الجنود" : "Total units"}: ${alert.totalUnits}\n'
+        '$unitsLine';
+
+    final title = alert.isAllianceAttack
+        ? '🛡️ ${alert.attackerName}${hasTarget ? " → $targetName" : ""}'
+        : '⚔️ ${alert.attackerName}$allianceStr';
+
+    final body = '${alert.remainingLabel} · '
+        '${alert.totalUnits > 0 ? "${alert.totalUnits} ${S.units}" : "movement"}';
 
     try {
       await _plugin.show(
         alert.movementId,
-        '${alert.isAllianceAttack ? "🛡️" : "⚔️"} ${alert.attackerName}$allianceStr',
-        '${alert.remainingLabel} · '
-            '${alert.totalUnits > 0 ? "${alert.totalUnits} units" : "movement"}',
+        title,
+        body,
         NotificationDetails(
           android: AndroidNotificationDetails(
             _channelId,

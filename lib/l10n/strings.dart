@@ -102,7 +102,6 @@ class S {
   static String get noAlertsDesc            => _('noAlertsDesc');
   static String get noCastles               => _('noCastles');
 
-  // ═══ NEW ═══
   static String get delete                  => _('delete');
   static String get details                 => _('details');
   static String get deleteAll               => _('deleteAll');
@@ -139,7 +138,7 @@ class S {
   }
 
   static const Map<String, String> _unitAr = {
-    // Melee units
+    // ═══ Melee ═══
     'Spearman': 'رمح',
     'Swordsman': 'سياف',
     'Halberdier': 'هالبرد',
@@ -147,6 +146,7 @@ class S {
     'Axeman': 'فأس',
     'Pikeman': 'رمح طويل',
     'TwoHandedSwordWarrior': 'سيف بيدين',
+    'TwohandedSwordWarrior': 'سيف بيدين',
     'Knight': 'فارس',
     'HeavySpearman': 'رمح ثقيل',
     'HeavySwordsman': 'سياف ثقيل',
@@ -154,7 +154,7 @@ class S {
     'VeteranSpearman': 'رمح محترف',
     'VeteranSwordsman': 'سياف محترف',
     'VeteranHalberdier': 'هالبرد محترف',
-    // Ranged units
+    // ═══ Ranged ═══
     'Bowman': 'نشاب',
     'Longbowman': 'قوس طويل',
     'Crossbowman': 'قوس مستعرض',
@@ -165,13 +165,21 @@ class S {
     'VeteranCrossbowman': 'قوس محترف',
     'VeteranArcher': 'رامي محترف',
     'CrossbowmanElite': 'قوس نخبة',
-    // Defense units
+    // ═══ Defense ═══
     'Militia': 'ميليشيا',
     'Peasant': 'فلاح',
     'DefensiveArcher': 'رامي دفاعي',
     'WallArcher': 'رامي سور',
     'WallCrossbowman': 'قوس سور',
-    // Tools
+    'WallSpadesman': 'مهندس سور',
+    'WallSwordsman': 'سياف سور',
+    'WallMaceman': 'صولجان سور',
+    'MoatDefender': 'مدافع خندق',
+    'MoatSpearman': 'رمح خندق',
+    'GateDefender': 'مدافع بوابة',
+    'GateSpadesman': 'مهندس بوابة',
+    'GateSwordsman': 'سياف بوابة',
+    // ═══ Tools ═══
     'Ladder': 'سلم',
     'SiegeTower': 'برج حصار',
     'BatteringRam': 'كبش حصار',
@@ -182,7 +190,7 @@ class S {
     'IronMantlet': 'متراس حديدي',
     'Banner': 'راية',
     'Chest': 'صندوق',
-    // Wall items
+    // ═══ Wall items ═══
     'Wall': 'سور',
     'Gate': 'بوابة',
     'Moat': 'خندق',

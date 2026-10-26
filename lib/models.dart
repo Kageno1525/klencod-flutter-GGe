@@ -83,7 +83,8 @@ class CastleUnit {
 
   CastleUnit({required this.wodId, required this.amount, this.info});
 
-  String get displayName => info?.type ?? 'Unit #$wodId';
+  // ✅ FIX: use displayName (strips Barracks_Unit_ prefix)
+  String get displayName => info?.displayName ?? 'Unit #$wodId';
 
   IconData get icon {
     if (info?.role == 'ranged') return Icons.gps_fixed;
@@ -108,6 +109,7 @@ class Lord {
   final int factionId;
   final String? name;
   final int level;
+  final bool isBaron;
 
   Lord({
     required this.id,
@@ -115,10 +117,14 @@ class Lord {
     required this.factionId,
     this.name,
     this.level = 1,
+    this.isBaron = false,
   });
 
-  String get displayName =>
-      name?.isNotEmpty == true ? name! : 'Lord ${visibleIndex + 1}';
+  String get displayName {
+    if (name?.isNotEmpty == true) return name!;
+    if (isBaron) return 'Baron ${visibleIndex + 1}';
+    return 'Lord ${visibleIndex + 1}';
+  }
 }
 
 // ═══════════════════════════════════════════
@@ -132,6 +138,7 @@ class LordMovement {
   final int targetKid;
   final String? targetPlayerName;
   final String? targetAllianceName;
+  final DateTime fetchedAt;
 
   LordMovement({
     required this.movementId,
@@ -143,18 +150,43 @@ class LordMovement {
     required this.targetKid,
     this.targetPlayerName,
     this.targetAllianceName,
-  });
+    DateTime? fetchedAt,
+  }) : fetchedAt = fetchedAt ?? DateTime.now();
 
+  // Static (from server at fetch time)
   int get timeRemaining => totalTime - paidTime;
 
+  // Live (accounts for time elapsed since fetch)
+  int get liveRemainingSeconds {
+    final elapsed = DateTime.now().difference(fetchedAt).inSeconds;
+    return (timeRemaining - elapsed).clamp(0, 999999);
+  }
+
+  bool get isArrived => liveRemainingSeconds <= 0;
+  bool get isStationed => type == 1 && isArrived;
+
+  DateTime get startedAt =>
+      fetchedAt.subtract(Duration(seconds: paidTime));
+  DateTime get arrivalAt =>
+      fetchedAt.add(Duration(seconds: timeRemaining));
+
+  static String _fmt(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:'
+      '${t.minute.toString().padLeft(2, '0')}:'
+      '${t.second.toString().padLeft(2, '0')}';
+
+  String get startedAtLabel => _fmt(startedAt);
+  String get arrivalAtLabel => _fmt(arrivalAt);
+
   String get timeLabel {
-    if (timeRemaining <= 0) return 'Arrived';
-    final h = timeRemaining ~/ 3600;
-    final m = (timeRemaining % 3600) ~/ 60;
-    final s = timeRemaining % 60;
+    final s = liveRemainingSeconds;
+    if (s <= 0) return type == 1 ? 'Stationed' : 'Arrived';
+    final h = s ~/ 3600;
+    final m = (s % 3600) ~/ 60;
+    final sec = s % 60;
     if (h > 0) return '${h}h ${m}m';
-    if (m > 0) return '${m}m ${s}s';
-    return '${s}s';
+    if (m > 0) return '${m}m ${sec}s';
+    return '${sec}s';
   }
 
   String get actionLabel {
@@ -455,7 +487,7 @@ class AttackUnit {
 }
 
 // ═══════════════════════════════════════════
-//  AttackAlert — UPDATED with DateTime + cancelled
+//  AttackAlert — with targetPlayerName
 // ═══════════════════════════════════════════
 class AttackAlert {
   final int movementId;
@@ -468,6 +500,7 @@ class AttackAlert {
   final int targetX, targetY;
   final String? targetCastleName;
   final int targetAreaId;
+  final String? targetPlayerName;
   final int kingdomId;
   final int totalTime;
   final int paidTime;
@@ -489,6 +522,7 @@ class AttackAlert {
     required this.targetY,
     this.targetCastleName,
     this.targetAreaId = 0,
+    this.targetPlayerName,
     required this.kingdomId,
     required this.totalTime,
     required this.paidTime,
@@ -501,11 +535,9 @@ class AttackAlert {
   String? get attackerAlly => attackerAlliance;
 
   // ═══ Timing logic ═══
-  /// الوقت الفعلي اللي الحركة بدأت فيه (على الخادم تقريباً)
   DateTime get startedAt =>
       receivedAt.subtract(Duration(seconds: paidTime));
 
-  /// الوقت المتوقع لوصول الجيش
   DateTime get arrivalAt =>
       receivedAt.add(Duration(seconds: remainingSeconds));
 
@@ -517,14 +549,12 @@ class AttackAlert {
   int get remainingSeconds =>
       (totalTime - paidTime).clamp(0, 999999);
 
-  /// الوقت المتبقي دلوقتي (live)
   Duration get remainingNow {
     if (isCancelled) return Duration.zero;
     final diff = arrivalAt.difference(DateTime.now());
     return diff.isNegative ? Duration.zero : diff;
   }
 
-  /// نص الوقت المتبقي (live — بيتحسب من now)
   String get liveRemainingLabel {
     if (isCancelled) return 'Recalled';
     if (isArrived) return 'Arrived';
@@ -538,14 +568,12 @@ class AttackAlert {
     return '${s}s';
   }
 
-  // Status
   String get statusKey {
     if (isCancelled) return 'cancelled';
     if (isArrived) return 'arrived';
     return 'incoming';
   }
 
-  // HH:mm:ss format
   static String _fmt(DateTime t) =>
       '${t.hour.toString().padLeft(2, '0')}:'
       '${t.minute.toString().padLeft(2, '0')}:'
@@ -556,7 +584,6 @@ class AttackAlert {
   String? get cancelledAtLabel =>
       cancelledAt == null ? null : _fmt(cancelledAt!);
 
-  // Existing helpers
   String get remainingLabel {
     final s = remainingSeconds;
     if (s <= 0) return 'Arrived';

@@ -248,6 +248,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
   Widget _commanderCard(BuildContext context, CommanderInfo cmd) {
     final isBusy = cmd.isBusy;
     final isReturning = cmd.movement?.type == 2;
+    final isStationed = cmd.movement?.isStationed ?? false;
     final accent = isBusy ? AppTheme.orange : AppTheme.green;
     final gradient = isBusy
         ? AppTheme.orangeGradient
@@ -294,15 +295,18 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ],
                   ),
                   child: Center(
-                    child: Text(
-                      '${cmd.lord.visibleIndex + 1}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w900,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
+                    child: cmd.lord.isBaron
+                        ? const Icon(Icons.military_tech_rounded,
+                            color: Colors.white, size: 28)
+                        : Text(
+                            '${cmd.lord.visibleIndex + 1}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
                   ),
                 ),
                 const SizedBox(width: 14),
@@ -382,11 +386,13 @@ class _CommandersScreenState extends State<CommandersScreen> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Icon(
-                          cmd.movement!.type == 1
-                              ? Icons.shield_rounded
-                              : (isReturning
-                                  ? Icons.undo_rounded
-                                  : Icons.gavel_rounded),
+                          isStationed
+                              ? Icons.flag_rounded
+                              : cmd.movement!.type == 1
+                                  ? Icons.shield_rounded
+                                  : (isReturning
+                                      ? Icons.undo_rounded
+                                      : Icons.gavel_rounded),
                           color: accent,
                           size: 16,
                         ),
@@ -394,7 +400,9 @@ class _CommandersScreenState extends State<CommandersScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          cmd.movement!.actionLabel,
+                          isStationed
+                              ? (S.isAr ? 'متمركز في قلعة الحليف' : 'Stationed')
+                              : cmd.movement!.actionLabel,
                           style: TextStyle(
                             color: AppTheme.textColor(context),
                             fontWeight: FontWeight.bold,
@@ -421,6 +429,48 @@ class _CommandersScreenState extends State<CommandersScreen> {
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  // 🆕 started / arrives like notifications
+                  Row(
+                    children: [
+                      const Icon(Icons.play_arrow_rounded,
+                          size: 12, color: AppTheme.blue),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${S.isAr ? "بدأ" : "Started"}: ${cmd.movement!.startedAtLabel}',
+                        style: TextStyle(
+                            color: AppTheme.subTextColor(context),
+                            fontSize: 10.5,
+                            fontFamily: 'monospace',
+                            decoration: TextDecoration.none),
+                      ),
+                      const Spacer(),
+                      Icon(
+                        cmd.movement!.isArrived
+                            ? Icons.check_circle_rounded
+                            : Icons.flag_rounded,
+                        size: 12,
+                        color: cmd.movement!.isArrived
+                            ? AppTheme.green
+                            : AppTheme.orange,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        cmd.movement!.isArrived
+                            ? (isStationed
+                                ? (S.isAr ? 'متمركز' : 'Stationed')
+                                : (S.isAr ? 'وصل' : 'Arrived'))
+                            : '${S.isAr ? "هيوصل" : "Arrives"}: ${cmd.movement!.arrivalAtLabel}',
+                        style: TextStyle(
+                            color: cmd.movement!.isArrived
+                                ? AppTheme.green
+                                : AppTheme.orange,
+                            fontSize: 10.5,
+                            fontFamily: 'monospace',
+                            decoration: TextDecoration.none),
                       ),
                     ],
                   ),
@@ -461,7 +511,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
                 ],
               ),
             ),
-            if (!isReturning)
+            if (!isReturning && !isStationed)
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
                 child: SizedBox(
@@ -482,6 +532,33 @@ class _CommandersScreenState extends State<CommandersScreen> {
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                       backgroundColor: AppTheme.red.withOpacity(0.08),
+                    ),
+                  ),
+                ),
+              )
+            else if (isStationed)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 42,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _recall(cmd),
+                    icon: const Icon(Icons.undo_rounded,
+                        color: AppTheme.orange, size: 18),
+                    label: Text(
+                        S.isAr ? 'استرجاع القائد' : 'Recall commander',
+                        style: const TextStyle(
+                            color: AppTheme.orange,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none)),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(
+                          color: AppTheme.orange.withOpacity(0.5),
+                          width: 1.5),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      backgroundColor: AppTheme.orange.withOpacity(0.08),
                     ),
                   ),
                 ),
