@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show Color;  // ═══ NEW: needed for ledColor ═══
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -172,14 +173,12 @@ class NotificationsService {
   }
 
   static Future<void> _onAttack(AttackAlert alert) async {
-    // ═══ NEW: always log so we know it fired ═══
     TrafficLog.add('ST',
         '[Notif] _onAttack fired (enabled=$_enabled, ready=$_ready)');
 
     if (!_enabled) return;
 
     // ═══ KEY FIX: ALWAYS add to in-app history ═══
-    // Even if the plugin failed, the user must see the attack in the app
     _history.insert(0, alert);
     if (_history.length > 100) {
       _history.removeRange(100, _history.length);
@@ -192,7 +191,6 @@ class NotificationsService {
     if (!_ready) {
       TrafficLog.add('ER',
           '[Notif] plugin NOT ready — in-app only, no system notification');
-      // Try init once
       unawaited(init());
       return;
     }
@@ -230,7 +228,7 @@ class NotificationsService {
             autoCancel: true,
             ongoing: false,
             enableLights: true,
-            ledColor: const Color(0xFFFF0000),
+            ledColor: const Color(0xFFFF0000), // ← now works
           ),
         ),
         payload: '${alert.movementId}',
