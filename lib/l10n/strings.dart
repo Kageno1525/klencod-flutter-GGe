@@ -5,7 +5,6 @@ class S {
   static bool get isAr => current.languageCode == 'ar';
   static String _(String key) => (_map[isAr ? 'ar' : 'en'] ?? {})[key] ?? key;
 
-  // Login
   static String get appName        => _('appName');
   static String get login          => _('login');
   static String get username       => _('username');
@@ -14,8 +13,6 @@ class S {
   static String get connecting     => _('connecting');
   static String get loginSuccess   => _('loginSuccess');
   static String get loginFailed    => _('loginFailed');
-
-  // Main
   static String get mainTitle      => _('mainTitle');
   static String get transferTroops => _('transferTroops');
   static String get trainTroops    => _('trainTroops');
@@ -28,8 +25,6 @@ class S {
   static String get settings       => _('settings');
   static String get logoutConfirm  => _('logoutConfirm');
   static String get welcome        => _('welcome');
-
-  // Transfer
   static String get from           => _('from');
   static String get to             => _('to');
   static String get units          => _('units');
@@ -50,8 +45,6 @@ class S {
   static String get available      => _('available');
   static String get amountToSend   => _('amountToSend');
   static String get sameCastleError => _('sameCastleError');
-
-  // Smuggle
   static String get allianceMembers => _('allianceMembers');
   static String get peaceActive     => _('peaceActive');
   static String get noPeaceActive   => _('noPeaceActive');
@@ -71,8 +64,6 @@ class S {
   static String get stationTime     => _('stationTime');
   static String get selectLord      => _('selectLord');
   static String get autoLord        => _('autoLord');
-
-  // Commanders
   static String get commanderBusy   => _('commanderBusy');
   static String get commanderFree   => _('commanderFree');
   static String get timeRemaining   => _('timeRemaining');
@@ -80,16 +71,12 @@ class S {
   static String get recallSuccess   => _('recallSuccess');
   static String get recallFail      => _('recallFail');
   static String get noCommanders    => _('noCommanders');
-
-  // Training
   static String get selectCastle   => _('selectCastle');
   static String get unitType       => _('unitType');
   static String get amount         => _('amount');
   static String get startTraining  => _('startTraining');
   static String get trainingOk     => _('trainingOk');
   static String get trainingFail   => _('trainingFail');
-
-  // Stats + Notifications
   static String get statsTitle              => _('statsTitle');
   static String get statsDesc               => _('statsDesc');
   static String get notificationsTitle      => _('notificationsTitle');
@@ -101,7 +88,6 @@ class S {
   static String get noAlerts                => _('noAlerts');
   static String get noAlertsDesc            => _('noAlertsDesc');
   static String get noCastles               => _('noCastles');
-
   static String get delete                  => _('delete');
   static String get details                 => _('details');
   static String get deleteAll               => _('deleteAll');
@@ -117,8 +103,6 @@ class S {
   static String get defenseStat             => _('defenseStat');
   static String get perHour                 => _('perHour');
   static String get allianceMember          => _('allianceMember');
-
-  // Common
   static String get cancel   => _('cancel');
   static String get ok       => _('ok');
   static String get close    => _('close');
@@ -135,10 +119,11 @@ class S {
     if (englishName == null || englishName.isEmpty) {
       return isAr ? 'جندي مجهول' : 'Unknown unit';
     }
-    
+    if (!isAr) return englishName;
+
     // 1. Direct exact match
     if (_unitAr.containsKey(englishName)) {
-      return isAr ? _unitAr[englishName]! : englishName;
+      return _unitAr[englishName]!;
     }
 
     // 2. Normalize: lowercase, remove prefixes & underscores
@@ -148,7 +133,7 @@ class S {
         .toLowerCase();
 
     if (_unitAr.containsKey(key)) {
-      return isAr ? _unitAr[key]! : englishName;
+      return _unitAr[key]!;
     }
 
     // 3. Handle Prefixes (Elite, Veteran, Relic, Heavy)
@@ -169,21 +154,14 @@ class S {
 
     // 4. Match base name after removing prefix
     if (_unitAr.containsKey(key)) {
-      return isAr ? '${_unitAr[key]}$prefixAr' : englishName;
+      return '${_unitAr[key]}$prefixAr';
     }
 
-    // 5. Try partial matching in map (fallback)
-    for (var entry in _unitAr.entries) {
-      if (entry.key.toLowerCase() == key) {
-        return isAr ? '${entry.value}$prefixAr' : englishName;
-      }
-    }
-
-    return englishName; // Last resort if truly unknown
+    return englishName; // Last resort
   }
 
   static const Map<String, String> _unitAr = {
-    // ═══ CORE MELEE ═══
+    // CORE MELEE
     'mace': 'صولجان',
     'maceman': 'صولجان',
     'swordsman': 'سياف',
@@ -195,7 +173,7 @@ class S {
     'spearman': 'رمح',
     'pikeman': 'رمح طويل',
 
-    // ═══ CORE RANGED ═══
+    // CORE RANGED
     'bowman': 'نشاب',
     'crossbowman': 'قوس مستعرض',
     'longbowman': 'قوس طويل',
@@ -203,17 +181,7 @@ class S {
     'shortbowman': 'نشاب قصير',
     'cavalryarcher': 'فارس رامي',
 
-    // ═══ HEAVY VARIANTS ═══
-    'heavycrossbowman': 'قوس مستعرض ثقيل',
-    'heavyspearman': 'رمح ثقيل',
-    'heavyswordsman': 'سياف ثقيل',
-    'heavyhalberdier': 'هالبرد ثقيل',
-    'heavymaceman': 'صولجان ثقيل',
-    'heavyaxeman': 'فأس ثقيل',
-    'heavylongbowman': 'قوس طويل ثقيل',
-    'heavyarcher': 'رامي ثقيل',
-
-    // ═══ DEFENSE ═══
+    // DEFENSE
     'militia': 'ميليشيا',
     'armedcitizen': 'مواطن مسلح',
     'peasant': 'فلاح',
@@ -236,7 +204,7 @@ class S {
     'gatecrossbowman': 'قوس بوابة',
     'gatearcher': 'رامي بوابة',
 
-    // ═══ RELIC / ROYAL / ELITE / TRAVELLING ═══
+    // RELIC / ROYAL / ELITE
     'relicaxeman': 'فأس أثري',
     'relicshortbowman': 'نشاب قصير أثري',
     'relichammerman': 'مطرقة أثرية',
@@ -250,15 +218,7 @@ class S {
     'travellingknight': 'فارس مسافر',
     'travellingcrossbowman': 'قوس مسافر',
 
-    // ═══ IMPERIAL ═══
-    'imperialknight': 'فارس إمبراطوري',
-    'imperialmarksman': 'قناص إمبراطوري',
-    'imperialguardsman': 'حارس إمبراطوري',
-    'imperialbowman': 'نشاب إمبراطوري',
-    'imperialspearman': 'رمح إمبراطوري',
-    'imperialswordsman': 'سياف إمبراطوري',
-
-    // ═══ EVENTS (KHAN, SAMURAI, SHADOW, HORROR) ═══
+    // EVENTS & OTHERS
     'khanguards': 'حراس الخان',
     'sabercleaver': 'قطاع السيف',
     'slingshot': 'مقذاف',
@@ -280,8 +240,6 @@ class S {
     'deathlyhorror': 'رعب مميت',
     'flamebearer': 'حامل الشعلة',
     'compositebowman': 'نشاب مركب',
-
-    // ═══ OTHER UNITS (SOVEREIGN, GLORY, ETC) ═══
     'berserker': 'بيرسيركر',
     'spearwoman': 'امرأة الرمح',
     'masterswordsman': 'سياف أستاذ',
@@ -296,18 +254,6 @@ class S {
     'bearwarrior': 'محارب الدب',
     'lionbowman': 'نشاب الأسد',
     'bearbowman': 'نشاب الدب',
-
-    // ═══ WALL / TOOLS ═══
-    'ladder': 'سلم',
-    'siegetower': 'برج حصار',
-    'batteringram': 'كبش حصار',
-    'catapult': 'منجنيق',
-    'mantlet': 'متراس',
-    'ironmantlet': 'متراس حديدي',
-    'firearrow': 'سهم ناري',
-    'wall': 'سور',
-    'gate': 'بوابة',
-    'moat': 'خندق',
   };
 
   static const Map<String, Map<String, String>> _map = {

@@ -102,8 +102,6 @@ class CastleUnit {
 }
 
 // ═══════════════════════════════════════════
-//  Lord — no more baron field
-// ═══════════════════════════════════════════
 class Lord {
   final int id;
   final int visibleIndex;

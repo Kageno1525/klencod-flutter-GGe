@@ -9,7 +9,6 @@ import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// ═══════════════════════════════════════════════════════════
 class TrainingSlots {
   final int barracksFree;
   final int barracksBusy;
@@ -51,7 +50,6 @@ class TrainingSlots {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
 class TrainingScreen extends StatefulWidget {
   final GgeClient client;
   const TrainingScreen({super.key, required this.client});
@@ -240,8 +238,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
       base = base.where((u) => _getUnitTier(u) == _tierFilter).toList();
     }
 
-    // إزالة التكرار: اللعبة بتبعت نفس الوحدة بأكتر من ID (كل لفل ID مختلف)
-    // هنحتفظ بأعلى ID (أقوى لفل) لكل اسم
+    // إزالة التكرار: نحتفظ بأعلى ID لكل اسم
     final uniqueMap = <String, UnitCatalogEntry>{};
     for (var u in base) {
       final name = u.displayName;
