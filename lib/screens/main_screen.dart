@@ -15,7 +15,7 @@ import 'package:gge/screens/notifications_screen.dart';
 import 'package:gge/services/notifications_service.dart';
 import 'package:gge/services/background_service.dart';
 
-class MainScreen extends StatefulWidget { // ✅ حولناها StatefulWidget عشان اسم المستخدم
+class MainScreen extends StatefulWidget {
   final GgeClient client;
   const MainScreen({super.key, required this.client});
 
@@ -25,16 +25,70 @@ class MainScreen extends StatefulWidget { // ✅ حولناها StatefulWidget �
 
 class _MainScreenState extends State<MainScreen> {
   String _username = '';
+  bool _isKicked = false; // ✅ عشان نمنع تكرار الرسالة
 
   @override
   void initState() {
     super.initState();
     _loadUser();
+    
+    // ✅ ربط حدث طرد الحساب
+    widget.client.onSessionConflict = _handleSessionConflict;
   }
 
   Future<void> _loadUser() async {
     final u = await AppStorage.getUsername();
     if (mounted) setState(() => _username = u ?? '');
+  }
+
+  // ✅ الدالة اللي بتتنفذ لو الحساب اتفتح في مكان تاني
+  Future<void> _handleSessionConflict() async {
+    if (_isKicked || !mounted) return;
+    _isKicked = true;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('انتهت الجلسة', style: TextStyle(decoration: TextDecoration.none)),
+        content: const Text(
+          'تم تسجيل الدخول لحسابك من مكان آخر (لعبت من الموبايل أو الكمبيوتر).\n\n'
+          'هيتم تسجيل خروجك من التطبيق عشان ميحصلش تعارض.',
+          style: TextStyle(decoration: TextDecoration.none, height: 1.5),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.purple),
+            child: const Text('حسناً', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    await _performLogout();
+  }
+
+  Future<void> _performLogout() async {
+    try {
+      await BackgroundService.stop();
+    } catch (_) {}
+    try {
+      NotificationsService.stopListening();
+      NotificationsService.clearHistory();
+    } catch (_) {}
+
+    await AppStorage.setLoggedIn(false);
+    await AppStorage.setToken('');
+    await widget.client.dispose();
+
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
   }
 
   @override
@@ -97,7 +151,7 @@ class _MainScreenState extends State<MainScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  S.appName, // 'GGE'
+                  S.appName,
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -135,7 +189,7 @@ class _MainScreenState extends State<MainScreen> {
           const SizedBox(width: 8),
           AppIconBtn(
             icon: Icons.logout_rounded,
-            onTap: () => _confirmLogout(context, widget.client),
+            onTap: () => _confirmLogout(context),
             color: AppTheme.red,
             size: 40,
           ),
@@ -187,7 +241,7 @@ class _MainScreenState extends State<MainScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${S.welcome} $_username', // ✅ مرحبا + اسم المستخدم
+                        '${S.welcome} $_username',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 17,
@@ -195,7 +249,6 @@ class _MainScreenState extends State<MainScreen> {
                           decoration: TextDecoration.none,
                         ),
                       ),
-                      // ✅ شيلنا Empire Automation
                     ],
                   ),
                 ),
@@ -224,14 +277,13 @@ class _MainScreenState extends State<MainScreen> {
       crossAxisCount: 2,
       mainAxisSpacing: 14,
       crossAxisSpacing: 14,
-      childAspectRatio: 1.2, // ✅ صغرنا الخانات
+      childAspectRatio: 1.2,
       children: [
         FadeSlideIn(
           delay: const Duration(milliseconds: 200),
           child: EnterTile(
             icon: Icons.swap_horiz_rounded,
             title: S.transferTroops,
-            // ✅ شيلنا subtitle
             gradient: AppTheme.primaryGradient,
             onTap: () => Navigator.push(
               context,
@@ -312,7 +364,7 @@ class _MainScreenState extends State<MainScreen> {
   Widget _footer(BuildContext context) {
     return Center(
       child: Text(
-        'SmokJ', // ✅ تم التغيير
+        'SmokJ',
         style: TextStyle(
           color: AppTheme.subTextColor(context).withOpacity(0.5),
           fontSize: 11,
@@ -324,7 +376,7 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Future<void> _confirmLogout(BuildContext context, GgeClient client) async {
+  Future<void> _confirmLogout(BuildContext context) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -351,23 +403,7 @@ class _MainScreenState extends State<MainScreen> {
     );
     if (confirm != true || !context.mounted) return;
 
-    try {
-      await BackgroundService.stop();
-    } catch (_) {}
-    try {
-      NotificationsService.stopListening();
-      NotificationsService.clearHistory();
-    } catch (_) {}
-
-    await AppStorage.setLoggedIn(false);
-    await AppStorage.setToken('');
-    await client.dispose();
-
-    if (!context.mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (_) => false,
-    );
+    await _performLogout();
   }
 }
 

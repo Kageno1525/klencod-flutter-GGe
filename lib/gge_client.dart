@@ -101,7 +101,7 @@ class GgeClient {
   int? _cachedPlayerId;
   final Map<int, AttackAlert> _latestAlertByMid = {};
 
-  // ✅ إضافة الوحدات المفتوحة ومستوى الباراكس
+  // ✅ الوحدات المفتوحة ومستويات الباراكس
   final Set<int> _unlockedUnitIds = {};
   Set<int> get unlockedUnitIds => _unlockedUnitIds;
 
@@ -111,6 +111,9 @@ class GgeClient {
   Map<int, CastleStats>? _cachedStatsByArea;
   Map<int, CastleStats>? get cachedStatsByArea => _cachedStatsByArea;
   set cachedStatsByArea(Map<int, CastleStats>? v) => _cachedStatsByArea = v;
+
+  // ✅ كولباك عشان نعرف لو الحساب اتفتح في مكان تاني
+  void Function()? onSessionConflict;
 
   final List<String> debugLog = [];
   void Function()? onLog;
@@ -198,7 +201,7 @@ class GgeClient {
           }
         }
 
-        // ✅ قراءة الوحدات المفتوحة
+        // ✅ قراءة الوحدات المفتوحة من gpc
         final gpc = data['gpc'];
         if (gpc is Map) {
           final areas = gpc['A'] as List?;
@@ -216,7 +219,7 @@ class GgeClient {
                 }
               }
             }
-            TrafficLog.add('ST', '✅ Unlocked units: ${_unlockedUnitIds.length}');
+            TrafficLog.add('ST', '✅ Unlocked units from gpc: ${_unlockedUnitIds.length}');
           }
         }
       } catch (e) {
@@ -871,6 +874,9 @@ class GgeClient {
       } else {
         _status('🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
         _status('👉 Tap "Login" to reconnect manually when done.');
+        
+        // ✅ هنا بنعمل كولباك عشان نوديك لصفحة الدخول
+        onSessionConflict?.call();
       }
     });
   }

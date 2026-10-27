@@ -22,7 +22,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   bool _loading = false;
   String? _error;
-  bool _autoTried = false;
   bool _obscure = true;
   bool _checkedPermissions = false;
 
@@ -35,7 +34,6 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _loadSaved() async {
     final u = await AppStorage.getUsername();
     final p = await AppStorage.getPassword();
-    final isLoggedIn = await AppStorage.getLoggedIn();
 
     if (!mounted) return;
     _userCtrl.text = u ?? '';
@@ -45,14 +43,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _checkedPermissions = true;
       await _ensureNotificationPermission();
     }
-
-    if (!_autoTried &&
-        isLoggedIn &&
-        (u?.isNotEmpty == true) &&
-        (p?.isNotEmpty == true)) {
-      _autoTried = true;
-      _login();
-    }
+    // ✅ شيلنا شرط الـ Auto-Login اللي كان بيدوس على الزرار
   }
 
   Future<void> _ensureNotificationPermission() async {
@@ -129,7 +120,6 @@ class _LoginScreenState extends State<LoginScreen> {
       await AppStorage.setLoggedIn(true);
 
       NotificationsService.startListening();
-
       BackgroundService.start().catchError((e) {});
 
       if (!mounted) return;
@@ -188,7 +178,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       FadeSlideIn(
                         delay: const Duration(milliseconds: 500),
                         child: Text(
-                          'SmokJ', // ✅ تم التغيير
+                          'SmokJ',
                           style: TextStyle(
                             color: AppTheme.subTextColor(context)
                                 .withOpacity(0.4),
@@ -253,7 +243,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         const SizedBox(height: 20),
         Text(
-          S.appName, // 'GGE'
+          S.appName,
           style: TextStyle(
             fontSize: 30,
             fontWeight: FontWeight.w800,
@@ -262,7 +252,6 @@ class _LoginScreenState extends State<LoginScreen> {
             decoration: TextDecoration.none,
           ),
         ),
-        // ✅ تم شيل Empire Automation
       ],
     );
   }
