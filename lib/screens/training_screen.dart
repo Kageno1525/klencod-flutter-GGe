@@ -384,7 +384,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
     final loading = _slotsLoading;
 
     // الخانة الشغالة (PS)
-    final activeSlot = slots?.firstWhere((s) => s.isTraining, orElse: () => SlotInfo(rut: 0, fetchedAt: DateTime.now()));
+    final activeSlot = slots?.firstWhere(
+      (s) => s.isTraining,
+      orElse: () => SlotInfo(rut: 0, fetchedAt: DateTime.now()),
+    ) ?? SlotInfo(rut: 0, fetchedAt: DateTime.now());
+    
     // الخانات الخمسة (QS)
     final queueSlots = slots?.where((s) => !s.isTraining).toList() ?? [];
 
@@ -405,7 +409,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(color: AppTheme.teal.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-                  child: Text('تحديث', style: const TextStyle(color: AppTheme.teal, fontWeight: FontWeight.bold, fontSize: 11, decoration: TextDecoration.none)),
+                  child: const Text('تحديث', style: TextStyle(color: AppTheme.teal, fontWeight: FontWeight.bold, fontSize: 11, decoration: TextDecoration.none)),
                 ),
               ),
             ],
