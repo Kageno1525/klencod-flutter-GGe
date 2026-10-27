@@ -101,9 +101,15 @@ class GgeClient {
   int? _cachedPlayerId;
   final Map<int, AttackAlert> _latestAlertByMid = {};
 
-  // ✅ الوحدات المفتوحة ومستويات الباراكس
+  // ✅ الوحدات المفتوحة (union من كل القلاع — للاستخدام العام)
   final Set<int> _unlockedUnitIds = {};
   Set<int> get unlockedUnitIds => _unlockedUnitIds;
+
+  // ✅ الوحدات المفتوحة لكل قلعة على حدة (AID → Set of wodIds)
+  //    ده اللي بيتحكم في إيه اللي ينفع يتبعت من قلعة معينة
+  final Map<int, Set<int>> _unlockedByAreaId = {};
+  Set<int> getUnlockedForArea(int areaId) =>
+      _unlockedByAreaId[areaId] ?? const <int>{};
 
   final Map<int, int> _barracksLevelByCastle = {};
   int? getBarracksLevel(int areaId) => _barracksLevelByCastle[areaId];
@@ -201,25 +207,37 @@ class GgeClient {
           }
         }
 
-        // ✅ قراءة الوحدات المفتوحة من gpc
+        // ✅ قراءة الوحدات المفتوحة من gpc — لكل قلعة على حدة
         final gpc = data['gpc'];
         if (gpc is Map) {
           final areas = gpc['A'] as List?;
           if (areas != null) {
             _unlockedUnitIds.clear();
+            _unlockedByAreaId.clear();
             for (final area in areas) {
               if (area is! Map) continue;
               final u = area['U'];
               if (u is! Map) continue;
+              final aid = _asInt(area['AID']);
               final unlocked = u['U'] as List?;
               if (unlocked != null) {
+                final areaSet = <int>{};
                 for (final id in unlocked) {
                   final wod = _asIntOrNull(id);
-                  if (wod != null && wod > 0) _unlockedUnitIds.add(wod);
+                  if (wod != null && wod > 0) {
+                    _unlockedUnitIds.add(wod);
+                    areaSet.add(wod);
+                  }
+                }
+                if (aid > 0 && areaSet.isNotEmpty) {
+                  _unlockedByAreaId[aid] = areaSet;
                 }
               }
             }
-            TrafficLog.add('ST', '✅ Unlocked units from gpc: ${_unlockedUnitIds.length}');
+            TrafficLog.add(
+                'ST',
+                '✅ Unlocked units from gpc: ${_unlockedUnitIds.length} total, '
+                '${_unlockedByAreaId.length} areas tracked');
           }
         }
       } catch (e) {
@@ -243,7 +261,8 @@ class GgeClient {
                   if (_asInt(b[0]) == 200) {
                     final level = _asInt(b[1]);
                     _barracksLevelByCastle[areaId] = level;
-                    TrafficLog.add('ST', '✅ Barracks Level: $level (Area: $areaId)');
+                    TrafficLog.add('ST',
+                        '✅ Barracks Level: $level (Area: $areaId)');
                     break;
                   }
                 }
@@ -251,7 +270,7 @@ class GgeClient {
             }
           }
         }
-        
+
         int? aid;
         if (gca is Map) {
           final o = gca['O'] as Map?;
@@ -844,7 +863,7 @@ class GgeClient {
   // ═══════════════════════════════════════════════════════
   //  HERO RECONNECT LOGIC (No Spam / Network Waiter)
   // ═══════════════════════════════════════════════════════
-  
+
   Future<bool> _hasInternet() async {
     try {
       final result = await InternetAddress.lookup('google.com')
@@ -859,7 +878,7 @@ class GgeClient {
     if (_disposed) return;
     if (!_appForeground && !allowBackgroundReconnect) return;
     if (!isLoggedIn) return;
-    if (_networkWaitActive) return; 
+    if (_networkWaitActive) return;
 
     Future.delayed(const Duration(seconds: 3), () async {
       if (_disposed || _connected) return;
@@ -872,10 +891,10 @@ class GgeClient {
         _networkWaitActive = true;
         _waitForNetworkAndReconnect();
       } else {
-        _status('🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
+        _status(
+            '🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
         _status('👉 Tap "Login" to reconnect manually when done.');
-        
-        // ✅ هنا بنعمل كولباك عشان نوديك لصفحة الدخول
+
         onSessionConflict?.call();
       }
     });
@@ -1165,7 +1184,8 @@ class GgeClient {
   ) =>
       castleService.getCastleUnits(kingdomId, areaId, catalog);
 
-  Future<Map<int, UnitCatalogEntry>> loadCatalog({bool forceReload = false}) async {
+  Future<Map<int, UnitCatalogEntry>> loadCatalog(
+      {bool forceReload = false}) async {
     final catalog = await catalogService.load(forceReload: forceReload);
     _cachedCatalog = catalog;
     return catalog;

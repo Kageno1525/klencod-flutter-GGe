@@ -35,6 +35,10 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   bool _loadingCommanders = false;
   bool _sending = false;
 
+  // ✅ عدد الوحدات اللي في القلعة بس مش قابلة للإرسال (Defensive).
+  //    بنعرضه في الواجهة عشان المستخدم يفهم ليه مش شايفها.
+  int _hiddenUnitsCount = 0;
+
   String _filter = 'all';
   String? _error;
 
@@ -75,20 +79,24 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         _commanders = cmds;
         _loadingCommanders = false;
 
-        // ✅ الافتراضي = اللورد الرئيسي (LID=0)
+        // ✅ الافتراضي = أول لورد فاضي، والأفضلية لـ LID=0 لو هو فاضي.
+        //    مفيش استثناء لـ LID=0 — لو مشغول مش بنختاره.
         if (_selectedLord == null) {
-          try {
-            _selectedLord = cmds.firstWhere((c) => c.lord.id == 0).lord;
-          } catch (_) {
-            final free = cmds.where((c) => !c.isBusy).toList();
-            if (free.isNotEmpty) _selectedLord = free.first.lord;
+          final free = cmds.where((c) => !c.isBusy).toList();
+          if (free.isNotEmpty) {
+            try {
+              _selectedLord = free.firstWhere((c) => c.lord.id == 0).lord;
+            } catch (_) {
+              _selectedLord = free.first.lord;
+            }
           }
         } else {
+          // ✅ لو اللورد المختار بقى مشغول، نصفّره (بما فيهم LID=0)
           final current = cmds.firstWhere(
-              (c) => c.lord.id == _selectedLord!.id,
-              orElse: () => CommanderInfo(lord: _selectedLord!));
-          // LID=0 مايتشالش أبداً
-          if (_selectedLord!.id != 0 && current.isBusy) {
+            (c) => c.lord.id == _selectedLord!.id,
+            orElse: () => CommanderInfo(lord: _selectedLord!),
+          );
+          if (current.isBusy) {
             _selectedLord = null;
           }
         }
@@ -128,21 +136,45 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     setState(() {
       _loadingUnits = true;
       _units = [];
+      _hiddenUnitsCount = 0;
       for (final c in _amtCtrl.values) c.dispose();
       _amtCtrl.clear();
     });
     try {
-      final units = await widget.client
+      final rawUnits = await widget.client
           .getCastleUnits(_source!.kingdomId, _source!.areaId, _catalog);
       if (!mounted) return;
+
+      // ✅ فلترة الوحدات القابلة للإرسال بناءً على gpc.U الخاصة بالقلعة دي.
+      //    أي وحدة مش في gpc.U[source.areaId] = Defensive/Wall/Gate = السيرفر هيرفضها (91).
+      final unlocked = widget.client.getUnlockedForArea(_source!.areaId);
+      final sendable = <CastleUnit>[];
+      int hidden = 0;
+      for (final u in rawUnits) {
+        if (unlocked.contains(u.wodId)) {
+          sendable.add(u);
+        } else {
+          hidden++;
+        }
+      }
+
       setState(() {
-        _units = units;
-        for (final u in units) {
+        _units = sendable;
+        _hiddenUnitsCount = hidden;
+        for (final u in sendable) {
           _amtCtrl[u.wodId] = TextEditingController(text: '0');
         }
         _loadingUnits = false;
       });
-      if (units.isEmpty) {
+
+      if (sendable.isEmpty && hidden > 0) {
+        _snack(
+          S.isAr
+              ? 'كل الوحدات في ${_source!.displayName} دفاعية ومش قابلة للإرسال'
+              : 'All units at ${_source!.displayName} are defensive / non-sendable',
+          color: AppTheme.orange,
+        );
+      } else if (rawUnits.isEmpty) {
         _snack(
           S.isAr
               ? 'لا توجد وحدات في ${_source!.displayName}'
@@ -164,7 +196,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     return _members;
   }
 
-  // ✅ FIX: 'all' ميفلترش خالص — يعرض كل الوحدات حتى لو الكتالوج ناقص
+  // ✅ _units تحتوي فقط على الوحدات القابلة للإرسال.
+  //    الفلاتر (offense/defense) مجرد طبقة عرض فوقها.
   List<CastleUnit> get _filteredUnits {
     switch (_filter) {
       case 'offense':
@@ -172,7 +205,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       case 'defense':
         return _units.where((u) => u.isCombat && u.isDefensive).toList();
       default:
-        return _units; // ✅ كل الوحدات
+        return _units;
     }
   }
 
@@ -193,7 +226,9 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   void _clearAllUnits() {
-    for (final c in _amtCtrl.values) c.text = '0';
+    for (final c in _amtCtrl.values) {
+      c.text = '0';
+    }
     setState(() {});
   }
 
@@ -268,6 +303,17 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       String errMsg = result.error ?? 'Unknown';
       if (errMsg == 'ALL_LORDS_BUSY') {
         errMsg = S.allLordsBusy;
+      } else if (errMsg == 'UNIT_NOT_SENDABLE_91') {
+        // ✅ الوحدة مش قابلة للإرسال — يفضل إن ده ما يحصلش لأننا فلترنا،
+        //    لكن لو حصل (سباق أو stale data)، نطلب من المستخدم يحدّث.
+        errMsg = S.isAr
+            ? 'الوحدة دي مش قابلة للإرسال من القلعة دي — حدّث الشاشة وحاول تاني'
+            : 'This unit is not sendable from this castle — refresh and retry';
+      } else if (errMsg == 'LORD_BUSY_218') {
+        // ✅ 218 = اللورد مشغول (شائع جداً مع LID=0)
+        errMsg = S.isAr
+            ? 'اللورد المختار مشغول — اختر لورد فاضي أو استنى رجوعه'
+            : 'Selected lord is busy — pick a free lord or wait';
       } else if (errMsg == 'LORD_UNAVAILABLE') {
         errMsg = S.isAr
             ? 'القائد المختار غير متاح — جرّب اللورد الرئيسي'
@@ -288,6 +334,11 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
             : 'Error 6: commander not at source castle';
       }
       _snack('${S.transferFail}: $errMsg', color: AppTheme.red);
+
+      // لو 218 — نعيد تحميل القواد عشان الحالة تتحدث
+      if (result.error == 'LORD_BUSY_218') {
+        _loadCommanders();
+      }
     }
   }
 
@@ -295,7 +346,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
+        content:
+            Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
       ));
@@ -312,7 +364,9 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
 
   @override
   void dispose() {
-    for (final c in _amtCtrl.values) c.dispose();
+    for (final c in _amtCtrl.values) {
+      c.dispose();
+    }
     _timeCtrl.dispose();
     super.dispose();
   }
@@ -586,25 +640,28 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                       setState(() {
                         _source = v;
                         _units = [];
-                        for (final c in _amtCtrl.values) c.dispose();
+                        _hiddenUnitsCount = 0;
+                        for (final c in _amtCtrl.values) {
+                          c.dispose();
+                        }
                         _amtCtrl.clear();
                       });
-                      // ✅ FIX: لو في target مختار، نتحقق من التوافق ونعيد التحميل
+                      // لو في target مختار، نتحقق من التوافق ونعيد التحميل
                       if (_target != null && v != null) {
-                        final newTargetCastle =
-                            _target!.castleIn(v.kingdomId);
+                        final newTargetCastle = _target!.castleIn(v.kingdomId);
                         if (newTargetCastle != null) {
                           setState(() => _targetCastle = newTargetCastle);
                           _loadUnits();
                         } else {
+                          final name = _target?.name ?? '';
                           setState(() {
                             _target = null;
                             _targetCastle = null;
                           });
                           _snack(
                             S.isAr
-                                ? '${_target?.name} ليس لديه قلعة في هذه المملكة'
-                                : 'No castle for target in this kingdom',
+                                ? '$name ليس لديه قلعة في هذه المملكة'
+                                : 'No castle for $name in this kingdom',
                             color: AppTheme.orange,
                           );
                         }
@@ -621,16 +678,18 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   Widget _lordPicker(BuildContext context) {
-    // ✅ اللورد الرئيسي (LID=0) دايماً + القواد المتاحين
+    // ✅ اللوردات المتاحين فقط — مفيش استثناء لـ LID=0
     final availableLords = _commanders
-        .where((c) => c.lord.id == 0 || !c.isBusy)
+        .where((c) => !c.isBusy)
         .map((c) => c.lord)
         .toList();
 
+    // Fail-safe (لو الحالة قديمة): نصفّر الاختيار لو اللورد مبقاش متاح
     if (_selectedLord != null &&
         !availableLords.any((l) => l.id == _selectedLord!.id)) {
       _selectedLord = null;
     }
+    // Default fallback: أول لورد فاضي (بأفضلية LID=0 لو فاضي)
     if (_selectedLord == null && availableLords.isNotEmpty) {
       try {
         _selectedLord = availableLords.firstWhere((l) => l.id == 0);
@@ -645,7 +704,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       child: _loadingCommanders
           ? const Center(
               child: SizedBox(
-                width: 20, height: 20,
+                width: 20,
+                height: 20,
                 child: CircularProgressIndicator(
                     strokeWidth: 2, color: AppTheme.purple),
               ),
@@ -713,6 +773,18 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                               setState(() => _selectedLord = v),
                         ),
                       ),
+                      if (availableLords.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            S.allLordsBusy,
+                            style: TextStyle(
+                              color: AppTheme.orange,
+                              fontSize: 10,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -896,7 +968,10 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           _target = m;
           _targetCastle = sameKingdom;
           _units = [];
-          for (final c in _amtCtrl.values) c.dispose();
+          _hiddenUnitsCount = 0;
+          for (final c in _amtCtrl.values) {
+            c.dispose();
+          }
           _amtCtrl.clear();
         });
         _loadUnits();
@@ -937,9 +1012,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(
-                hasPeace
-                    ? Icons.shield_moon_rounded
-                    : Icons.shield_outlined,
+                hasPeace ? Icons.shield_moon_rounded : Icons.shield_outlined,
                 color: selected
                     ? Colors.white
                     : (hasPeace
@@ -1004,9 +1077,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                         Text(
                           '${S.peaceActive} · ${m.peaceLabel}',
                           style: TextStyle(
-                              color: selected
-                                  ? Colors.white
-                                  : AppTheme.green,
+                              color:
+                                  selected ? Colors.white : AppTheme.green,
                               fontSize: 10,
                               fontWeight: FontWeight.w600,
                               decoration: TextDecoration.none),
@@ -1108,6 +1180,39 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
             ],
           ),
           const SizedBox(height: 12),
+          // ✅ ملاحظة: في وحدات دفاعية مش ظاهرة (مش قابلة للإرسال)
+          if (_hiddenUnitsCount > 0)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppTheme.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: AppTheme.orange.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline_rounded,
+                        color: AppTheme.orange, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        S.isAr
+                            ? '$_hiddenUnitsCount نوع وحدة دفاعية غير قابل للإرسال (مخفي)'
+                            : '$_hiddenUnitsCount defensive unit type(s) not sendable (hidden)',
+                        style: const TextStyle(
+                          color: AppTheme.orange,
+                          fontSize: 10.5,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           Row(
             children: [
               _unitChip(context, 'all', S.allUnits),
@@ -1152,8 +1257,9 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
               child: Center(
                 child: Text(
                   S.isAr
-                      ? 'لا توجد وحدات في هذه القلعة'
-                      : 'No units at this castle',
+                      ? 'لا توجد وحدات قابلة للإرسال في هذه القلعة'
+                      : 'No sendable units at this castle',
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                       color: AppTheme.subTextColor(context),
                       decoration: TextDecoration.none),
@@ -1514,9 +1620,13 @@ class _TrafficLogSheetState extends State<_TrafficLogSheet> {
                         itemBuilder: (_, i) {
                           final line = entries[i];
                           Color color = AppTheme.green;
-                          if (line.contains('[RX]')) color = AppTheme.blue;
-                          else if (line.contains('[ST]')) color = AppTheme.teal;
-                          else if (line.contains('[ER]')) color = AppTheme.red;
+                          if (line.contains('[RX]')) {
+                            color = AppTheme.blue;
+                          } else if (line.contains('[ST]')) {
+                            color = AppTheme.teal;
+                          } else if (line.contains('[ER]')) {
+                            color = AppTheme.red;
+                          }
                           return Padding(
                             padding: const EdgeInsets.symmetric(vertical: 1),
                             child: SelectableText(

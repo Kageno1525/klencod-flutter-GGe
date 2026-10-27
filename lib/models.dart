@@ -309,16 +309,25 @@ class AllyMember {
 }
 
 // ═══════════════════════════════════════════
+//  GGE server error codes.
+//  ⚠️ 91  = unit not in `gpc.U` for source castle (Defensive/Non-combat).
+//  ⚠️ 218 = target lord unavailable — most commonly the Main Lord (LID=0)
+//          is busy with an existing movement/support.
+// ═══════════════════════════════════════════
 const Map<int, String> ggeErrors = {
   0: 'Success',
   1: 'General error',
   2: 'Invalid parameter',
   5: 'Invalid object',
+  6: 'Commander not available at source',
+  7: 'Target not in same kingdom',
+  13: 'Not enough troops',
   27: 'Account is banned',
   50: 'Wrong mode',
   55: 'Not enough resources',
   87: 'Missing required building',
   88: 'Too much units',
+  91: 'Unit not sendable from this castle',
   93: 'Exceeds max count',
   95: 'Cooling down',
   101: 'Missing units',
@@ -334,6 +343,7 @@ const Map<int, String> ggeErrors = {
   182: 'Kingdom movements not available',
   203: 'Invalid area',
   212: 'Castle has movements',
+  218: 'Lord unavailable (busy)',
   219: 'Invalid lord id',
   222: 'Lord in movement',
   233: 'Target not owned',
