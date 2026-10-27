@@ -116,9 +116,12 @@ class GgeClient {
   static bool _isPlausibleAllianceId(int? aid) =>
       aid != null && aid > 0 && aid < _maxPlausibleAllianceId;
 
-  // ═══ Barracks Levels per castle ═══
+  // ═══ Barracks Levels & Units ═══
   final Map<int, int> _barracksLevelByCastle = {};
   int? getBarracksLevel(int areaId) => _barracksLevelByCastle[areaId];
+
+  final Set<int> _unlockedUnitIds = {};
+  Set<int> get unlockedUnitIds => _unlockedUnitIds;
 
   late final CastleService castleService = CastleService(this);
   late final AllianceService allianceService = AllianceService(this);
@@ -193,6 +196,28 @@ class GgeClient {
             }
           }
         }
+
+        // ✅ جلب الوحدات المتاحة من gpc
+        final gpc = data['gpc'];
+        if (gpc is Map) {
+          final areas = gpc['A'] as List?;
+          if (areas != null) {
+            _unlockedUnitIds.clear();
+            for (final area in areas) {
+              if (area is! Map) continue;
+              final u = area['U'];
+              if (u is! Map) continue;
+              final unlocked = u['U'] as List?;
+              if (unlocked != null) {
+                for (final id in unlocked) {
+                  final wod = _asIntOrNull(id);
+                  if (wod != null && wod > 0) _unlockedUnitIds.add(wod);
+                }
+              }
+            }
+            TrafficLog.add('ST', '✅ Unlocked units from gpc: ${_unlockedUnitIds.length} units');
+          }
+        }
       } catch (e) {
         TrafficLog.add('ER', '❌ gbd parse error: $e');
       }
@@ -211,12 +236,10 @@ class GgeClient {
             if (bg != null) {
               for (final b in bg) {
                 if (b is List && b.length >= 2) {
-                  final buildingId = _asInt(b[0]);
-                  final level = _asInt(b[1]);
-                  if (buildingId == 200) {
+                  if (_asInt(b[0]) == 200) { // 200 = Barracks
+                    final level = _asInt(b[1]);
                     _barracksLevelByCastle[areaId] = level;
-                    TrafficLog.add('ST',
-                        '✅ Barracks Level: $level (Area: $areaId)');
+                    TrafficLog.add('ST', '✅ Barracks Level: $level (Area: $areaId)');
                     break;
                   }
                 }
@@ -231,7 +254,6 @@ class GgeClient {
           aid = _asIntOrNull(o?['AID']);
         }
         if (_isPlausibleAllianceId(aid) && _cachedAllianceId != aid) {
-          TrafficLog.add('ST', '✅ AID from jaa: $aid');
           _cachedAllianceId = aid;
         }
       } catch (e) {

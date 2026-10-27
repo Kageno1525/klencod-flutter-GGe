@@ -58,26 +58,6 @@ class TrainingScreen extends StatefulWidget {
 class _TrainingScreenState extends State<TrainingScreen> {
   static const int _maxPerBatch = 80;
 
-  // ═══ القائمة الصارمة للوحدات المتاحة لكل لفل ═══
-  static const Map<int, List<String>> _levelUnits = {
-    1: ['maceman', 'spearman'],
-    2: ['bowman', 'crossbowman'],
-    3: ['swordsman', 'archer'],
-    4: ['twohandedswordsman', 'halberdier'],
-    5: ['heavycrossbowman', 'longbowman'],
-    6: ['veteranhalberdier', 'veterantwohandedswordsman', 'veteranlongbowman', 'veteranheavycrossbowman'],
-    7: ['relicaxeman'],
-    9: ['relicshortbowman'],
-    11: ['relichammerman'],
-    13: ['reliclongbowman'],
-    14: ['shieldmaiden', 'protectorofthenorth'],
-    15: ['valkyrieranger', 'valkyriesniper'],
-    16: ['glasswingarcher'],
-    17: ['flamebreathberserker'],
-    19: ['scaleboundguardian'],
-    20: ['scaleshardmarksman'],
-  };
-
   List<OwnedCastle> _castles = [];
   Map<int, UnitCatalogEntry> _catalog = {};
   OwnedCastle? _castle;
@@ -199,15 +179,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
       final now = DateTime.now();
       final parsedSlots = <SlotInfo>[];
 
-      // 1. الخانة اللي بتتصنع حالياً
-      if (ps != null && ps.isNotEmpty) {
-        final rct = ps['RCT'] as num? ?? 0;
-        final tua = ps['TUA'] as num? ?? 0;
-        final wid = ps['WID'] as num? ?? 0;
-        parsedSlots.add(SlotInfo(rut: rct.toInt(), fetchedAt: now, isTraining: true, units: tua.toInt(), wodId: wid.toInt()));
-      }
-
-      // 2. باقي الخانات
+      // 1. الخانات الأساسية (QS)
       if (qs != null) {
         for (final q in qs) {
           if (q is! Map) continue;
@@ -217,6 +189,14 @@ class _TrainingScreenState extends State<TrainingScreen> {
             parsedSlots.add(SlotInfo(rut: rut.toInt(), fetchedAt: now));
           }
         }
+      }
+
+      // 2. الخانة اللي بتتصنع حالياً (PS)
+      if (ps != null && ps.isNotEmpty) {
+        final rct = ps['RCT'] as num? ?? 0;
+        final tua = ps['TUA'] as num? ?? 0;
+        final wid = ps['WID'] as num? ?? 0;
+        parsedSlots.insert(0, SlotInfo(rut: rct.toInt(), fetchedAt: now, isTraining: true, units: tua.toInt(), wodId: wid.toInt()));
       }
 
       if (!mounted) return;
@@ -230,31 +210,17 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  // ═══ THE STRICT CUMULATIVE FILTER ═══
+  // ═══ الفلتر المضمون بناءً على الوحدات المتاحة (gpc) ═══
   List<UnitCatalogEntry> get _filteredTrainable {
-    final level = widget.client.getBarracksLevel(_castle?.areaId ?? 0) ?? 1;
+    // 1. الوحدات اللي السيرفر مقال إنها مفتوحة
+    final unlocked = widget.client.unlockedUnitIds;
     
-    // تجميع كل الوحدات من المستوى 1 لحد المستوى الحالي
-    final allowedKeys = <String>{};
-    for (int i = 1; i <= level; i++) {
-      if (_levelUnits.containsKey(i)) {
-        allowedKeys.addAll(_levelUnits[i]!);
-      }
-    }
-    
-    if (allowedKeys.isEmpty) return [];
+    // 2. لو لسه محملناش البيانات، نرجع فاضي
+    if (unlocked.isEmpty) return [];
 
+    // 3. نفلتر الكاتالوج
     return _trainable.where((u) {
-      // تنظيف الاسم من أي إضافات
-      final clean = u.displayName.toLowerCase()
-          .replaceAll('barracks_unit_', '')
-          .replaceAll('barracks', '')
-          .replaceAll('_', '')
-          .replaceAll(' ', '')
-          .trim();
-      
-      // مطابقة دقيقة: الاسم لازم يكون موجود بالظبط في القايمة
-      return allowedKeys.contains(clean);
+      return unlocked.contains(u.wodId);
     }).toList();
   }
 
@@ -418,9 +384,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
     final slots = _slots;
     final loading = _slotsLoading;
 
+    // حسبة الخانات
+    int totalSlots = slots?.length ?? 0; // الإجمالي
     int freeCount = slots?.where((s) => s.isFree).length ?? 0;
     int busyCount = slots?.where((s) => s.isBusy).length ?? 0;
-    int totalAvailable = freeCount + busyCount;
 
     return AppTheme.glassCard(
       context: context,
@@ -438,8 +405,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 onTap: () => _loadSlots(force: true),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(color: totalAvailable > 0 && freeCount == 0 ? AppTheme.red.withOpacity(0.15) : AppTheme.teal.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-                  child: Text('$freeCount/$totalAvailable', style: TextStyle(color: totalAvailable > 0 && freeCount == 0 ? AppTheme.red : AppTheme.teal, fontWeight: FontWeight.bold, fontSize: 11, decoration: TextDecoration.none)),
+                  decoration: BoxDecoration(color: freeCount == 0 ? AppTheme.red.withOpacity(0.15) : AppTheme.teal.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+                  // عرض عدد الخانات الإجمالي اللي جاي من السيرفر
+                  child: Text('$totalSlots خانة', style: TextStyle(color: freeCount == 0 ? AppTheme.red : AppTheme.teal, fontWeight: FontWeight.bold, fontSize: 11, decoration: TextDecoration.none)),
                 ),
               ),
             ],
@@ -455,7 +423,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 Color c = isFree ? AppTheme.green : (isBusy ? AppTheme.orange : AppTheme.subTextColor(context));
 
                 return Container(
-                  width: 70,
+                  width: 65,
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   decoration: BoxDecoration(
                     color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(10),
@@ -525,7 +493,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
             children: [
               Icon(Icons.inbox_rounded, color: AppTheme.subTextColor(context), size: 32),
               const SizedBox(height: 8),
-              Text('لا توجد وحدات متاحة في هذا المستوى', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, decoration: TextDecoration.none)),
+              Text('لا توجد وحدات متاحة في الحساب', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, decoration: TextDecoration.none)),
             ],
           ),
         ),
