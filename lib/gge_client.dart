@@ -116,6 +116,10 @@ class GgeClient {
   static bool _isPlausibleAllianceId(int? aid) =>
       aid != null && aid > 0 && aid < _maxPlausibleAllianceId;
 
+  // ═══ Barracks Levels per castle ═══
+  final Map<int, int> _barracksLevelByCastle = {};
+  int? getBarracksLevel(int areaId) => _barracksLevelByCastle[areaId];
+
   late final CastleService castleService = CastleService(this);
   late final AllianceService allianceService = AllianceService(this);
   late final CatalogService catalogService = CatalogService();
@@ -199,6 +203,29 @@ class GgeClient {
       try {
         final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
         final gca = data['gca'];
+        if (gca is Map) {
+          final a = gca['A'] as List?;
+          if (a != null && a.length >= 4) {
+            final areaId = _asInt(a[3]);
+            final bg = gca['BG'] as List?;
+            if (bg != null) {
+              for (final b in bg) {
+                if (b is List && b.length >= 2) {
+                  final buildingId = _asInt(b[0]);
+                  final level = _asInt(b[1]);
+                  if (buildingId == 200) {
+                    _barracksLevelByCastle[areaId] = level;
+                    TrafficLog.add('ST',
+                        '✅ Barracks Level: $level (Area: $areaId)');
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        // AID logic
         int? aid;
         if (gca is Map) {
           final o = gca['O'] as Map?;
@@ -208,7 +235,9 @@ class GgeClient {
           TrafficLog.add('ST', '✅ AID from jaa: $aid');
           _cachedAllianceId = aid;
         }
-      } catch (_) {}
+      } catch (e) {
+        TrafficLog.add('ER', 'jaa parse error: $e');
+      }
     }
 
     if (msg.command == 'slt' && msg.payload != null) {
@@ -293,7 +322,7 @@ class GgeClient {
           targetY: existing.targetY,
           targetCastleName: existing.targetCastleName,
           targetAreaId: existing.targetAreaId,
-          targetPlayerName: existing.targetPlayerName,   // ✅
+          targetPlayerName: existing.targetPlayerName,
           kingdomId: existing.kingdomId,
           totalTime: existing.totalTime,
           paidTime: existing.paidTime,
@@ -387,7 +416,6 @@ class GgeClient {
       final targetCastleName = ta.length > 10 ? _asString(ta[10]) : null;
       final targetAreaId = ta.length > 3 ? _asInt(ta[3]) : 0;
 
-      // ✅ NEW: resolve target player name for alliance attacks
       final targetOwner = owners[targetPid];
       String? targetPlayerName = _asString(targetOwner?['N']);
       if (targetPlayerName == null || targetPlayerName.isEmpty) {
@@ -414,7 +442,7 @@ class GgeClient {
         targetY: _asInt(ta[2]),
         targetCastleName: targetCastleName,
         targetAreaId: targetAreaId,
-        targetPlayerName: targetPlayerName,   // ✅
+        targetPlayerName: targetPlayerName,
         kingdomId: _asInt(mov['KID']),
         totalTime: _asInt(mov['TT']),
         paidTime: _asInt(mov['PT']),
@@ -1062,7 +1090,6 @@ class GgeClient {
   ) =>
       castleService.getCastleUnits(kingdomId, areaId, catalog);
 
-  // ✅ FIX: cache catalog so attack unit names resolve
   Future<Map<int, UnitCatalogEntry>> loadCatalog({bool forceReload = false}) async {
     final catalog = await catalogService.load(forceReload: forceReload);
     _cachedCatalog = catalog;

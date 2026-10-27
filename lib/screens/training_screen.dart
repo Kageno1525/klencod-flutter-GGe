@@ -7,18 +7,24 @@ import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 // ═══════════════════════════════════════════════════════════
 class SlotInfo {
   final int rut;
   final DateTime fetchedAt;
+  final bool isTraining;
+  final int units;
 
-  SlotInfo({required this.rut, required this.fetchedAt});
+  SlotInfo({
+    required this.rut,
+    required this.fetchedAt,
+    this.isTraining = false,
+    this.units = 0,
+  });
 
   bool get isLocked => rut == -1;
-  bool get isFree => rut == 0;
-  bool get isBusy => rut > 0;
+  bool get isFree => rut == 0 && !isTraining;
+  bool get isBusy => rut > 0 || isTraining;
 
   int get remainingSeconds {
     if (!isBusy) return 0;
@@ -51,7 +57,26 @@ class TrainingScreen extends StatefulWidget {
 
 class _TrainingScreenState extends State<TrainingScreen> {
   static const int _maxPerBatch = 80;
-  static const Set<int> _defaultVerified = <int>{602, 603};
+
+  // ═══ Mapping of Barracks Level -> Trainable Unit Names ═══
+  static const Map<int, List<String>> _levelUnits = {
+    1: ['mace', 'spear'],
+    2: ['bow', 'crossbow'],
+    3: ['sword', 'archer'],
+    4: ['twohanded', 'halberd'],
+    5: ['heavy crossbow', 'longbow'],
+    6: ['veteran spear', 'veteran twohanded', 'veteran longbow', 'veteran heavy crossbow'],
+    7: ['relic axe'],
+    9: ['relic shortbow'],
+    11: ['relic hammer'],
+    13: ['relic longbow'],
+    14: ['shield maiden', 'protector of the north'],
+    15: ['valkyrie ranger', 'valkyrie sniper'],
+    16: ['glasswing archer'],
+    17: ['flamebreath berserker'],
+    19: ['scalebound guardian'],
+    20: ['scaleshard marksman'],
+  };
 
   List<OwnedCastle> _castles = [];
   Map<int, UnitCatalogEntry> _catalog = {};
@@ -62,20 +87,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
   final _amountCtrl = TextEditingController(text: '10');
   bool _training = false;
 
-  String _tierFilter = 'all';
-  bool _showAll = false;
-
   List<SlotInfo>? _slots;
   bool _slotsLoading = false;
   DateTime? _lastSlotFetch;
   Timer? _slotsTimer;
   Timer? _tickTimer;
-
-  Set<int> _verifiedUnits = {..._defaultVerified};
-  Set<int> _hiddenUnits = {};
-
-  String get _verifiedKey => 'training_verified_${widget.client.cachedPlayerId ?? 0}';
-  String get _hiddenKey => 'training_hidden_${widget.client.cachedPlayerId ?? 0}';
 
   @override
   void initState() {
@@ -99,32 +115,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
     super.dispose();
   }
 
-  Future<void> _loadLearnedSets() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final verifiedList = prefs.getStringList(_verifiedKey);
-      if (verifiedList != null) {
-        final parsed = verifiedList.map((e) => int.tryParse(e)).whereType<int>().toSet();
-        _verifiedUnits = parsed.isEmpty ? {..._defaultVerified} : parsed;
-      }
-      final hiddenList = prefs.getStringList(_hiddenKey);
-      if (hiddenList != null) {
-        _hiddenUnits = hiddenList.map((e) => int.tryParse(e)).whereType<int>().toSet();
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _saveLearnedSets() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setStringList(_verifiedKey, _verifiedUnits.map((e) => e.toString()).toList());
-      await prefs.setStringList(_hiddenKey, _hiddenUnits.map((e) => e.toString()).toList());
-    } catch (_) {}
-  }
-
   Future<void> _loadAll() async {
     try {
-      await _loadLearnedSets();
       final castles = await widget.client.getCastles();
       final catalog = await widget.client.loadCatalog();
       if (!mounted) return;
@@ -144,9 +136,30 @@ class _TrainingScreenState extends State<TrainingScreen> {
         _selectedUnit = _filteredTrainable.isNotEmpty ? _filteredTrainable.first : null;
       });
 
-      if (_castle != null) unawaited(_loadSlots(force: true));
+      if (_castle != null) {
+        unawaited(_loadSlots(force: true));
+        if (widget.client.getBarracksLevel(_castle!.areaId) == null) {
+          unawaited(_fetchBarracksLevel());
+        }
+      }
     } catch (e) {
       _snack('$e', color: AppTheme.red);
+    }
+  }
+
+  Future<void> _fetchBarracksLevel() async {
+    if (_castle == null) return;
+    try {
+      await widget.client.sendXtAndWait(
+        'jca',
+        jsonEncode({'CID': _castle!.areaId, 'KID': _castle!.kingdomId}),
+        responseCmd: 'jaa',
+        timeoutMs: 8000,
+        isAction: false,
+      );
+      if (mounted) setState(() {});
+    } catch (e) {
+      TrafficLog.add('ER', 'jca fetch error: $e');
     }
   }
 
@@ -161,8 +174,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
     try {
       final resp = await widget.client.sendXtAndWait(
-        'spl', jsonEncode({'LID': 0}),
-        responseCmd: 'spl', timeoutMs: 8000, isAction: false,
+        'spl',
+        jsonEncode({'LID': 0}),
+        responseCmd: 'spl',
+        timeoutMs: 8000,
+        isAction: false,
       );
       if (!mounted) return;
       if (resp.payload == null || resp.payload!.isEmpty) {
@@ -171,9 +187,18 @@ class _TrainingScreenState extends State<TrainingScreen> {
       }
 
       final data = jsonDecode(resp.payload!) as Map<String, dynamic>;
-      final qs = data['QS'] as List?;
+      final spl = data['spl'] ?? data;
+      final ps = spl['PS'] as Map?;
+      final qs = spl['QS'] as List?;
+      
       final now = DateTime.now();
       final parsedSlots = <SlotInfo>[];
+
+      if (ps != null && ps.isNotEmpty) {
+        final rct = ps['RCT'] as num? ?? 0;
+        final tua = ps['TUA'] as num? ?? 0;
+        parsedSlots.add(SlotInfo(rut: rct.toInt(), fetchedAt: now, isTraining: true, units: tua.toInt()));
+      }
 
       if (qs != null) {
         for (final q in qs) {
@@ -197,84 +222,19 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  String _getUnitTier(UnitCatalogEntry u) {
-    final name = u.displayName.toLowerCase();
-    if (name.contains('veteran') || name.contains('elite') || name.contains('twohand') || name.contains('knight') || name.contains('cavalry') || name.contains('relic')) return 'elite';
-    if (name.contains('heavy') || name.contains('halberd') || name.contains('crossbow') || name.contains('mace') || name.contains('longbow')) return 'advanced';
-    return 'basic';
-  }
-
   List<UnitCatalogEntry> get _filteredTrainable {
-    var base = _trainable.where((u) {
-      if (_hiddenUnits.contains(u.wodId)) return false;
-      if (!_showAll && !_verifiedUnits.contains(u.wodId)) return false;
-      return true;
+    final level = widget.client.getBarracksLevel(_castle?.areaId ?? 0);
+    
+    // Default to L1 if level unknown
+    final allowedNames = _levelUnits[level ?? 1] ?? [];
+    
+    // In case the mapping is empty (e.g. L8), show empty
+    if (allowedNames.isEmpty) return [];
+
+    return _trainable.where((u) {
+      final name = u.displayName.toLowerCase();
+      return allowedNames.any((allowed) => name.contains(allowed));
     }).toList();
-
-    if (_tierFilter != 'all') {
-      base = base.where((u) => _getUnitTier(u) == _tierFilter).toList();
-    }
-
-    final uniqueMap = <String, UnitCatalogEntry>{};
-    for (var u in base) {
-      final name = u.displayName;
-      if (!uniqueMap.containsKey(name) || u.wodId > uniqueMap[name]!.wodId) {
-        uniqueMap[name] = u;
-      }
-    }
-
-    return uniqueMap.values.toList()..sort((a, b) => a.displayName.compareTo(b.displayName));
-  }
-
-  void _setTier(String tier) {
-    setState(() {
-      _tierFilter = tier;
-      final filtered = _filteredTrainable;
-      _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
-    });
-  }
-
-  void _toggleShowAll() {
-    setState(() {
-      _showAll = !_showAll;
-      final filtered = _filteredTrainable;
-      _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
-    });
-  }
-
-  Future<void> _resetLearning() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(S.isAr ? 'مسح البيانات وإعادة الضبط؟' : 'Reset list?', style: const TextStyle(decoration: TextDecoration.none)),
-        content: Text(
-          S.isAr ? 'هيتم إرجاع القائمة للافتراضي (رمح + سياف فقط) ومسح أي وحدات مخفية أو مؤكدة سابقاً.' : 'Will reset to default (Spearman + Swordsman only).',
-          style: const TextStyle(decoration: TextDecoration.none, height: 1.5),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(S.cancel)),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.orange),
-            child: Text(S.isAr ? 'مسح' : 'Reset', style: const TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-
-    setState(() {
-      _verifiedUnits = {..._defaultVerified};
-      _hiddenUnits.clear();
-      _showAll = false;
-      final filtered = _filteredTrainable;
-      _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
-    });
-    await _saveLearnedSets();
-    if (!mounted) return;
-    _snack(S.isAr ? 'تم المسح' : 'Reset done', color: AppTheme.teal);
   }
 
   Future<void> _train() async {
@@ -283,38 +243,19 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (amt <= 0) { _snack(S.error, color: AppTheme.red); return; }
     if (amt > _maxPerBatch) { _snack(S.isAr ? 'الحد الأقصى $_maxPerBatch' : 'Max $_maxPerBatch', color: AppTheme.orange); return; }
 
-    final capturedWodId = _selectedUnit!.wodId;
     setState(() => _training = true);
-
-    final result = await widget.client.trainUnits(areaId: _castle!.areaId, wodId: capturedWodId, amount: amt);
+    final result = await widget.client.trainUnits(areaId: _castle!.areaId, wodId: _selectedUnit!.wodId, amount: amt);
 
     if (!mounted) return;
     setState(() => _training = false);
 
     if (result.success) {
-      _verifiedUnits.add(capturedWodId);
-      _hiddenUnits.remove(capturedWodId);
-      await _saveLearnedSets();
-      if (!mounted) return;
       _snack('✓ ${S.trainingOk}', color: AppTheme.green);
       HapticFeedback.mediumImpact();
       await Future.delayed(const Duration(milliseconds: 1500));
       if (mounted) await _loadSlots(force: true);
     } else {
-      final err = result.error ?? '';
-      if (err.contains('87') || err.contains('Missing required building')) {
-        _hiddenUnits.add(capturedWodId);
-        _verifiedUnits.remove(capturedWodId);
-        await _saveLearnedSets();
-        if (!mounted) return;
-        setState(() {
-          final remaining = _filteredTrainable;
-          _selectedUnit = remaining.isNotEmpty ? remaining.first : null;
-        });
-        _snack(S.isAr ? 'الوحدة دي مش متاحة — اتشالت من القايمة' : 'Unit not available — removed', color: AppTheme.orange);
-      } else {
-        _snack('${S.trainingFail}: $err', color: AppTheme.red);
-      }
+      _snack('${S.trainingFail}: ${result.error}', color: AppTheme.red);
     }
   }
 
@@ -342,8 +283,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       FadeSlideIn(delay: const Duration(milliseconds: 100), child: _castlePicker(context)),
                       const SizedBox(height: 14),
                       FadeSlideIn(delay: const Duration(milliseconds: 160), child: _slotsCard(context)),
-                      const SizedBox(height: 14),
-                      FadeSlideIn(delay: const Duration(milliseconds: 220), child: _tierFilterRow(context)),
                       const SizedBox(height: 14),
                       FadeSlideIn(delay: const Duration(milliseconds: 280), child: _unitPicker(context)),
                       const SizedBox(height: 14),
@@ -391,8 +330,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
               ],
             ),
           ),
-          AppIconBtn(icon: Icons.delete_sweep_rounded, onTap: _resetLearning, size: 42, color: AppTheme.orange),
-          const SizedBox(width: 8),
           Container(
             width: 42, height: 42,
             decoration: BoxDecoration(gradient: AppTheme.successGradient, borderRadius: BorderRadius.circular(14), boxShadow: [BoxShadow(color: AppTheme.green.withOpacity(0.35), blurRadius: 14, offset: const Offset(0, 6))]),
@@ -415,7 +352,18 @@ class _TrainingScreenState extends State<TrainingScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(S.selectCastle, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.subTextColor(context), letterSpacing: 0.8, decoration: TextDecoration.none)),
+                Row(
+                  children: [
+                    Text(S.selectCastle, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.subTextColor(context), letterSpacing: 0.8, decoration: TextDecoration.none)),
+                    const Spacer(),
+                    if (_castle != null && widget.client.getBarracksLevel(_castle!.areaId) != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(color: AppTheme.teal.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                        child: Text('الباراكس لفل ${widget.client.getBarracksLevel(_castle!.areaId)}', style: const TextStyle(color: AppTheme.teal, fontSize: 9, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 2),
                 if (_castles.isEmpty)
                   Text(S.isAr ? 'لا توجد قلاع' : 'No castles', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, decoration: TextDecoration.none))
@@ -425,8 +373,15 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       value: _castle, isExpanded: true, isDense: true, dropdownColor: Theme.of(context).colorScheme.surface, borderRadius: BorderRadius.circular(14), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textColor(context)),
                       items: _castles.map((c) => DropdownMenuItem(value: c, child: Text(c.fullLabel, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textColor(context), fontSize: 13)))).toList(),
                       onChanged: (v) {
-                        setState(() { _castle = v; _slots = null; final f = _filteredTrainable; _selectedUnit = f.isNotEmpty ? f.first : null; });
-                        if (v != null) unawaited(_loadSlots(force: true));
+                        setState(() { _castle = v; _slots = null; _selectedUnit = null; });
+                        if (v != null) {
+                          unawaited(_loadSlots(force: true));
+                          if (widget.client.getBarracksLevel(v.areaId) == null) {
+                            unawaited(_fetchBarracksLevel());
+                          } else {
+                            setState(() { _selectedUnit = _filteredTrainable.isNotEmpty ? _filteredTrainable.first : null; });
+                          }
+                        }
                       },
                     ),
                   ),
@@ -491,6 +446,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       Icon(isFree ? Icons.check_circle_outline_rounded : (isBusy ? Icons.hourglass_top_rounded : Icons.lock_rounded), color: c, size: 16),
                       const SizedBox(height: 4),
                       Text(s.timeLabel, style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+                      if (s.isTraining)
+                        Text('${s.units}x', style: TextStyle(color: c, fontSize: 9, decoration: TextDecoration.none)),
                     ],
                   ),
                 );
@@ -532,78 +489,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  Widget _tierFilterRow(BuildContext context) {
-    final shown = _filteredTrainable.length;
-    final verifiedCount = _verifiedUnits.length;
-
-    return AppTheme.glassCard(
-      context: context,
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(width: 32, height: 32, decoration: BoxDecoration(color: AppTheme.purple.withOpacity(0.15), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.filter_alt_rounded, color: AppTheme.purple, size: 18)),
-              const SizedBox(width: 10),
-              Expanded(child: Text(S.isAr ? 'الوحدات المتاحة' : 'Available units', style: TextStyle(color: AppTheme.textColor(context), fontWeight: FontWeight.bold, fontSize: 13, decoration: TextDecoration.none))),
-              Text('$shown ظاهر', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 10.5, decoration: TextDecoration.none)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 6, runSpacing: 6,
-            children: [
-              _tierChip(context, 'all', S.isAr ? 'الكل' : 'All', AppTheme.purple),
-              _tierChip(context, 'basic', S.isAr ? 'أساسي' : 'Basic', AppTheme.teal),
-              _tierChip(context, 'advanced', S.isAr ? 'متقدم' : 'Advanced', AppTheme.orange),
-              _tierChip(context, 'elite', S.isAr ? 'نخبة' : 'Elite', AppTheme.red),
-            ],
-          ),
-          const SizedBox(height: 10),
-          InkWell(
-            onTap: _toggleShowAll,
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: _showAll ? AppTheme.orange.withOpacity(0.15) : AppTheme.teal.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: _showAll ? AppTheme.orange.withOpacity(0.4) : AppTheme.teal.withOpacity(0.3), width: 1.2),
-              ),
-              child: Row(
-                children: [
-                  Icon(_showAll ? Icons.visibility_off_rounded : Icons.visibility_rounded, color: _showAll ? AppTheme.orange : AppTheme.teal, size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(_showAll ? 'عرض المؤكد فقط' : 'عرض كل الوحدات', style: TextStyle(color: _showAll ? AppTheme.orange : AppTheme.teal, fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none))),
-                  Icon(_showAll ? Icons.toggle_on_rounded : Icons.toggle_off_rounded, color: _showAll ? AppTheme.orange : AppTheme.teal, size: 26),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _tierChip(BuildContext context, String key, String label, Color color) {
-    final sel = _tierFilter == key;
-    return GestureDetector(
-      onTap: () => _setTier(key),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: sel ? color.withOpacity(0.2) : Theme.of(context).colorScheme.surface.withOpacity(0.5),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: sel ? color.withOpacity(0.6) : AppTheme.subTextColor(context).withOpacity(0.15), width: sel ? 1.4 : 1),
-        ),
-        child: Text(label, style: TextStyle(color: sel ? color : AppTheme.subTextColor(context), fontSize: 11, fontWeight: sel ? FontWeight.bold : FontWeight.w500, decoration: TextDecoration.none)),
-      ),
-    );
-  }
-
   Widget _unitPicker(BuildContext context) {
     final filtered = _filteredTrainable;
+    
     if (filtered.isEmpty) {
       return AppTheme.glassCard(
         context: context,
@@ -613,7 +501,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
             children: [
               Icon(Icons.inbox_rounded, color: AppTheme.subTextColor(context), size: 32),
               const SizedBox(height: 8),
-              Text(_showAll ? 'مفيش وحدات في المستوى ده' : 'مفيش وحدات مؤكدة — اضغط "عرض كل الوحدات"', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, decoration: TextDecoration.none)),
+              Text('لا توجد وحدات متاحة في هذا المستوى', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, decoration: TextDecoration.none)),
             ],
           ),
         ),
@@ -637,7 +525,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   child: DropdownButton<UnitCatalogEntry>(
                     value: _selectedUnit, isExpanded: true, isDense: true, dropdownColor: Theme.of(context).colorScheme.surface, borderRadius: BorderRadius.circular(14), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textColor(context)),
                     items: filtered.map((u) {
-                      final isVerified = _verifiedUnits.contains(u.wodId);
                       return DropdownMenuItem(
                         value: u,
                         child: Row(
@@ -645,7 +532,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
                             Icon(u.role == 'ranged' ? Icons.gps_fixed_rounded : Icons.gavel_rounded, size: 14, color: u.role == 'ranged' ? AppTheme.teal : AppTheme.red),
                             const SizedBox(width: 6),
                             Expanded(child: Text(S.unitName(u.displayName), overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: AppTheme.textColor(context)))),
-                            if (!isVerified) const Icon(Icons.help_outline_rounded, color: AppTheme.orange, size: 12),
                           ],
                         ),
                       );
@@ -722,7 +608,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (_selectedUnit == null) return const SizedBox.shrink();
     final u = _selectedUnit!;
     final isRanged = u.role == 'ranged';
-    final isVerified = _verifiedUnits.contains(u.wodId);
 
     return Container(
       padding: const EdgeInsets.all(18),
@@ -741,7 +626,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
               children: [
                 Text(S.unitName(u.displayName), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16, decoration: TextDecoration.none)),
                 const SizedBox(height: 4),
-                Text(isVerified ? 'Melee · Offense' : 'Tap "Start" to verify', style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 11.5, decoration: TextDecoration.none)),
+                Text(isRanged ? 'Ranged · Offense' : 'Melee · Offense', style: TextStyle(color: Colors.white.withOpacity(0.85), fontSize: 11.5, decoration: TextDecoration.none)),
               ],
             ),
           ),
