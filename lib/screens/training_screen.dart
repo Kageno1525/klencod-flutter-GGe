@@ -133,14 +133,15 @@ class _TrainingScreenState extends State<TrainingScreen> {
   Future<void> _fetchBarracksLevel() async {
     if (_castle == null) return;
     try {
+      // ✅ السيرفر بيبعت بيانات المباني صح لما بنطلب CID: -1
       await widget.client.sendXtAndWait(
         'jca',
-        jsonEncode({'CID': _castle!.areaId, 'KID': _castle!.kingdomId}),
+        jsonEncode({'CID': -1, 'KID': 0}),
         responseCmd: 'jaa',
         timeoutMs: 8000,
         isAction: false,
       );
-      if (mounted) setState(() {}); // ✅ تحديث الشاشة عشان اللفل يظهر
+      if (mounted) setState(() {}); 
     } catch (e) {
       TrafficLog.add('ER', 'jca fetch error: $e');
     }
@@ -192,8 +193,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
           if (q is! Map) continue;
           final si = q['SI'];
           final rut = (si is Map ? si['RUT'] : null) ?? q['RUT'];
-          final wid = q['WID'] as num?; // جلب نوع الجندي من الخانة
-          final tua = q['TUA'] as num?; // جلب عدد الجنود من الخانة
+          final wid = q['WID'] as num?;
+          final tua = q['TUA'] as num?;
           if (rut is num) {
             parsedSlots.add(SlotInfo(
               rut: rut.toInt(),
@@ -392,6 +393,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
     // الخانات الخمسة (QS)
     final queueSlots = slots?.where((s) => !s.isTraining).toList() ?? [];
 
+    // حساب الوقت الإجمالي المباشر
+    final elapsed = _lastSlotFetch == null ? 0 : DateTime.now().difference(_lastSlotFetch!).inSeconds;
+    final liveTotal = (_totalTime - elapsed).clamp(0, 999999);
+
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
@@ -440,7 +445,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            // إجمالي الوقت
+            // إجمالي الوقت (مباشر)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 8),
@@ -455,7 +460,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   const Icon(Icons.timer_rounded, size: 16, color: AppTheme.blue),
                   const SizedBox(width: 6),
                   Text(
-                    'الوقت الإجمالي: ${_formatTotalTime(_totalTime)}',
+                    'الوقت الإجمالي: ${_formatTotalTime(liveTotal)}',
                     style: const TextStyle(color: AppTheme.blue, fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none),
                   ),
                 ],
