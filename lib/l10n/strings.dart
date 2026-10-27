@@ -5,7 +5,7 @@ class S {
   static bool get isAr => current.languageCode == 'ar';
   static String _(String key) => (_map[isAr ? 'ar' : 'en'] ?? {})[key] ?? key;
 
-  static String get appName        => _('appName');
+  static String get appName        => 'GGE'; // ✅ تم التغيير
   static String get login          => _('login');
   static String get username       => _('username');
   static String get password       => _('password');
@@ -24,7 +24,7 @@ class S {
   static String get cmdDesc        => _('cmdDesc');
   static String get settings       => _('settings');
   static String get logoutConfirm  => _('logoutConfirm');
-  static String get welcome        => _('welcome');
+  static String get welcome        => 'مرحبا'; // ✅ تم التغيير
   static String get from           => _('from');
   static String get to             => _('to');
   static String get units          => _('units');
@@ -118,15 +118,12 @@ class S {
     }
     if (!isAr) return englishName;
 
-    // 1. Direct Match
     final lower = englishName.toLowerCase().trim();
     if (_unitAr.containsKey(lower)) return _unitAr[lower]!;
 
-    // 2. Clean Match
     String clean = lower.replaceAll('barracks_unit_', '').replaceAll('barracks', '').replaceAll('_', '').replaceAll(' ', '').trim();
     if (_unitAr.containsKey(clean)) return _unitAr[clean]!;
 
-    // 3. Keyword Match (Fallback)
     String prefix = '';
     if (clean.contains('veteran')) prefix += 'محنك ';
     if (clean.contains('relic')) prefix += 'تذكاري ';
@@ -243,10 +240,10 @@ class S {
 
   static const Map<String, Map<String, String>> _map = {
     'ar': {
-      'appName': 'GGE Bot', 'login': 'تسجيل الدخول', 'username': 'اسم المستخدم',
+      'login': 'تسجيل الدخول', 'username': 'اسم المستخدم',
       'password': 'كلمة المرور', 'logout': 'تسجيل الخروج', 'connecting': 'جاري الاتصال...',
       'loginSuccess': 'تم الدخول بنجاح', 'loginFailed': 'فشل تسجيل الدخول',
-      'mainTitle': 'لوحة التحكم', 'welcome': 'مرحباً بك', 'transferTroops': 'تحويل الجنود',
+      'mainTitle': 'لوحة التحكم', 'transferTroops': 'تحويل الجنود',
       'trainTroops': 'تدريب الجنود', 'smuggleTroops': 'تهريب الجنود', 'commanders': 'القواد',
       'transferDesc': 'نقل بين قلاعك', 'trainDesc': 'صناعة جنود جديدة', 'smuggleDesc': 'إرسال لأعضاء التحالف',
       'cmdDesc': 'إدارة حالة القواد', 'settings': 'الإعدادات', 'logoutConfirm': 'هل تريد تسجيل الخروج؟',
@@ -280,9 +277,9 @@ class S {
       'perHour': 'ساعة', 'allianceMember': 'عضو تحالف',
     },
     'en': {
-      'appName': 'GGE Bot', 'login': 'Login', 'username': 'Username', 'password': 'Password',
+      'login': 'Login', 'username': 'Username', 'password': 'Password',
       'logout': 'Logout', 'connecting': 'Connecting...', 'loginSuccess': 'Login successful',
-      'loginFailed': 'Login failed', 'mainTitle': 'Dashboard', 'welcome': 'Welcome back',
+      'loginFailed': 'Login failed', 'mainTitle': 'Dashboard',
       'transferTroops': 'Transfer Troops', 'trainTroops': 'Train Troops', 'smuggleTroops': 'Smuggle Troops',
       'commanders': 'Commanders', 'transferDesc': 'Move between your castles', 'trainDesc': 'Create new units',
       'smuggleDesc': 'Send to peace-protected allies', 'cmdDesc': 'Manage commander status',

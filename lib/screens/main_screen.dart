@@ -15,9 +15,27 @@ import 'package:gge/screens/notifications_screen.dart';
 import 'package:gge/services/notifications_service.dart';
 import 'package:gge/services/background_service.dart';
 
-class MainScreen extends StatelessWidget {
+class MainScreen extends StatefulWidget { // ✅ حولناها StatefulWidget عشان اسم المستخدم
   final GgeClient client;
   const MainScreen({super.key, required this.client});
+
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  String _username = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUser();
+  }
+
+  Future<void> _loadUser() async {
+    final u = await AppStorage.getUsername();
+    if (mounted) setState(() => _username = u ?? '');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,7 +97,7 @@ class MainScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  S.appName,
+                  S.appName, // 'GGE'
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -117,7 +135,7 @@ class MainScreen extends StatelessWidget {
           const SizedBox(width: 8),
           AppIconBtn(
             icon: Icons.logout_rounded,
-            onTap: () => _confirmLogout(context, client),
+            onTap: () => _confirmLogout(context, widget.client),
             color: AppTheme.red,
             size: 40,
           ),
@@ -169,7 +187,7 @@ class MainScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        S.welcome,
+                        '${S.welcome} $_username', // ✅ مرحبا + اسم المستخدم
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 17,
@@ -177,15 +195,7 @@ class MainScreen extends StatelessWidget {
                           decoration: TextDecoration.none,
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Empire Automation',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.8),
-                          fontSize: 11,
-                          decoration: TextDecoration.none,
-                        ),
-                      ),
+                      // ✅ شيلنا Empire Automation
                     ],
                   ),
                 ),
@@ -214,19 +224,19 @@ class MainScreen extends StatelessWidget {
       crossAxisCount: 2,
       mainAxisSpacing: 14,
       crossAxisSpacing: 14,
-      childAspectRatio: 0.92,
+      childAspectRatio: 1.2, // ✅ صغرنا الخانات
       children: [
         FadeSlideIn(
           delay: const Duration(milliseconds: 200),
           child: EnterTile(
             icon: Icons.swap_horiz_rounded,
             title: S.transferTroops,
-            subtitle: S.transferDesc,
+            // ✅ شيلنا subtitle
             gradient: AppTheme.primaryGradient,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => TransferScreen(client: client)),
+                  builder: (_) => TransferScreen(client: widget.client)),
             ),
           ),
         ),
@@ -235,12 +245,11 @@ class MainScreen extends StatelessWidget {
           child: EnterTile(
             icon: Icons.military_tech_rounded,
             title: S.trainTroops,
-            subtitle: S.trainDesc,
             gradient: AppTheme.secondaryGradient,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => TrainingScreen(client: client)),
+                  builder: (_) => TrainingScreen(client: widget.client)),
             ),
           ),
         ),
@@ -249,12 +258,11 @@ class MainScreen extends StatelessWidget {
           child: EnterTile(
             icon: Icons.local_shipping_rounded,
             title: S.smuggleTroops,
-            subtitle: S.smuggleDesc,
             gradient: AppTheme.cosmosGradient,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => SmuggleScreen(client: client)),
+                  builder: (_) => SmuggleScreen(client: widget.client)),
             ),
           ),
         ),
@@ -263,12 +271,11 @@ class MainScreen extends StatelessWidget {
           child: EnterTile(
             icon: Icons.people_alt_rounded,
             title: S.commanders,
-            subtitle: S.cmdDesc,
             gradient: AppTheme.orangeGradient,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => CommandersScreen(client: client)),
+                  builder: (_) => CommandersScreen(client: widget.client)),
             ),
           ),
         ),
@@ -277,12 +284,11 @@ class MainScreen extends StatelessWidget {
           child: EnterTile(
             icon: Icons.analytics_rounded,
             title: S.statsTitle,
-            subtitle: S.statsDesc,
             gradient: AppTheme.successGradient,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => StatsScreen(client: client)),
+                  builder: (_) => StatsScreen(client: widget.client)),
             ),
           ),
         ),
@@ -291,12 +297,11 @@ class MainScreen extends StatelessWidget {
           child: EnterTile(
             icon: Icons.notifications_active_rounded,
             title: S.notificationsTitle,
-            subtitle: S.notificationsDesc,
             gradient: AppTheme.dangerGradient,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => NotificationsScreen(client: client)),
+                  builder: (_) => NotificationsScreen(client: widget.client)),
             ),
           ),
         ),
@@ -307,7 +312,7 @@ class MainScreen extends StatelessWidget {
   Widget _footer(BuildContext context) {
     return Center(
       child: Text(
-        'KAGENO',
+        'SmokJ', // ✅ تم التغيير
         style: TextStyle(
           color: AppTheme.subTextColor(context).withOpacity(0.5),
           fontSize: 11,

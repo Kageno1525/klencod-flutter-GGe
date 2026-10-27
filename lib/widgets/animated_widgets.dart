@@ -280,7 +280,6 @@ class InfoChip extends StatelessWidget {
 class EnterTile extends StatelessWidget {
   final IconData icon;
   final String title;
-  final String subtitle;
   final Gradient gradient;
   final VoidCallback onTap;
 
@@ -288,7 +287,6 @@ class EnterTile extends StatelessWidget {
     super.key,
     required this.icon,
     required this.title,
-    required this.subtitle,
     required this.gradient,
     required this.onTap,
   });
@@ -318,7 +316,8 @@ class EnterTile extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.all(18),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.center, // سنترنا العناصر
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Container(
                       width: 52,
@@ -331,26 +330,16 @@ class EnterTile extends StatelessWidget {
                       ),
                       child: Icon(icon, color: Colors.white, size: 28),
                     ),
-                    const Spacer(),
+                    const SizedBox(height: 14),
                     Text(
                       title,
+                      textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
-                        fontSize: 17,
+                        fontSize: 15, // صغرنا الخط شوية
                         decoration: TextDecoration.none,
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.85),
-                        fontSize: 12,
-                        decoration: TextDecoration.none,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),

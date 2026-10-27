@@ -96,6 +96,7 @@ class GgeClient {
   bool _reconnecting = false;
   bool _appForeground = true;
   DateTime? _lastRxTime;
+  bool _networkWaitActive = false; // ✅ عشان نمنع التعارض
 
   int? _cachedPlayerId;
   final Map<int, AttackAlert> _latestAlertByMid = {};
@@ -116,12 +117,9 @@ class GgeClient {
   static bool _isPlausibleAllianceId(int? aid) =>
       aid != null && aid > 0 && aid < _maxPlausibleAllianceId;
 
-  // ═══ Barracks Levels & Units ═══
+  // ═══ Barracks Levels per castle ═══
   final Map<int, int> _barracksLevelByCastle = {};
   int? getBarracksLevel(int areaId) => _barracksLevelByCastle[areaId];
-
-  final Set<int> _unlockedUnitIds = {};
-  Set<int> get unlockedUnitIds => _unlockedUnitIds;
 
   late final CastleService castleService = CastleService(this);
   late final AllianceService allianceService = AllianceService(this);
@@ -196,28 +194,6 @@ class GgeClient {
             }
           }
         }
-
-        // ✅ جلب الوحدات المتاحة من gpc
-        final gpc = data['gpc'];
-        if (gpc is Map) {
-          final areas = gpc['A'] as List?;
-          if (areas != null) {
-            _unlockedUnitIds.clear();
-            for (final area in areas) {
-              if (area is! Map) continue;
-              final u = area['U'];
-              if (u is! Map) continue;
-              final unlocked = u['U'] as List?;
-              if (unlocked != null) {
-                for (final id in unlocked) {
-                  final wod = _asIntOrNull(id);
-                  if (wod != null && wod > 0) _unlockedUnitIds.add(wod);
-                }
-              }
-            }
-            TrafficLog.add('ST', '✅ Unlocked units from gpc: ${_unlockedUnitIds.length} units');
-          }
-        }
       } catch (e) {
         TrafficLog.add('ER', '❌ gbd parse error: $e');
       }
@@ -236,7 +212,7 @@ class GgeClient {
             if (bg != null) {
               for (final b in bg) {
                 if (b is List && b.length >= 2) {
-                  if (_asInt(b[0]) == 200) { // 200 = Barracks
+                  if (_asInt(b[0]) == 200) {
                     final level = _asInt(b[1]);
                     _barracksLevelByCastle[areaId] = level;
                     TrafficLog.add('ST', '✅ Barracks Level: $level (Area: $areaId)');
@@ -837,16 +813,67 @@ class GgeClient {
     _status('Init sequence done ✓');
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  ✅ HERO UPDATE: No spam on reconnection
+  // ═══════════════════════════════════════════════════════
+  
+  Future<bool> _hasInternet() async {
+    try {
+      final result = await InternetAddress.lookup('google.com')
+          .timeout(const Duration(seconds: 3));
+      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
   void _scheduleReconnect() {
     if (_disposed) return;
     if (!_appForeground && !allowBackgroundReconnect) return;
-    Future.delayed(const Duration(seconds: 3), () {
-      if (_disposed) return;
-      if (_connected) return;
+    if (!isLoggedIn) return;
+    if (_networkWaitActive) return; // بنمنع الـ spam
+
+    // بنستنى 3 ثواني عشان نتأكد من الحالة
+    Future.delayed(const Duration(seconds: 3), () async {
+      if (_disposed || _connected) return;
       if (!_appForeground && !allowBackgroundReconnect) return;
       if (!isLoggedIn) return;
-      autoReconnect();
+
+      // الحالة 1: النت قاطع → نستنى لما يرجع
+      final hasNet = await _hasInternet();
+      if (!hasNet) {
+        _status('⚠️ Network lost. Waiting for internet to return...');
+        _networkWaitActive = true;
+        _waitForNetworkAndReconnect();
+      } else {
+        // الحالة 2: النت شغال بس الاتصال اتقطع → غالباً انت فتحت اللعبة
+        _status('🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
+        _status('👉 Tap "Login" to reconnect manually when done.');
+      }
     });
+  }
+
+  Future<void> _waitForNetworkAndReconnect() async {
+    while (!_disposed && !_connected && isLoggedIn) {
+      await Future.delayed(const Duration(seconds: 10));
+      if (_disposed || _connected || !isLoggedIn) break;
+
+      final hasNet = await _hasInternet();
+      if (!hasNet) continue;
+
+      _status('🔄 Internet restored. Reconnecting...');
+      final ok = await autoReconnect();
+      if (ok) {
+        _networkWaitActive = false;
+        _status('✅ Reconnected successfully');
+        return;
+      } else {
+        _networkWaitActive = false;
+        _status('❌ Reconnect attempt failed. Please tap "Login" manually.');
+        return;
+      }
+    }
+    _networkWaitActive = false;
   }
 
   void onAppLifecycleChanged(AppLifecycleState state) {
@@ -857,9 +884,9 @@ class GgeClient {
       final since = _lastRxTime == null
           ? const Duration(days: 1)
           : now.difference(_lastRxTime!);
-      if (!_connected || since.inSeconds > 90) {
-        _status('App resumed — reconnecting...');
-        autoReconnect();
+      if (!_connected && !_networkWaitActive) {
+        _status('App resumed — checking connection...');
+        _scheduleReconnect();
       }
     } else {
       _status('App paused');
@@ -1172,6 +1199,7 @@ class GgeClient {
     _disposed = true;
     _pollingTimer?.cancel();
     _backgroundPollingActive = false;
+    _networkWaitActive = false;
     await _sub?.cancel();
     try {
       await _channel?.sink.close();

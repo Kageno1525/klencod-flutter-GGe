@@ -128,14 +128,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
       await AppStorage.setLoggedIn(true);
 
-      // ═══ Notifications listening ═══
       NotificationsService.startListening();
 
-      // ═══ FIX: fire-and-forget BackgroundService ═══
-      // (don't await — might show battery dialog and hang)
-      BackgroundService.start().catchError((e) {
-        // ignore errors from background service
-      });
+      BackgroundService.start().catchError((e) {});
 
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -193,7 +188,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       FadeSlideIn(
                         delay: const Duration(milliseconds: 500),
                         child: Text(
-                          'KAGENO',
+                          'SmokJ', // ✅ تم التغيير
                           style: TextStyle(
                             color: AppTheme.subTextColor(context)
                                 .withOpacity(0.4),
@@ -258,7 +253,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         const SizedBox(height: 20),
         Text(
-          S.appName,
+          S.appName, // 'GGE'
           style: TextStyle(
             fontSize: 30,
             fontWeight: FontWeight.w800,
@@ -267,16 +262,7 @@ class _LoginScreenState extends State<LoginScreen> {
             decoration: TextDecoration.none,
           ),
         ),
-        const SizedBox(height: 6),
-        Text(
-          'Empire Automation',
-          style: TextStyle(
-            fontSize: 13,
-            color: AppTheme.subTextColor(context),
-            fontWeight: FontWeight.w500,
-            decoration: TextDecoration.none,
-          ),
-        ),
+        // ✅ تم شيل Empire Automation
       ],
     );
   }
