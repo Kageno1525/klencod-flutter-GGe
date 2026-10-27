@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // ✅ إضافة
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
@@ -33,7 +34,6 @@ void main() async {
     debugPrint('[Init] NotificationsService: $e');
   }));
 
-  // ═══ CRITICAL: listen to BG isolate messages ═══
   try {
     FlutterForegroundTask.addTaskDataCallback((data) {
       if (data is String) {
@@ -69,6 +69,7 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _isDark = widget.initialDark;
     _locale = S.current;
+    unawaited(_updateForegroundState(true)); // ✅ التطبيق فتح
     unawaited(_logBgWsStatus());
   }
 
@@ -81,9 +82,22 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     GgeClient().onAppLifecycleChanged(state);
+    
+    // ✅ حفظ حالة التطبيق (مفتوح/مقفول) عشان الخدمة الخلفية
+    unawaited(_updateForegroundState(state == AppLifecycleState.resumed));
+
     if (state == AppLifecycleState.resumed) {
       unawaited(_logBgWsStatus());
     }
+  }
+
+  // ✅ دالة جديدة
+  Future<void> _updateForegroundState(bool isForeground) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('is_app_foreground', isForeground);
+      TrafficLog.add('ST', '[Lifecycle] App Foreground: $isForeground');
+    } catch (_) {}
   }
 
   Future<void> _logBgWsStatus() async {

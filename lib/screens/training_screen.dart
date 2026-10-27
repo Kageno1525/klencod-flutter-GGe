@@ -7,13 +7,14 @@ import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SlotInfo {
-  final int rut; // الوقت المتبقي بالثواني
-  final int units; // عدد الجنود
-  final int? wodId; // نوع الجندي
+  final int rut;
+  final int units;
+  final int? wodId;
   final DateTime fetchedAt;
-  final bool isTraining; // هل دي الخانة الشغالة؟
+  final bool isTraining;
 
   SlotInfo({
     required this.rut,
@@ -35,7 +36,7 @@ class SlotInfo {
 
   String get timeLabel {
     if (isLocked) return 'مقفول';
-    if (isFree) return 'فاضي';
+    if (isFree) return 'متاحة';
     final s = remainingSeconds;
     if (s <= 0) return 'خلص';
     final h = s ~/ 3600;
@@ -57,6 +58,7 @@ class TrainingScreen extends StatefulWidget {
 
 class _TrainingScreenState extends State<TrainingScreen> {
   static const int _maxPerBatch = 80;
+  bool _isAutoMode = false;
 
   List<OwnedCastle> _castles = [];
   Map<int, UnitCatalogEntry> _catalog = {};
@@ -74,16 +76,35 @@ class _TrainingScreenState extends State<TrainingScreen> {
   Timer? _tickTimer;
   int _totalTime = 0;
 
+  // ═══ AUTO TRAIN VARIABLES ═══
+  bool _autoEnabled = false;
+  bool _triggerOnSlot = true;
+  bool _triggerOnTime = false;
+  int _timeInterval = 5; 
+  String _timeUnit = 'minutes';
+  bool _useMaxTotal = false;
+  final _maxTotalCtrl = TextEditingController(text: '1000');
+  
+  final Map<int, int> _autoSelectedAmounts = {};
+  final Map<int, TextEditingController> _autoAmountCtrls = {};
+  final Map<int, TextEditingController> _timeCtrl = {};
+  
+  int _autoRotationIndex = 0;
+  int _autoTotalTrained = 0;
+
   @override
   void initState() {
     super.initState();
     _loadAll();
+    _loadAutoSettings();
     _slotsTimer = Timer.periodic(const Duration(seconds: 60), (_) {
       if (mounted) _loadSlots(silent: true);
     });
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && _slots != null && _slots!.any((s) => s.isBusy)) {
-        setState(() {});
+      if (mounted) {
+        if (_slots != null && _slots!.any((s) => s.isBusy)) {
+          setState(() {});
+        }
       }
     });
   }
@@ -93,7 +114,48 @@ class _TrainingScreenState extends State<TrainingScreen> {
     _slotsTimer?.cancel();
     _tickTimer?.cancel();
     _amountCtrl.dispose();
+    _maxTotalCtrl.dispose();
+    for (var c in _autoAmountCtrls.values) { c.dispose(); }
+    for (var c in _timeCtrl.values) { c.dispose(); }
     super.dispose();
+  }
+
+  Future<void> _loadAutoSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _autoEnabled = prefs.getBool('auto_enabled') ?? false;
+      _triggerOnSlot = prefs.getBool('auto_trigger_slot') ?? true;
+      _triggerOnTime = prefs.getBool('auto_trigger_time') ?? false;
+      _timeInterval = prefs.getInt('auto_time_interval') ?? 5;
+      _timeUnit = prefs.getString('auto_time_unit') ?? 'minutes';
+      _useMaxTotal = prefs.getBool('auto_use_max') ?? false;
+      _maxTotalCtrl.text = prefs.getString('auto_max_total') ?? '1000';
+      _autoTotalTrained = prefs.getInt('auto_total_trained') ?? 0;
+      _autoRotationIndex = prefs.getInt('auto_rotation_index') ?? 0;
+      
+      final selectedJson = prefs.getString('auto_selected_units');
+      if (selectedJson != null) {
+        final Map<String, dynamic> decoded = jsonDecode(selectedJson);
+        decoded.forEach((key, val) {
+          final id = int.parse(key);
+          _autoSelectedAmounts[id] = val as int;
+          _autoAmountCtrls[id] = TextEditingController(text: val.toString());
+        });
+      }
+      _timeCtrl['interval'] = TextEditingController(text: _timeInterval.toString());
+    });
+  }
+
+  Future<void> _saveAutoSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    prefs.setBool('auto_enabled', _autoEnabled);
+    prefs.setBool('auto_trigger_slot', _triggerOnSlot);
+    prefs.setBool('auto_trigger_time', _triggerOnTime);
+    prefs.setInt('auto_time_interval', _timeInterval);
+    prefs.setString('auto_time_unit', _timeUnit);
+    prefs.setBool('auto_use_max', _useMaxTotal);
+    prefs.setString('auto_max_total', _maxTotalCtrl.text);
+    prefs.setString('auto_selected_units', jsonEncode(_autoSelectedAmounts));
   }
 
   Future<void> _loadAll() async {
@@ -140,7 +202,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
         timeoutMs: 8000,
         isAction: false,
       );
-      if (mounted) setState(() {}); 
+      if (mounted) setState(() {});
     } catch (e) {
       TrafficLog.add('ER', 'jca fetch error: $e');
     }
@@ -183,6 +245,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
         final tua = ps['TUA'] as num? ?? 0;
         final wid = ps['WID'] as num? ?? 0;
         parsedSlots.add(SlotInfo(rut: rct.toInt(), fetchedAt: now, isTraining: true, units: tua.toInt(), wodId: wid.toInt()));
+      } else {
+        parsedSlots.add(SlotInfo(rut: 0, fetchedAt: now, isTraining: true));
       }
 
       if (qs != null) {
@@ -221,7 +285,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     return _trainable.where((u) => unlocked.contains(u.wodId)).toList();
   }
 
-  Future<void> _train() async {
+  Future<void> _trainManual() async {
     if (_castle == null || _selectedUnit == null) return;
     final amt = int.tryParse(_amountCtrl.text.trim()) ?? 0;
     if (amt <= 0) { _snack(S.error, color: AppTheme.red); return; }
@@ -268,31 +332,76 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       const SizedBox(height: 14),
                       FadeSlideIn(delay: const Duration(milliseconds: 160), child: _slotsCard(context)),
                       const SizedBox(height: 14),
-                      FadeSlideIn(delay: const Duration(milliseconds: 280), child: _unitPicker(context)),
+                      
+                      FadeSlideIn(
+                        delay: const Duration(milliseconds: 200),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: GestureDetector(
+                                onTap: () => setState(() => _isAutoMode = false),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  decoration: BoxDecoration(
+                                    color: !_isAutoMode ? AppTheme.teal.withOpacity(0.2) : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: !_isAutoMode ? AppTheme.teal : Colors.grey.withOpacity(0.3)),
+                                  ),
+                                  child: Center(child: Text('تدريب يدوي', style: TextStyle(color: !_isAutoMode ? AppTheme.teal : AppTheme.subTextColor(context), fontWeight: FontWeight.bold))),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: GestureDetector(
+                                onTap: () => setState(() => _isAutoMode = true),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  decoration: BoxDecoration(
+                                    color: _isAutoMode ? AppTheme.purple.withOpacity(0.2) : Colors.transparent,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: _isAutoMode ? AppTheme.purple : Colors.grey.withOpacity(0.3)),
+                                  ),
+                                  child: Center(child: Text('تدريب تلقائي', style: TextStyle(color: _isAutoMode ? AppTheme.purple : AppTheme.subTextColor(context), fontWeight: FontWeight.bold))),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                       const SizedBox(height: 14),
-                      FadeSlideIn(delay: const Duration(milliseconds: 340), child: _amountInput(context)),
-                      const SizedBox(height: 14),
-                      FadeSlideIn(delay: const Duration(milliseconds: 400), child: _unitPreview(context)),
+
+                      if (!_isAutoMode) ...[
+                        FadeSlideIn(delay: const Duration(milliseconds: 280), child: _unitPickerManual(context)),
+                        const SizedBox(height: 14),
+                        FadeSlideIn(delay: const Duration(milliseconds: 340), child: _amountInputManual(context)),
+                        const SizedBox(height: 14),
+                        FadeSlideIn(delay: const Duration(milliseconds: 400), child: _unitPreviewManual(context)),
+                      ] else ...[
+                        FadeSlideIn(delay: const Duration(milliseconds: 280), child: _autoTrainPanel(context)),
+                      ],
                     ],
                   ),
                 ),
               ],
             ),
           ),
-          Positioned(
-            left: 16, right: 16, bottom: 16,
-            child: FadeSlideIn(
-              delay: const Duration(milliseconds: 500),
-              offset: const Offset(0, 0.2),
-              child: GradientButton(
-                label: S.startTraining,
-                icon: Icons.play_arrow_rounded,
-                gradient: AppTheme.successGradient,
-                loading: _training,
-                onPressed: _selectedUnit != null ? _train : null,
+          
+          if (!_isAutoMode)
+            Positioned(
+              left: 16, right: 16, bottom: 16,
+              child: FadeSlideIn(
+                delay: const Duration(milliseconds: 500),
+                offset: const Offset(0, 0.2),
+                child: GradientButton(
+                  label: S.startTraining,
+                  icon: Icons.play_arrow_rounded,
+                  gradient: AppTheme.successGradient,
+                  loading: _training,
+                  onPressed: _selectedUnit != null ? _trainManual : null,
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -370,16 +479,13 @@ class _TrainingScreenState extends State<TrainingScreen> {
     final slots = _slots;
     final loading = _slotsLoading;
 
-    // الخانة الشغالة (PS)
     final activeSlot = slots?.firstWhere(
       (s) => s.isTraining,
       orElse: () => SlotInfo(rut: 0, fetchedAt: DateTime.now()),
     ) ?? SlotInfo(rut: 0, fetchedAt: DateTime.now());
     
-    // الخانات الخمسة (QS)
     final queueSlots = slots?.where((s) => !s.isTraining).toList() ?? [];
 
-    // حساب الوقت الإجمالي المباشر
     final elapsed = _lastSlotFetch == null ? 0 : DateTime.now().difference(_lastSlotFetch!).inSeconds;
     final liveTotal = (_totalTime - elapsed).clamp(0, 999999);
 
@@ -410,13 +516,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 1. الخانة الشغالة (الشمال)
-                Expanded(
-                  flex: 2,
-                  child: _slotBox(context, activeSlot, isMain: true),
-                ),
+                Expanded(flex: 2, child: _slotBox(context, activeSlot, isMain: true)),
                 const SizedBox(width: 8),
-                // 2. الخمس خانات (اليمين)
                 Expanded(
                   flex: 4,
                   child: Wrap(
@@ -431,7 +532,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            // إجمالي الوقت (مباشر)
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 8),
@@ -489,14 +589,12 @@ class _TrainingScreenState extends State<TrainingScreen> {
           ),
           const SizedBox(height: 4),
           if (isMain) ...[
-            // الخانة الكبيرة (الشغالة)
             Text(s.timeLabel, style: TextStyle(color: c, fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none), textAlign: TextAlign.center),
             if (s.isBusy) ...[
               Text(unitName, style: TextStyle(color: c, fontSize: 10, decoration: TextDecoration.none), maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
               Text('${s.units} جندي', style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
             ]
           ] else ...[
-            // الخانات الصغيرة (الـ 5)
             Text(
               s.isFree ? 'متاحة' : (s.isBusy ? 'مشغولة' : 'مقفولة'),
               style: TextStyle(color: c, fontSize: 9, fontWeight: FontWeight.bold, decoration: TextDecoration.none),
@@ -521,24 +619,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
     return '${s}s';
   }
 
-  Widget _unitPicker(BuildContext context) {
+  Widget _unitPickerManual(BuildContext context) {
     final filtered = _filteredTrainable;
-    
-    if (filtered.isEmpty) {
-      return AppTheme.glassCard(
-        context: context,
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            children: [
-              Icon(Icons.inbox_rounded, color: AppTheme.subTextColor(context), size: 32),
-              const SizedBox(height: 8),
-              Text('لا توجد وحدات متاحة في الحساب', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, decoration: TextDecoration.none)),
-            ],
-          ),
-        ),
-      );
-    }
+    if (filtered.isEmpty) return const SizedBox.shrink();
 
     return AppTheme.glassCard(
       context: context,
@@ -580,7 +663,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  Widget _amountInput(BuildContext context) {
+  Widget _amountInputManual(BuildContext context) {
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
@@ -624,20 +707,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  Widget _stepBtn({required IconData icon, required Color color, required String tooltip, required VoidCallback onTap}) {
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap, borderRadius: BorderRadius.circular(10),
-          child: Container(width: 40, height: 40, decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withOpacity(0.35))), child: Icon(icon, color: color, size: 22)),
-        ),
-      ),
-    );
-  }
-
-  Widget _unitPreview(BuildContext context) {
+  Widget _unitPreviewManual(BuildContext context) {
     if (_selectedUnit == null) return const SizedBox.shrink();
     final u = _selectedUnit!;
     final isRanged = u.role == 'ranged';
@@ -668,6 +738,188 @@ class _TrainingScreenState extends State<TrainingScreen> {
             decoration: BoxDecoration(color: Colors.white.withOpacity(0.22), borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.white.withOpacity(0.2))),
             child: Text('x${_amountCtrl.text}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, decoration: TextDecoration.none)),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stepBtn({required IconData icon, required Color color, required String tooltip, required VoidCallback onTap}) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap, borderRadius: BorderRadius.circular(10),
+          child: Container(width: 40, height: 40, decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withOpacity(0.35))), child: Icon(icon, color: color, size: 22)),
+        ),
+      ),
+    );
+  }
+
+  Widget _autoTrainPanel(BuildContext context) {
+    final filtered = _filteredTrainable;
+
+    return AppTheme.glassCard(
+      context: context,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.autorenew_rounded, color: AppTheme.purple, size: 20),
+              const SizedBox(width: 8),
+              Text('التدريب التلقائي', style: TextStyle(color: AppTheme.textColor(context), fontWeight: FontWeight.bold, fontSize: 14, decoration: TextDecoration.none)),
+              const Spacer(),
+              Switch(
+                value: _autoEnabled,
+                onChanged: (v) {
+                  setState(() => _autoEnabled = v);
+                  _saveAutoSettings();
+                },
+                activeColor: AppTheme.purple,
+              ),
+            ],
+          ),
+          const Divider(),
+          
+          Text('شروط التشغيل:', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+          CheckboxListTile(
+            title: Text('عند توفر خانة فارغة', style: TextStyle(color: AppTheme.textColor(context), fontSize: 13, decoration: TextDecoration.none)),
+            value: _triggerOnSlot,
+            activeColor: AppTheme.purple,
+            onChanged: (v) { setState(() => _triggerOnSlot = v ?? true); _saveAutoSettings(); },
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+          CheckboxListTile(
+            title: Text('حسب الوقت', style: TextStyle(color: AppTheme.textColor(context), fontSize: 13, decoration: TextDecoration.none)),
+            value: _triggerOnTime,
+            activeColor: AppTheme.purple,
+            onChanged: (v) { setState(() => _triggerOnTime = v ?? false); _saveAutoSettings(); },
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+          if (_triggerOnTime)
+            Padding(
+              padding: const EdgeInsets.only(right: 32, bottom: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _timeCtrl['interval'],
+                      keyboardType: TextInputType.number,
+                      style: TextStyle(color: AppTheme.textColor(context)),
+                      decoration: const InputDecoration(isDense: true, hintText: 'الوقت'),
+                      onChanged: (v) { _timeInterval = int.tryParse(v) ?? 5; _saveAutoSettings(); },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  DropdownButton<String>(
+                    value: _timeUnit,
+                    dropdownColor: Theme.of(context).colorScheme.surface,
+                    items: const [
+                      DropdownMenuItem(value: 'seconds', child: Text('ثواني')),
+                      DropdownMenuItem(value: 'minutes', child: Text('دقائق')),
+                      DropdownMenuItem(value: 'hours', child: Text('ساعات')),
+                    ],
+                    onChanged: (v) { setState(() => _timeUnit = v ?? 'minutes'); _saveAutoSettings(); },
+                  ),
+                ],
+              ),
+            ),
+          
+          const Divider(),
+          CheckboxListTile(
+            title: Text('تحديد أقصى عدد للتدريب', style: TextStyle(color: AppTheme.textColor(context), fontSize: 13, decoration: TextDecoration.none)),
+            value: _useMaxTotal,
+            activeColor: AppTheme.purple,
+            onChanged: (v) { setState(() => _useMaxTotal = v ?? false); _saveAutoSettings(); },
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+          if (_useMaxTotal) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _maxTotalCtrl,
+                      keyboardType: TextInputType.number,
+                      style: TextStyle(color: AppTheme.textColor(context)),
+                      decoration: const InputDecoration(isDense: true, hintText: 'أقصى عدد'),
+                      onChanged: (_) => _saveAutoSettings(),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text('تم تدريب: $_autoTotalTrained', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, decoration: TextDecoration.none)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+
+          const Divider(),
+          Text('الوحدات المطلوبة:', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+          const SizedBox(height: 8),
+          ...filtered.map((u) {
+            final isSelected = _autoSelectedAmounts.containsKey(u.wodId);
+            if (!_autoAmountCtrls.containsKey(u.wodId)) {
+              _autoAmountCtrls[u.wodId] = TextEditingController(text: '10');
+            }
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isSelected ? AppTheme.purple.withOpacity(0.1) : Colors.transparent,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: isSelected ? AppTheme.purple.withOpacity(0.5) : Colors.grey.withOpacity(0.2)),
+              ),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: isSelected,
+                    activeColor: AppTheme.purple,
+                    onChanged: (v) {
+                      setState(() {
+                        if (v == true) {
+                          _autoSelectedAmounts[u.wodId] = int.tryParse(_autoAmountCtrls[u.wodId]!.text) ?? 10;
+                        } else {
+                          _autoSelectedAmounts.remove(u.wodId);
+                        }
+                      });
+                      _saveAutoSettings();
+                    },
+                  ),
+                  Expanded(
+                    child: Text(S.unitName(u.displayName), style: TextStyle(color: AppTheme.textColor(context), fontSize: 13, decoration: TextDecoration.none)),
+                  ),
+                  if (isSelected)
+                    SizedBox(
+                      width: 60,
+                      child: TextField(
+                        controller: _autoAmountCtrls[u.wodId],
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        style: TextStyle(color: AppTheme.textColor(context), fontWeight: FontWeight.bold),
+                        decoration: const InputDecoration(isDense: true, hintText: 'الكمية'),
+                        onChanged: (v) {
+                          _autoSelectedAmounts[u.wodId] = int.tryParse(v) ?? 10;
+                          _saveAutoSettings();
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }),
+          
+          if (_autoEnabled && _autoSelectedAmounts.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Text('يرجى اختيار وحدة واحدة على الأقل للتدريب التلقائي.', style: TextStyle(color: AppTheme.red, fontSize: 12, decoration: TextDecoration.none)),
+            ),
         ],
       ),
     );

@@ -159,10 +159,8 @@ class LordMovement {
   bool get isArrived => liveRemainingSeconds <= 0;
   bool get isStationed => type == 1 && isArrived;
 
-  DateTime get startedAt =>
-      fetchedAt.subtract(Duration(seconds: paidTime));
-  DateTime get arrivalAt =>
-      fetchedAt.add(Duration(seconds: timeRemaining));
+  DateTime get startedAt => fetchedAt.subtract(Duration(seconds: paidTime));
+  DateTime get arrivalAt => fetchedAt.add(Duration(seconds: timeRemaining));
 
   static String _fmt(DateTime t) =>
       '${t.hour.toString().padLeft(2, '0')}:'
@@ -312,17 +310,38 @@ class AllyMember {
 
 // ═══════════════════════════════════════════
 const Map<int, String> ggeErrors = {
-  0: 'Success', 1: 'General error', 2: 'Invalid parameter', 5: 'Invalid object',
-  27: 'Account is banned', 50: 'Wrong mode', 55: 'Not enough resources',
-  87: 'Missing required building', 88: 'Too much units', 93: 'Exceeds max count',
-  95: 'Cooling down', 101: 'Missing units', 108: 'Unknown movement',
-  114: 'Alliance not found', 120: 'Level too low', 121: 'Travel time too long',
-  148: 'Already transferring', 175: 'Invalid kingdom', 178: 'Kingdom not available',
-  180: 'Max kingdom goods movements', 181: 'Max kingdom army movements',
-  182: 'Kingdom movements not available', 203: 'Invalid area',
-  212: 'Castle has movements', 219: 'Invalid lord id', 222: 'Lord in movement',
-  233: 'Target not owned', 256: 'Lord is used', 404: 'Lord needed',
-  409: 'Invalid login token', 414: 'Minuteskip blocked', 453: 'Retry wait',
+  0: 'Success',
+  1: 'General error',
+  2: 'Invalid parameter',
+  5: 'Invalid object',
+  27: 'Account is banned',
+  50: 'Wrong mode',
+  55: 'Not enough resources',
+  87: 'Missing required building',
+  88: 'Too much units',
+  93: 'Exceeds max count',
+  95: 'Cooling down',
+  101: 'Missing units',
+  108: 'Unknown movement',
+  114: 'Alliance not found',
+  120: 'Level too low',
+  121: 'Travel time too long',
+  148: 'Already transferring',
+  175: 'Invalid kingdom',
+  178: 'Kingdom not available',
+  180: 'Max kingdom goods movements',
+  181: 'Max kingdom army movements',
+  182: 'Kingdom movements not available',
+  203: 'Invalid area',
+  212: 'Castle has movements',
+  219: 'Invalid lord id',
+  222: 'Lord in movement',
+  233: 'Target not owned',
+  256: 'Lord is used',
+  404: 'Lord needed',
+  409: 'Invalid login token',
+  414: 'Minuteskip blocked',
+  453: 'Retry wait',
 };
 
 String errorName(int code) => ggeErrors[code] ?? 'Error $code';
@@ -506,17 +525,13 @@ class AttackAlert {
 
   String? get attackerAlly => attackerAlliance;
 
-  DateTime get startedAt =>
-      receivedAt.subtract(Duration(seconds: paidTime));
-  DateTime get arrivalAt =>
-      receivedAt.add(Duration(seconds: remainingSeconds));
+  DateTime get startedAt => receivedAt.subtract(Duration(seconds: paidTime));
+  DateTime get arrivalAt => receivedAt.add(Duration(seconds: remainingSeconds));
 
   bool get isCancelled => cancelledAt != null;
-  bool get isArrived =>
-      !isCancelled && DateTime.now().isAfter(arrivalAt);
+  bool get isArrived => !isCancelled && DateTime.now().isAfter(arrivalAt);
 
-  int get remainingSeconds =>
-      (totalTime - paidTime).clamp(0, 999999);
+  int get remainingSeconds => (totalTime - paidTime).clamp(0, 999999);
 
   Duration get remainingNow {
     if (isCancelled) return Duration.zero;
@@ -550,8 +565,7 @@ class AttackAlert {
 
   String get startedAtLabel => _fmt(startedAt);
   String get arrivalAtLabel => _fmt(arrivalAt);
-  String? get cancelledAtLabel =>
-      cancelledAt == null ? null : _fmt(cancelledAt!);
+  String? get cancelledAtLabel => cancelledAt == null ? null : _fmt(cancelledAt!);
 
   String get remainingLabel {
     final s = remainingSeconds;
