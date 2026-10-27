@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gge/gge_client.dart';
@@ -74,6 +75,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
   DateTime? _lastSlotFetch;
   Timer? _slotsTimer;
   Timer? _tickTimer;
+  Timer? _autoTimer; // ✅ تايمر التدريب التلقائي في الواجهة
   int _totalTime = 0;
 
   // ═══ AUTO TRAIN VARIABLES ═══
@@ -87,20 +89,27 @@ class _TrainingScreenState extends State<TrainingScreen> {
   
   final Map<int, int> _autoSelectedAmounts = {};
   final Map<int, TextEditingController> _autoAmountCtrls = {};
-  // ✅ التعديل هنا: غيرنا المفتاح ليكون String بدل int
   final Map<String, TextEditingController> _timeCtrl = {};
   
   int _autoRotationIndex = 0;
   int _autoTotalTrained = 0;
+
+  // متغيرات الحماية من البان
+  DateTime _lastActionTime = DateTime.now();
+  bool _isAutoSending = false;
 
   @override
   void initState() {
     super.initState();
     _loadAll();
     _loadAutoSettings();
+    
+    // تحديث الخانات كل 60 ثانية
     _slotsTimer = Timer.periodic(const Duration(seconds: 60), (_) {
       if (mounted) _loadSlots(silent: true);
     });
+    
+    // تحديث الواجهة كل ثانية (للعدادات)
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         if (_slots != null && _slots!.any((s) => s.isBusy)) {
@@ -108,18 +117,138 @@ class _TrainingScreenState extends State<TrainingScreen> {
         }
       }
     });
+
+    // ✅ محرك التدريب التلقائي (شغال في الواجهة)
+    _startFrontendAutoTrainer();
   }
 
   @override
   void dispose() {
     _slotsTimer?.cancel();
     _tickTimer?.cancel();
+    _autoTimer?.cancel();
     _amountCtrl.dispose();
     _maxTotalCtrl.dispose();
     for (var c in _autoAmountCtrls.values) { c.dispose(); }
     for (var c in _timeCtrl.values) { c.dispose(); }
     super.dispose();
   }
+
+  // ═══════════════════════════════════════════════════════
+  //  FRONTEND AUTO TRAIN LOGIC (Anti-Ban & Throttle)
+  // ═══════════════════════════════════════════════════════
+  
+  Future<void> _throttle() async {
+    final now = DateTime.now();
+    final diff = now.difference(_lastActionTime).inMilliseconds;
+    if (diff < 5500) { 
+      final wait = 5500 - diff + Random().nextInt(1500);
+      await Future.delayed(Duration(milliseconds: wait));
+    } else {
+      await Future.delayed(Duration(milliseconds: Random().nextInt(1000)));
+    }
+    _lastActionTime = DateTime.now();
+  }
+
+  void _startFrontendAutoTrainer() {
+    _autoTimer?.cancel();
+    _autoTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
+      if (!_isAutoMode || !_autoEnabled || _isAutoSending) return;
+      if (_castle == null || _autoSelectedAmounts.isEmpty) return;
+
+      // التحقق من أقصى عدد
+      if (_useMaxTotal) {
+        final maxTotal = int.tryParse(_maxTotalCtrl.text) ?? 0;
+        if (_autoTotalTrained >= maxTotal) {
+          setState(() => _autoEnabled = false);
+          _saveAutoSettings();
+          _snack('تم الوصول للحد الأقصى للتدريب التلقائي', color: AppTheme.orange);
+          return;
+        }
+      }
+
+      bool shouldTrain = false;
+
+      // شرط الخانات
+      if (_triggerOnSlot && _slots != null) {
+        final hasFreeSlot = _slots!.any((s) => s.isFree);
+        if (hasFreeSlot) shouldTrain = true;
+      }
+
+      // شرط الوقت
+      if (_triggerOnTime) {
+        final prefs = await SharedPreferences.getInstance();
+        final lastTrainStr = prefs.getString('auto_last_train_time');
+        if (lastTrainStr == null) {
+          shouldTrain = true;
+        } else {
+          final lastTrain = DateTime.parse(lastTrainStr);
+          int intervalSeconds = _timeInterval;
+          if (_timeUnit == 'minutes') intervalSeconds *= 60;
+          if (_timeUnit == 'hours') intervalSeconds *= 3600;
+          
+          if (DateTime.now().difference(lastTrain).inSeconds >= intervalSeconds) {
+            shouldTrain = true;
+          }
+        }
+      }
+
+      if (shouldTrain) {
+        await _executeFrontendAutoTrain();
+      }
+    });
+  }
+
+  Future<void> _executeFrontendAutoTrain() async {
+    _isAutoSending = true;
+    final validUnits = _autoSelectedAmounts.keys.where((id) => 
+        widget.client.unlockedUnitIds.contains(id)).toList();
+    
+    if (validUnits.isEmpty) {
+      _isAutoSending = false;
+      return;
+    }
+
+    if (_autoRotationIndex >= validUnits.length) _autoRotationIndex = 0;
+    final wodId = validUnits[_autoRotationIndex];
+    final amount = _autoSelectedAmounts[wodId] ?? 10;
+
+    try {
+      await _throttle(); // ✅ التأخير العشوائي قبل الإرسال
+
+      final res = await widget.client.trainUnits(
+        areaId: _castle!.areaId,
+        wodId: wodId,
+        amount: amount,
+      );
+
+      if (res.success) {
+        setState(() {
+          _autoTotalTrained += amount;
+          _autoRotationIndex = (_autoRotationIndex + 1) % validUnits.length;
+        });
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auto_last_train_time', DateTime.now().toIso8601String());
+        await prefs.setInt('auto_total_trained', _autoTotalTrained);
+        await prefs.setInt('auto_rotation_index', _autoRotationIndex);
+        
+        TrafficLog.add('ST', '[AutoTrain] Success WID=$wodId AMT=$amount');
+        await _loadSlots(force: true);
+      } else {
+        // لو فشل، بنأخر المحاولة الجاية
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auto_last_train_time', DateTime.now().toIso8601String());
+        TrafficLog.add('ER', '[AutoTrain] Failed WID=$wodId: ${res.error}');
+      }
+    } catch (e) {
+      TrafficLog.add('ER', '[AutoTrain] Error: $e');
+    } finally {
+      await Future.delayed(const Duration(seconds: 3));
+      _isAutoSending = false;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
 
   Future<void> _loadAutoSettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -293,6 +422,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (amt > _maxPerBatch) { _snack(S.isAr ? 'الحد الأقصى $_maxPerBatch' : 'Max $_maxPerBatch', color: AppTheme.orange); return; }
 
     setState(() => _training = true);
+    await _throttle(); // حماية للتدريب اليدوي كمان
     final result = await widget.client.trainUnits(areaId: _castle!.areaId, wodId: _selectedUnit!.wodId, amount: amt);
 
     if (!mounted) return;
@@ -864,6 +994,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
           const Divider(),
           Text('الوحدات المطلوبة:', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
           const SizedBox(height: 8),
+          
+          // ✅ تصميم جديد ومظبوط لخانة العدد
           ...filtered.map((u) {
             final isSelected = _autoSelectedAmounts.containsKey(u.wodId);
             if (!_autoAmountCtrls.containsKey(u.wodId)) {
@@ -871,44 +1003,97 @@ class _TrainingScreenState extends State<TrainingScreen> {
             }
             return Container(
               margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
                 color: isSelected ? AppTheme.purple.withOpacity(0.1) : Colors.transparent,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: isSelected ? AppTheme.purple.withOpacity(0.5) : Colors.grey.withOpacity(0.2)),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Checkbox(
-                    value: isSelected,
-                    activeColor: AppTheme.purple,
-                    onChanged: (v) {
-                      setState(() {
-                        if (v == true) {
-                          _autoSelectedAmounts[u.wodId] = int.tryParse(_autoAmountCtrls[u.wodId]!.text) ?? 10;
-                        } else {
-                          _autoSelectedAmounts.remove(u.wodId);
-                        }
-                      });
-                      _saveAutoSettings();
-                    },
-                  ),
-                  Expanded(
-                    child: Text(S.unitName(u.displayName), style: TextStyle(color: AppTheme.textColor(context), fontSize: 13, decoration: TextDecoration.none)),
-                  ),
-                  if (isSelected)
-                    SizedBox(
-                      width: 60,
-                      child: TextField(
-                        controller: _autoAmountCtrls[u.wodId],
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                        style: TextStyle(color: AppTheme.textColor(context), fontWeight: FontWeight.bold),
-                        decoration: const InputDecoration(isDense: true, hintText: 'الكمية'),
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: isSelected,
+                        activeColor: AppTheme.purple,
                         onChanged: (v) {
-                          _autoSelectedAmounts[u.wodId] = int.tryParse(v) ?? 10;
+                          setState(() {
+                            if (v == true) {
+                              _autoSelectedAmounts[u.wodId] = int.tryParse(_autoAmountCtrls[u.wodId]!.text) ?? 10;
+                            } else {
+                              _autoSelectedAmounts.remove(u.wodId);
+                            }
+                          });
                           _saveAutoSettings();
                         },
+                      ),
+                      Expanded(
+                        child: Text(S.unitName(u.displayName), style: TextStyle(color: AppTheme.textColor(context), fontSize: 13, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+                      ),
+                    ],
+                  ),
+                  if (isSelected)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8, right: 40),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 40,
+                              child: TextField(
+                                controller: _autoAmountCtrls[u.wodId],
+                                keyboardType: TextInputType.number,
+                                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: AppTheme.textColor(context), fontSize: 16, fontWeight: FontWeight.bold),
+                                decoration: InputDecoration(
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                                  filled: true,
+                                  fillColor: AppTheme.isDark(context) ? Colors.black26 : Colors.grey.shade200,
+                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                                ),
+                                onChanged: (v) {
+                                  _autoSelectedAmounts[u.wodId] = int.tryParse(v) ?? 10;
+                                  _saveAutoSettings();
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // زرار 80
+                          InkWell(
+                            onTap: () {
+                              _autoAmountCtrls[u.wodId]!.text = '80';
+                              _autoSelectedAmounts[u.wodId] = 80;
+                              _saveAutoSettings();
+                              setState(() {});
+                            },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(color: AppTheme.green.withOpacity(0.2), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.green.withOpacity(0.4))),
+                              child: const Text('80', style: TextStyle(color: AppTheme.green, fontWeight: FontWeight.bold)),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          // زرار تصفير
+                          InkWell(
+                            onTap: () {
+                              _autoAmountCtrls[u.wodId]!.text = '0';
+                              _autoSelectedAmounts[u.wodId] = 0;
+                              _saveAutoSettings();
+                              setState(() {});
+                            },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(color: AppTheme.red.withOpacity(0.2), borderRadius: BorderRadius.circular(8), border: Border.all(color: AppTheme.red.withOpacity(0.4))),
+                              child: const Icon(Icons.refresh_rounded, color: AppTheme.red, size: 18),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                 ],
