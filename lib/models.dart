@@ -67,7 +67,6 @@ class UnitCatalogEntry {
         t.contains('Moat');
   }
 
-  // ✅ تم التعديل: بنشيك على isCombat بس عشان نضمن إننا بنقرا كل الجنود من الكتالوج
   bool get isTrainable => isCombat;
 
   String get displayName {

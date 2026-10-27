@@ -22,7 +22,7 @@ class CommandersService {
         id: _asInt(l['ID']),
         visibleIndex: _asInt(l['VIS']),
         factionId: _asInt(l['FID']),
-        name: l['N'] as String?,
+        name: _asString(l['N']), // ✅ قراءة آمنة
       ));
     }
 
@@ -36,7 +36,11 @@ class CommandersService {
       final data = jsonDecode(gamResp.payload!) as Map<String, dynamic>;
       final ownersMap = <int, String>{};
       for (final o in (data['O'] as List? ?? [])) {
-        ownersMap[_asInt(o['OID'])] = (o['N'] as String?) ?? 'Unknown';
+        if (o is Map) {
+          final oid = _asInt(o['OID']);
+          final name = _asString(o['N']) ?? 'Unknown';
+          ownersMap[oid] = name;
+        }
       }
 
       for (final m in (data['M'] as List? ?? [])) {
@@ -63,7 +67,7 @@ class CommandersService {
             myPid != null && targetPid == myPid && movType == 2;
         if (!isOutgoing && !isReturning) continue;
 
-        String targetName = (ta[10] as String?) ?? '';
+        String targetName = _asString(ta.length > 10 ? ta[10] : null) ?? '';
         if (targetName.isEmpty) {
           targetName = ownersMap[targetPid] ?? 'Unknown';
         }
@@ -121,6 +125,7 @@ class CommandersService {
     }
   }
 
+  // ✅ دالة مساعدة لقراءة الأرقام بأمان
   static int _asInt(dynamic v, [int def = 0]) {
     if (v is int) return v;
     if (v is num) return v.toInt();
@@ -134,5 +139,12 @@ class CommandersService {
     if (v is num) return v.toInt();
     if (v is String) return int.tryParse(v);
     return null;
+  }
+
+  // ✅ دالة مساعدة لقراءة النصوص بأمان (حتى لو جت رقم)
+  static String? _asString(dynamic v) {
+    if (v == null) return null;
+    if (v is String) return v;
+    return v.toString();
   }
 }
