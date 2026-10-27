@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import '../gge_client.dart';
 import '../models.dart';
@@ -29,7 +30,38 @@ class SmuggleService {
       lid = free.first.lord.id;
     }
 
+    // ══════════════════════════════════════════════════════════════
+    // ✅ الإصلاح الجوهري: `sdi` قبل `cds`
+    //
+    // `cds` مفيهوش parameter للـ KID، فالسيرفر بيعتمد على الـ
+    // "current kingdom" الافتراضي (غالباً KID 0 من jca).
+    // `sdi` بيقول للسيرفر: "المصدر عند (SX,SY)، الهدف عند (TX,TY)".
+    // السيرفر بيلاقي المصدر في مملكته، ويفهم إن الهدف في نفس
+    // المملكة → `cds` بينجح في كل الخرايط (0/1/2/3/4).
+    // ══════════════════════════════════════════════════════════════
+    TrafficLog.add('ST',
+        '[SDI] SX=${source.x},SY=${source.y} → TX=${target.x},TY=${target.y} '
+        '(srcKID=${source.kingdomId}, tgtKID=${target.kingdomId})');
+
+    _logSdiResponse();
+
     try {
+      conn.sendXt('sdi', jsonEncode({
+        'TX': target.x,
+        'TY': target.y,
+        'SX': source.x,
+        'SY': source.y,
+      }));
+      await Future.delayed(const Duration(milliseconds: 400));
+    } catch (e) {
+      TrafficLog.add('ER', '[SDI] send failed: $e');
+    }
+
+    try {
+      TrafficLog.add('ST',
+          '[CDS] SID=${source.areaId} TX=${target.x},TY=${target.y} '
+          'LID=$lid WT=$stationTime units=${filtered.length}');
+
       final resp = await conn.sendXtAndWait(
         'cds',
         jsonEncode({
@@ -43,13 +75,35 @@ class SmuggleService {
         timeoutMs: 25000,
         isAction: true,
       );
+
+      TrafficLog.add('ST',
+          '[CDS-RESP] result=${resp.resultCode} (${errorName(resp.resultCode)})');
+
       if (resp.resultCode == 0) return TransferResult.ok();
-      if ([222, 256, 404].contains(resp.resultCode)) {
+      if ([222, 256, 404, 219].contains(resp.resultCode)) {
         return TransferResult.fail('ALL_LORDS_BUSY');
       }
-      return TransferResult.fail(errorName(resp.resultCode));
+      return TransferResult.fail(
+          '${errorName(resp.resultCode)} (code ${resp.resultCode})');
     } catch (e) {
       return TransferResult.fail('$e');
     }
+  }
+
+  /// تشخيص فقط: نسجّل رد `sdi` (لو جه) في الـ Traffic Log
+  void _logSdiResponse() {
+    StreamSubscription? sub;
+    Timer? timer;
+    sub = conn.rawStream.listen((m) {
+      if (m.contains('%sdi%')) {
+        TrafficLog.add('ST',
+            '[SDI-RESP] ${m.length > 140 ? '${m.substring(0, 140)}…' : m}');
+        sub?.cancel();
+        timer?.cancel();
+      }
+    });
+    timer = Timer(const Duration(milliseconds: 2500), () {
+      sub?.cancel();
+    });
   }
 }
