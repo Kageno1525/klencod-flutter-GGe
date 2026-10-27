@@ -87,7 +87,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
   
   final Map<int, int> _autoSelectedAmounts = {};
   final Map<int, TextEditingController> _autoAmountCtrls = {};
-  final Map<int, TextEditingController> _timeCtrl = {};
+  // ✅ التعديل هنا: غيرنا المفتاح ليكون String بدل int
+  final Map<String, TextEditingController> _timeCtrl = {};
   
   int _autoRotationIndex = 0;
   int _autoTotalTrained = 0;

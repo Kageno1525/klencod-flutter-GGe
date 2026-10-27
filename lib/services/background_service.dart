@@ -217,7 +217,8 @@ class _GgeTaskHandler extends TaskHandler {
     try { _ws?.add(xml); } catch (_) {}
   }
 
-  void _onMessage(String text) {
+  // ✅ التعديل هنا: أضفنا async عشان await يشتغل
+  Future<void> _onMessage(String text) async {
     if (text.contains('apiOK')) {
       _sendSys('<msg t="sys"><body action="login" r="0"><login z="$_gameServer"><nick><![CDATA[]]></nick><pword><![CDATA[undefined%en%0]]></pword></login></body></msg>');
     } else if (text.contains('joinOK')) {
@@ -230,11 +231,11 @@ class _GgeTaskHandler extends TaskHandler {
       if (text.contains('%lli%1%0%')) {
         _loggedIn = true;
         _log('Login Successful');
-        _saveStatus('ONLINE');
+        await _saveStatus('ONLINE');
         _runInit();
       } else {
         _log('Login Failed: $text');
-        _saveStatus('LOGIN_FAILED');
+        await _saveStatus('LOGIN_FAILED');
       }
     } else if (text.startsWith('%xt%') && text.contains('%jaa%')) {
       try {
