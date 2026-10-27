@@ -9,11 +9,11 @@ import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
 
 class SlotInfo {
-  final int rut;
+  final int rut; // الوقت المتبقي بالثواني
+  final int units; // عدد الجنود
+  final int? wodId; // نوع الجندي
   final DateTime fetchedAt;
-  final bool isTraining;
-  final int units;
-  final int? wodId;
+  final bool isTraining; // هل دي الخانة الشغالة؟
 
   SlotInfo({
     required this.rut,
@@ -72,6 +72,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
   DateTime? _lastSlotFetch;
   Timer? _slotsTimer;
   Timer? _tickTimer;
+  int _totalTime = 0;
 
   @override
   void initState() {
@@ -139,10 +140,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
         timeoutMs: 8000,
         isAction: false,
       );
-      if (mounted) setState(() {
-        final filtered = _filteredTrainable;
-        _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
-      });
+      if (mounted) setState(() {}); // ✅ تحديث الشاشة عشان اللفل يظهر
     } catch (e) {
       TrafficLog.add('ER', 'jca fetch error: $e');
     }
@@ -175,33 +173,42 @@ class _TrainingScreenState extends State<TrainingScreen> {
       final spl = data['spl'] ?? data;
       final ps = spl['PS'] as Map?;
       final qs = spl['QS'] as List?;
-      
+      final tct = spl['TCT'] as num? ?? 0; // إجمالي الوقت
+
       final now = DateTime.now();
       final parsedSlots = <SlotInfo>[];
 
-      // 1. الخانات الأساسية (QS)
+      // الخانة الشغالة (PS)
+      if (ps != null && ps.isNotEmpty) {
+        final rct = ps['RCT'] as num? ?? 0;
+        final tua = ps['TUA'] as num? ?? 0;
+        final wid = ps['WID'] as num? ?? 0;
+        parsedSlots.add(SlotInfo(rut: rct.toInt(), fetchedAt: now, isTraining: true, units: tua.toInt(), wodId: wid.toInt()));
+      }
+
+      // الخانات الخمسة (QS)
       if (qs != null) {
         for (final q in qs) {
           if (q is! Map) continue;
           final si = q['SI'];
           final rut = (si is Map ? si['RUT'] : null) ?? q['RUT'];
+          final wid = q['WID'] as num?; // جلب نوع الجندي من الخانة
+          final tua = q['TUA'] as num?; // جلب عدد الجنود من الخانة
           if (rut is num) {
-            parsedSlots.add(SlotInfo(rut: rut.toInt(), fetchedAt: now));
+            parsedSlots.add(SlotInfo(
+              rut: rut.toInt(),
+              fetchedAt: now,
+              wodId: wid?.toInt(),
+              units: tua?.toInt() ?? 0,
+            ));
           }
         }
-      }
-
-      // 2. الخانة اللي بتتصنع حالياً (PS)
-      if (ps != null && ps.isNotEmpty) {
-        final rct = ps['RCT'] as num? ?? 0;
-        final tua = ps['TUA'] as num? ?? 0;
-        final wid = ps['WID'] as num? ?? 0;
-        parsedSlots.insert(0, SlotInfo(rut: rct.toInt(), fetchedAt: now, isTraining: true, units: tua.toInt(), wodId: wid.toInt()));
       }
 
       if (!mounted) return;
       setState(() {
         _slots = parsedSlots;
+        _totalTime = tct.toInt();
         _slotsLoading = false;
       });
     } catch (e) {
@@ -210,18 +217,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  // ═══ الفلتر المضمون بناءً على الوحدات المتاحة (gpc) ═══
   List<UnitCatalogEntry> get _filteredTrainable {
-    // 1. الوحدات اللي السيرفر مقال إنها مفتوحة
     final unlocked = widget.client.unlockedUnitIds;
-    
-    // 2. لو لسه محملناش البيانات، نرجع فاضي
     if (unlocked.isEmpty) return [];
-
-    // 3. نفلتر الكاتالوج
-    return _trainable.where((u) {
-      return unlocked.contains(u.wodId);
-    }).toList();
+    return _trainable.where((u) => unlocked.contains(u.wodId)).toList();
   }
 
   Future<void> _train() async {
@@ -384,10 +383,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
     final slots = _slots;
     final loading = _slotsLoading;
 
-    // حسبة الخانات
-    int totalSlots = slots?.length ?? 0; // الإجمالي
-    int freeCount = slots?.where((s) => s.isFree).length ?? 0;
-    int busyCount = slots?.where((s) => s.isBusy).length ?? 0;
+    // الخانة الشغالة (PS)
+    final activeSlot = slots?.firstWhere((s) => s.isTraining, orElse: () => SlotInfo(rut: 0, fetchedAt: DateTime.now()));
+    // الخانات الخمسة (QS)
+    final queueSlots = slots?.where((s) => !s.isTraining).toList() ?? [];
 
     return AppTheme.glassCard(
       context: context,
@@ -405,80 +404,129 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 onTap: () => _loadSlots(force: true),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(color: freeCount == 0 ? AppTheme.red.withOpacity(0.15) : AppTheme.teal.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-                  // عرض عدد الخانات الإجمالي اللي جاي من السيرفر
-                  child: Text('$totalSlots خانة', style: TextStyle(color: freeCount == 0 ? AppTheme.red : AppTheme.teal, fontWeight: FontWeight.bold, fontSize: 11, decoration: TextDecoration.none)),
+                  decoration: BoxDecoration(color: AppTheme.teal.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+                  child: Text('تحديث', style: const TextStyle(color: AppTheme.teal, fontWeight: FontWeight.bold, fontSize: 11, decoration: TextDecoration.none)),
                 ),
               ),
             ],
           ),
-          if (slots != null && slots.isNotEmpty) ...[
+          if (slots != null) ...[
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 6, runSpacing: 6,
-              children: slots.map((s) {
-                final isFree = s.isFree;
-                final isBusy = s.isBusy;
-                final isLocked = s.isLocked;
-                Color c = isFree ? AppTheme.green : (isBusy ? AppTheme.orange : AppTheme.subTextColor(context));
-
-                return Container(
-                  width: 65,
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  decoration: BoxDecoration(
-                    color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: c.withOpacity(0.4), width: 1.2),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(isFree ? Icons.check_circle_outline_rounded : (isBusy ? Icons.hourglass_top_rounded : Icons.lock_rounded), color: c, size: 16),
-                      const SizedBox(height: 4),
-                      Text(s.timeLabel, style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
-                      if (s.isTraining && s.wodId != null) ...[
-                        const SizedBox(height: 2),
-                        Text(_catalog[s.wodId]?.displayName != null ? S.unitName(_catalog[s.wodId]!.displayName) : 'شغال', style: TextStyle(color: c, fontSize: 8, decoration: TextDecoration.none), overflow: TextOverflow.ellipsis),
-                        Text('${s.units} جندي', style: TextStyle(color: c, fontSize: 8, decoration: TextDecoration.none)),
-                      ],
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 10),
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _slotStat(context, label: 'فاضي', value: freeCount, color: AppTheme.green),
+                // 1. الخانة الشغالة (الشمال)
+                Expanded(
+                  flex: 2,
+                  child: _slotBox(context, activeSlot, isMain: true),
+                ),
                 const SizedBox(width: 8),
-                _slotStat(context, label: 'مشغول', value: busyCount, color: AppTheme.orange),
-                const Spacer(),
-                Icon(Icons.sync_rounded, size: 12, color: AppTheme.subTextColor(context)),
-                const SizedBox(width: 4),
-                Text('تحديث مباشر', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 9, decoration: TextDecoration.none)),
+                // 2. الخمس خانات (اليمين)
+                Expanded(
+                  flex: 4,
+                  child: Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: queueSlots.take(5).map((s) => SizedBox(
+                      width: (MediaQuery.of(context).size.width - 100) / 5,
+                      child: _slotBox(context, s),
+                    )).toList(),
+                  ),
+                ),
               ],
+            ),
+            const SizedBox(height: 12),
+            // إجمالي الوقت
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppTheme.blue.withOpacity(0.3)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.timer_rounded, size: 16, color: AppTheme.blue),
+                  const SizedBox(width: 6),
+                  Text(
+                    'الوقت الإجمالي: ${_formatTotalTime(_totalTime)}',
+                    style: const TextStyle(color: AppTheme.blue, fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none),
+                  ),
+                ],
+              ),
             ),
           ] else if (!loading) ...[
             const SizedBox(height: 8),
-            Text('لا توجد بيانات', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 11, decoration: TextDecoration.none)),
+            Text('جاري تحميل الخانات...', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 11, decoration: TextDecoration.none)),
           ],
         ],
       ),
     );
   }
 
-  Widget _slotStat(BuildContext context, {required String label, required int value, required Color color}) {
+  Widget _slotBox(BuildContext context, SlotInfo s, {bool isMain = false}) {
+    Color c = s.isFree ? AppTheme.green : (s.isBusy ? AppTheme.orange : AppTheme.subTextColor(context));
+    
+    String unitName = '';
+    if (s.isBusy && s.wodId != null) {
+      final catalogEntry = _catalog[s.wodId];
+      if (catalogEntry != null) {
+        unitName = S.unitName(catalogEntry.displayName);
+      }
+    }
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-      child: Row(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+      decoration: BoxDecoration(
+        color: c.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.withOpacity(0.4), width: 1.5),
+      ),
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-          const SizedBox(width: 5),
-          Text('$value $label', style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+          Icon(
+            s.isFree ? Icons.check_circle_outline_rounded : (s.isBusy ? Icons.hourglass_top_rounded : Icons.lock_rounded),
+            color: c,
+            size: isMain ? 24 : 18,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            s.timeLabel,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: c, fontSize: isMain ? 12 : 9, fontWeight: FontWeight.bold, decoration: TextDecoration.none),
+          ),
+          if (s.isBusy) ...[
+            const SizedBox(height: 2),
+            Text(
+              unitName,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: c, fontSize: isMain ? 10 : 8, decoration: TextDecoration.none),
+            ),
+            Text(
+              '${s.units} جندي',
+              style: TextStyle(color: c, fontSize: isMain ? 10 : 8, fontWeight: FontWeight.bold, decoration: TextDecoration.none),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  String _formatTotalTime(int totalSeconds) {
+    if (totalSeconds <= 0) return '0s';
+    final d = totalSeconds ~/ 86400;
+    final h = (totalSeconds % 86400) ~/ 3600;
+    final m = (totalSeconds % 3600) ~/ 60;
+    final s = totalSeconds % 60;
+    if (d > 0) return '${d}d ${h}h';
+    if (h > 0) return '${h}h ${m}m';
+    if (m > 0) return '${m}m ${s}s';
+    return '${s}s';
   }
 
   Widget _unitPicker(BuildContext context) {

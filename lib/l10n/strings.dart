@@ -114,7 +114,7 @@ class S {
   static String get refresh  => _('refresh');
 
   // ═══════════════════════════════════════════════════════
-  //  Unit name translation
+  //  Unit name translation - Smart Parser
   // ═══════════════════════════════════════════════════════
   static String unitName(String? englishName) {
     if (englishName == null || englishName.isEmpty) {
@@ -122,26 +122,41 @@ class S {
     }
     if (!isAr) return englishName;
 
-    final clean = englishName
-        .replaceAll('Barracks_Unit_', '')
-        .replaceAll('_', '')
-        .replaceAll(' ', '')
-        .trim();
-
-    final lower = clean.toLowerCase();
+    // مسح أي حروف غريبة أو أرقام
+    final clean = englishName.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
     
-    if (_unitAr.containsKey(lower)) return _unitAr[lower]!;
+    // 1. بحث مباشر
+    if (_unitAr.containsKey(clean)) return _unitAr[clean]!;
 
-    final fixed = lower
-        .replaceAll('speerman', 'spearman')
-        .replaceAll('swordman', 'swordsman');
-    if (_unitAr.containsKey(fixed)) return _unitAr[fixed]!;
+    // 2. بحث ذكي بالكلمات المفتاحية
+    String prefix = '';
+    if (clean.contains('veteran')) prefix += 'محنك ';
+    if (clean.contains('relic')) prefix += 'تذكاري ';
+    if (clean.contains('heavy')) prefix += 'ثقيل ';
+    if (clean.contains('elite')) prefix += 'نخبة ';
+    if (clean.contains('kings')) prefix += 'ملكي ';
 
+    if (clean.contains('mace')) return '${prefix}صولجان';
+    if (clean.contains('spear')) return '${prefix}رمح';
+    if (clean.contains('sword')) return '${prefix}سياف';
+    if (clean.contains('crossbow')) return '${prefix}نابل';
+    if (clean.contains('longbow')) return '${prefix}قوس طويل';
+    if (clean.contains('bow') || clean.contains('archer')) return '${prefix}نشاب';
+    if (clean.contains('halberd')) return '${prefix}هالبرد';
+    if (clean.contains('maiden')) return '${prefix}محاربة';
+    if (clean.contains('north')) return 'حامي الشمال';
+    if (clean.contains('valkyrie')) return '${prefix}فالكيري';
+    if (clean.contains('glasswing')) return 'رامي زجاجي';
+    if (clean.contains('flamebreath')) return 'مهاجم النيران المجنون';
+    if (clean.contains('scalebound')) return 'حارس القشور';
+    if (clean.contains('scaleshard')) return 'قناص حرشفي';
+
+    // 3. لو مفيش تطابق، نرجع الاسم الإنجليزي
     return englishName;
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Full mapping of ALL units (No Duplicates)
+  //  Full mapping of ALL units (User's exact names)
   // ═══════════════════════════════════════════════════════
   static const Map<String, String> _unitAr = {
     // ═══ 1. Core & Level Units (User's exact names) ═══
@@ -152,6 +167,7 @@ class S {
     'swordsman': 'محارب بالسيف',
     'archer': 'رامي سهام',
     'twohandedswordsman': 'سياف يستخدم اليدين',
+    'twohandedswordwarrior': 'سياف يستخدم اليدين',
     'halberdier': 'حامل الرمح والفأس',
     'heavycrossbowman': 'نشاب ثقيل',
     'longbowman': 'نابل ذو قوس طويل',
@@ -179,7 +195,6 @@ class S {
     'halberd': 'هالبرد',
     'axe': 'فأس',
     'pikeman': 'رمح طويل',
-    'twohandedswordwarrior': 'سياف بيدين',
     'twohandedsword': 'سياف بيدين',
     'heavycrossbow': 'قوس مستعرض ثقيل',
     'heavyspearman': 'رمح ثقيل',
@@ -297,7 +312,7 @@ class S {
     'compositebowman': 'نشاب مركب',
     'veterancompositebowman': 'نشاب مركب محترف',
 
-    // ═══ 8. بيريموند والأبطال (تم مسح المكرر) ═══
+    // ═══ 8. بيريموند والأبطال ═══
     'marksman': 'قناص',
     'muscleman': 'رجل العضلات',
     'lionwarrior': 'محارب الأسد',
