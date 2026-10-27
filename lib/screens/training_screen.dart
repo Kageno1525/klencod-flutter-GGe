@@ -60,14 +60,14 @@ class TrainingScreen extends StatefulWidget {
 class _TrainingScreenState extends State<TrainingScreen> {
   static const int _maxPerBatch = 80;
 
-  // ═══ DICTIONARY: EXACT UNIT NAMES ALLOWED PER LEVEL ═══
+  // ═══ DICTIONARY: KEYWORDS ALLOWED PER LEVEL ═══
   static const Map<int, List<String>> _levelUnits = {
-    1: ['maceman', 'spearman'],
-    2: ['bowman', 'crossbowman'],
-    3: ['swordsman', 'archer'],
-    4: ['twohandedswordsman', 'halberdier'],
-    5: ['heavycrossbowman', 'longbowman'],
-    6: ['veteranhalberdier', 'veterantwohandedswordsman', 'veteranlongbowman', 'veteranheavycrossbowman'],
+    1: ['mace', 'spear'],
+    2: ['bow', 'crossbow'],
+    3: ['sword', 'archer'],
+    4: ['twohanded', 'halberd'],
+    5: ['heavycrossbow', 'longbow'],
+    6: ['veteranhalberd', 'veterantwohanded', 'veteranlongbow', 'veteranheavycrossbow'],
     7: ['relicaxeman'],
     9: ['relicshortbowman'],
     11: ['relichammerman'],
@@ -229,11 +229,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  // ═══ CUMULATIVE FILTER (Level 1 to Current) ═══
+  // ═══ ULTIMATE FLEXIBLE FILTER ═══
   List<UnitCatalogEntry> get _filteredTrainable {
     final level = widget.client.getBarracksLevel(_castle?.areaId ?? 0) ?? 1;
     
-    // جمع كل الوحدات من المستوى 1 لحد المستوى الحالي
+    // جمع كل الكلمات المفتاحية من المستوى 1 لحد المستوى الحالي
     final allowedKeys = <String>[];
     for (int i = 1; i <= level; i++) {
       if (_levelUnits.containsKey(i)) {
@@ -244,13 +244,23 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (allowedKeys.isEmpty) return [];
 
     return _trainable.where((u) {
-      // تنظيف الاسم عشان نطابقه بالظبط
+      // تنظيف الاسم من أي حاجة زيادة (زي Barracks_Unit_ أو مسافات)
       final clean = u.displayName.toLowerCase()
           .replaceAll('barracks_unit_', '')
+          .replaceAll('barracks', '')
+          .replaceAll('unit', '')
+          .replaceAll('_', '')
           .replaceAll(' ', '')
-          .replaceAll('_', '');
+          .trim();
       
-      return allowedKeys.contains(clean);
+      // المطابقة: لو الاسم فيه أي كلمة من الـ allowedKeys أو العكس
+      // ده هيضمن إن mace هتلاقي maceman، و spear هتلاقي spearman، إلخ
+      for (final key in allowedKeys) {
+        if (clean == key || clean.contains(key) || key.contains(clean)) {
+          return true;
+        }
+      }
+      return false;
     }).toList();
   }
 
