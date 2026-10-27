@@ -30,19 +30,16 @@ class SmuggleService {
     }
 
     // ── 3. Resolve lord ─────────────────────────────────────────
-    int lid = lordId ?? -1;
-    if (lid == -1) {
-      final cmds = await commanders.getCommanders();
-      final free = cmds.where((c) => !c.isBusy).toList();
-      if (free.isEmpty) return TransferResult.fail('ALL_LORDS_BUSY');
-      lid = free.first.lord.id;
-    }
+    // ✅ LID=0 = اللورد الرئيسي — يقدر يقود من أي قلعة في أي مملكة
+    //    ده اللي بتستخدمه اللعبة نفسها في كل الحركات
+    int lid = lordId ?? 0;
+    if (lid < 0) lid = 0;
 
     // ═══════════════════════════════════════════════════════════════
-    // ✅ الإصلاح الأساسي:
-    //   1) jca قبل cds — نضبط الـ current kingdom على مملكة المصدر
-    //   2) شيلنا sdi تماماً — مش أمر حقيقي، السيرفر بيتجاهله
-    //   3) لو jca فشل، منبعتش cds أصلاً
+    // ✅ الترتيب الصحيح (زي اللعبة بالظبط):
+    //   1) jca — نروح لمملكة المصدر
+    //   2) sdi — نحدد المصدر والهدف (إحداثيات)
+    //   3) cds — نبعت الجنود
     // ═══════════════════════════════════════════════════════════════
     TrafficLog.add(
         'ST',
@@ -65,16 +62,34 @@ class SmuggleService {
         return TransferResult.fail(
             'Kingdom switch failed (jca code ${jcaResp.resultCode})');
       }
-      await Future.delayed(const Duration(milliseconds: 500));
+      await Future.delayed(const Duration(milliseconds: 600));
     } catch (e) {
       TrafficLog.add('ER', '[JCA] failed: $e');
       return TransferResult.fail('Kingdom switch failed: $e');
     }
 
-    // ── 5. cds: send troops (throttle auto-applied via isAction) ─
+    // ── 5. sdi: set source & target coords (fire-and-forget) ────
     try {
-      TrafficLog.add(
-          'ST',
+      TrafficLog.add('ST',
+          '[SDI] SX=${source.x},SY=${source.y} → TX=${target.x},TY=${target.y}');
+      conn.sendXt(
+        'sdi',
+        jsonEncode({
+          'TX': target.x,
+          'TY': target.y,
+          'SX': source.x,
+          'SY': source.y,
+        }),
+      );
+      await Future.delayed(const Duration(milliseconds: 500));
+    } catch (e) {
+      TrafficLog.add('ER', '[SDI] failed: $e');
+      // نكمل برضه — sdi مش حرج جداً لو السيرفر بيستخدم SID في cds
+    }
+
+    // ── 6. cds: send troops ─────────────────────────────────────
+    try {
+      TrafficLog.add('ST',
           '[CDS] SID=${source.areaId} TX=${target.x},TY=${target.y} '
           'LID=$lid WT=$stationTime A=$filtered');
 
@@ -97,25 +112,33 @@ class SmuggleService {
         isAction: true,
       );
 
-      TrafficLog.add(
-          'ST',
-          '[CDS-RESP] result=${resp.resultCode} '
-          '(${_cdsErrorMessage(resp.resultCode)})');
+      TrafficLog.add('ST',
+          '[CDS-RESP] result=${resp.resultCode} (${_cdsErrorMessage(resp.resultCode)})');
 
       if (resp.resultCode == 0) return TransferResult.ok();
 
-      if ([222, 256, 404, 219].contains(resp.resultCode)) {
-        return TransferResult.fail('ALL_LORDS_BUSY');
+      // Lord-related errors — بس لو LID>0 (commander عادي)
+      if ([219, 222, 256, 404].contains(resp.resultCode) && lid != 0) {
+        return TransferResult.fail('LORD_UNAVAILABLE');
       }
 
+      // 219 مع LID=0 = مشكلة مؤقتة في السيرفر
+      if (resp.resultCode == 219) {
+        return TransferResult.fail(
+            'Main Lord rejected (LID=0) — retry in a moment');
+      }
+
+      // 181 = max movements
       if (resp.resultCode == 181) {
-        return TransferResult.fail('Max kingdom army movements reached (181)');
+        return TransferResult.fail(
+            'Max kingdom army movements reached (181)');
       }
 
+      // 6 = commander not at source castle
       if (resp.resultCode == 6) {
         return TransferResult.fail(
-            'Invalid cds request (6): verify source kingdom context, '
-            'lord availability at source castle, and target ally castle.');
+            'Error 6: commander not available at source castle. '
+            'Main Lord (LID=0) works from any castle.');
       }
 
       return TransferResult.fail(
@@ -131,7 +154,7 @@ class SmuggleService {
       case 0:
         return 'OK';
       case 6:
-        return 'Invalid request / kingdom or lord mismatch';
+        return 'Commander not available at source castle';
       case 7:
         return 'Target not in same kingdom';
       case 13:
@@ -139,13 +162,13 @@ class SmuggleService {
       case 181:
         return 'Max kingdom army movements reached';
       case 219:
-        return 'Target invalid or not reachable';
+        return 'Invalid lord id';
       case 222:
-        return 'Lord busy';
+        return 'Lord in movement';
       case 256:
-        return 'Lord busy (garrisoned elsewhere)';
+        return 'Lord is used';
       case 404:
-        return 'Not found';
+        return 'Lord needed';
       default:
         return 'Error $code';
     }

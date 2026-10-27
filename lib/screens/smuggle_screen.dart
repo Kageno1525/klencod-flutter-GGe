@@ -67,14 +67,23 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       setState(() {
         _commanders = cmds;
         _loadingCommanders = false;
-        final free = _commanders.where((c) => !c.isBusy).toList();
-        if (_selectedLord == null && free.isNotEmpty) {
-          _selectedLord = free.first.lord;
-        } else if (_selectedLord != null) {
-          final current = _commanders.firstWhere(
+
+        // ✅ الافتراضي = اللورد الرئيسي (LID=0) — يقدر يقود من أي قلعة
+        if (_selectedLord == null) {
+          try {
+            _selectedLord = cmds.firstWhere((c) => c.lord.id == 0).lord;
+          } catch (_) {
+            final free = cmds.where((c) => !c.isBusy).toList();
+            if (free.isNotEmpty) _selectedLord = free.first.lord;
+          }
+        } else {
+          final current = cmds.firstWhere(
               (c) => c.lord.id == _selectedLord!.id,
               orElse: () => CommanderInfo(lord: _selectedLord!));
-          if (current.isBusy) _selectedLord = null;
+          // LID=0 مايتشالش أبداً — غيره لو مشغول يتشال
+          if (_selectedLord!.id != 0 && current.isBusy) {
+            _selectedLord = null;
+          }
         }
       });
     } catch (_) {
@@ -237,6 +246,10 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       String errMsg = result.error ?? 'Unknown';
       if (errMsg == 'ALL_LORDS_BUSY') {
         errMsg = S.allLordsBusy;
+      } else if (errMsg == 'LORD_UNAVAILABLE') {
+        errMsg = S.isAr
+            ? 'القائد المختار غير متاح — جرّب اللورد الرئيسي'
+            : 'Selected commander unavailable — try Main Lord';
       } else if (errMsg.contains('Max kingdom army movements')) {
         errMsg = S.maxMovements;
       } else if (errMsg.contains('CROSS_KINGDOM')) {
@@ -249,8 +262,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
             : 'Failed to switch to source kingdom — retry';
       } else if (errMsg.contains('(6)') || errMsg.contains('code 6')) {
         errMsg = S.isAr
-            ? 'خطأ 6: تأكد أن المصدر والقائد صالحين، والهدف قلعة حليف في نفس المملكة'
-            : 'Error 6: verify source castle, lord availability, and target is a same-kingdom ally castle';
+            ? 'خطأ 6: القائد مش موجود في قلعة المصدر. استخدم اللورد الرئيسي (LID=0)'
+            : 'Error 6: commander not at source castle. Use Main Lord (LID=0)';
       }
       _snack('${S.transferFail}: $errMsg', color: AppTheme.red);
     }
@@ -555,6 +568,30 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                         for (final c in _amtCtrl.values) c.dispose();
                         _amtCtrl.clear();
                       });
+                      // ✅ لو في عضو مختار، نعيد تحميل الوحدات للمصدر الجديد
+                      if (_target != null && _targetCastle != null) {
+                        // نتأكد إن الهدف في نفس مملكة المصدر الجديد
+                        final newTargetCastle =
+                            _target!.castleIn(v?.kingdomId ?? 0);
+                        if (newTargetCastle != null) {
+                          setState(() {
+                            _targetCastle = newTargetCastle;
+                          });
+                          _loadUnits();
+                        } else {
+                          // الهدف مش عنده قلعة في المملكة دي — نمسح الهدف
+                          setState(() {
+                            _target = null;
+                            _targetCastle = null;
+                          });
+                          _snack(
+                            S.isAr
+                                ? '⚠️ ${_target?.name ?? "العضو"} ليس لديه قلعة في هذه المملكة — اختر عضواً آخر'
+                                : '⚠️ Member has no castle in this kingdom — pick another',
+                            color: AppTheme.orange,
+                          );
+                        }
+                      }
                     },
                   ),
                 ),
@@ -567,12 +604,24 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   Widget _lordPicker(BuildContext context) {
-    final freeLords =
-        _commanders.where((c) => !c.isBusy).map((c) => c.lord).toList();
+    // ✅ اللورد الرئيسي (LID=0) دايماً متاح + القواد الفاضيين
+    final availableLords = _commanders
+        .where((c) => c.lord.id == 0 || !c.isBusy)
+        .map((c) => c.lord)
+        .toList();
+
     if (_selectedLord != null &&
-        !freeLords.any((l) => l.id == _selectedLord!.id)) {
+        !availableLords.any((l) => l.id == _selectedLord!.id)) {
       _selectedLord = null;
     }
+    if (_selectedLord == null && availableLords.isNotEmpty) {
+      try {
+        _selectedLord = availableLords.firstWhere((l) => l.id == 0);
+      } catch (_) {
+        _selectedLord = availableLords.first;
+      }
+    }
+
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
@@ -627,23 +676,22 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                             fontWeight: FontWeight.w600,
                             color: AppTheme.textColor(context),
                           ),
-                          items: [
-                            DropdownMenuItem<Lord>(
-                              value: null,
-                              child: Text(S.autoLord,
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      color: AppTheme.textColor(context))),
-                            ),
-                            ...freeLords.map((l) => DropdownMenuItem(
-                                  value: l,
-                                  child: Text(l.displayName,
+                          items: availableLords
+                              .map((l) => DropdownMenuItem(
+                                    value: l,
+                                    child: Text(
+                                      l.id == 0
+                                          ? (S.isAr
+                                              ? 'اللورد الرئيسي'
+                                              : 'Main Lord')
+                                          : l.displayName,
                                       style: TextStyle(
                                           fontSize: 13,
                                           color:
-                                              AppTheme.textColor(context))),
-                                )),
-                          ],
+                                              AppTheme.textColor(context)),
+                                    ),
+                                  ))
+                              .toList(),
                           onChanged: (v) =>
                               setState(() => _selectedLord = v),
                         ),

@@ -37,28 +37,78 @@ class CastleService {
     int areaId,
     Map<int, UnitCatalogEntry> catalog,
   ) async {
-    final resp = await conn.sendXtAndWait('dcl', '{"CD":1}', responseCmd: 'dcl');
+    // ═══════════════════════════════════════════════════════════
+    // dcl بـ CD:1 بيرجع كل القلاع (بيانات كبيرة ~50KB)
+    // isAction=true عشان نطبق throttle قبل cds
+    // ═══════════════════════════════════════════════════════════
+    TrafficLog.add(
+        'ST', '[DCL] Requesting units: KID=$kingdomId areaId=$areaId');
+    final resp = await conn.sendXtAndWait(
+      'dcl',
+      '{"CD":1}',
+      responseCmd: 'dcl',
+      timeoutMs: 15000,
+    );
     if (resp.resultCode != 0) {
       throw Exception('dcl: ${errorName(resp.resultCode)}');
     }
+    if (resp.payload == null || resp.payload!.isEmpty) {
+      TrafficLog.add('ER', '[DCL] empty payload');
+      return [];
+    }
     final data = jsonDecode(resp.payload!) as Map<String, dynamic>;
-    for (final k in (data['C'] as List)) {
-      if (_asInt(k['KID']) != kingdomId) continue;
-      for (final a in (k['AI'] as List)) {
-        if (_asInt(a['AID']) != areaId) continue;
+    final castles = (data['C'] as List?) ?? [];
+
+    for (final k in castles) {
+      if (k is! Map) continue;
+      final kKid = _asInt(k['KID']);
+      if (kKid != kingdomId) continue;
+
+      final ais = (k['AI'] as List?) ?? [];
+      for (final a in ais) {
+        if (a is! Map) continue;
+        final aAid = _asInt(a['AID']);
+        if (aAid != areaId) continue;
+
+        // ── الوحدات في القلعة الحالية ─────────────────────
+        // AC = Army Current (الجيش الفعلي) ✅
+        // TU = Training Units (بيتدربوا حالياً)
+        // SHI = Stuck Units In (محاصرة)
+        // HI = Hospitalized (في المستشفى)
+        // مش بنجمعهم — العايزين AC بس للتهريب
         final ac = (a['AC'] as List?) ?? [];
         final out = <CastleUnit>[];
+        final seen = <int>{};
+
         for (final u in ac) {
           if (u is! List || u.length < 2) continue;
           final id = _asInt(u[0]);
           final amt = _asInt(u[1]);
-          if (amt > 0) {
+          if (id <= 0 || amt <= 0) continue;
+
+          // لو نفس الوحدة متكررة (نادر بس ممكن)، نجمعهم
+          if (seen.contains(id)) {
+            final existing = out.firstWhere((x) => x.wodId == id);
+            final idx = out.indexOf(existing);
+            out[idx] = CastleUnit(
+              wodId: id,
+              amount: existing.amount + amt,
+              info: catalog[id],
+            );
+          } else {
+            seen.add(id);
             out.add(CastleUnit(wodId: id, amount: amt, info: catalog[id]));
           }
         }
+
+        TrafficLog.add(
+            'ST', '[DCL] Found ${out.length} unit types at areaId=$areaId');
         return out;
       }
     }
+
+    TrafficLog.add('ER',
+        '[DCL] Castle not found: KID=$kingdomId areaId=$areaId (searched ${castles.length} kingdoms)');
     return [];
   }
 
