@@ -112,21 +112,21 @@ class S {
   static String get none     => _('none');
   static String get refresh  => _('refresh');
 
-  // ═══════════════════════════════════════════════════════
-  //  Unit name translation - Smart Parser
-  // ═══════════════════════════════════════════════════════
   static String unitName(String? englishName) {
     if (englishName == null || englishName.isEmpty) {
       return isAr ? 'جندي مجهول' : 'Unknown unit';
     }
     if (!isAr) return englishName;
 
-    final lower = englishName.toLowerCase().replaceAll('_', '');
+    // 1. Direct Match
+    final lower = englishName.toLowerCase().trim();
     if (_unitAr.containsKey(lower)) return _unitAr[lower]!;
 
-    String clean = lower.replaceAll('barracksunit', '').replaceAll('barracks', '').replaceAll(' ', '').trim();
+    // 2. Clean Match
+    String clean = lower.replaceAll('barracks_unit_', '').replaceAll('barracks', '').replaceAll('_', '').replaceAll(' ', '').trim();
     if (_unitAr.containsKey(clean)) return _unitAr[clean]!;
 
+    // 3. Keyword Match (Fallback)
     String prefix = '';
     if (clean.contains('veteran')) prefix += 'محنك ';
     if (clean.contains('relic')) prefix += 'تذكاري ';
@@ -152,9 +152,6 @@ class S {
     return englishName;
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Full Dictionary
-  // ═══════════════════════════════════════════════════════
   static const Map<String, String> _unitAr = {
     'maceman': 'جندي بهراوة', 'spearman': 'جندي رماح', 'bowman': 'نشاب', 'crossbowman': 'نابل',
     'swordsman': 'محارب بالسيف', 'archer': 'رامي سهام', 'twohandedswordsman': 'سياف يستخدم اليدين',

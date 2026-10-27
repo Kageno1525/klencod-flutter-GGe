@@ -75,7 +75,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
   DateTime? _lastSlotFetch;
   Timer? _slotsTimer;
   Timer? _tickTimer;
-  Timer? _autoTimer; // ✅ تايمر التدريب التلقائي في الواجهة
+  Timer? _autoTimer;
   int _totalTime = 0;
 
   // ═══ AUTO TRAIN VARIABLES ═══
@@ -104,12 +104,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
     _loadAll();
     _loadAutoSettings();
     
-    // تحديث الخانات كل 60 ثانية
     _slotsTimer = Timer.periodic(const Duration(seconds: 60), (_) {
       if (mounted) _loadSlots(silent: true);
     });
     
-    // تحديث الواجهة كل ثانية (للعدادات)
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         if (_slots != null && _slots!.any((s) => s.isBusy)) {
@@ -118,7 +116,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
       }
     });
 
-    // ✅ محرك التدريب التلقائي (شغال في الواجهة)
     _startFrontendAutoTrainer();
   }
 
@@ -134,10 +131,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  FRONTEND AUTO TRAIN LOGIC (Anti-Ban & Throttle)
-  // ═══════════════════════════════════════════════════════
-  
   Future<void> _throttle() async {
     final now = DateTime.now();
     final diff = now.difference(_lastActionTime).inMilliseconds;
@@ -156,7 +149,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
       if (!_isAutoMode || !_autoEnabled || _isAutoSending) return;
       if (_castle == null || _autoSelectedAmounts.isEmpty) return;
 
-      // التحقق من أقصى عدد
+      // ✅ التحقق الإجباري: لو مفيش شرط متعلم عليه، نعلم على الخانة
+      if (!_triggerOnSlot && !_triggerOnTime) {
+        setState(() => _triggerOnSlot = true);
+      }
+
       if (_useMaxTotal) {
         final maxTotal = int.tryParse(_maxTotalCtrl.text) ?? 0;
         if (_autoTotalTrained >= maxTotal) {
@@ -169,13 +166,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
       bool shouldTrain = false;
 
-      // شرط الخانات
       if (_triggerOnSlot && _slots != null) {
         final hasFreeSlot = _slots!.any((s) => s.isFree);
         if (hasFreeSlot) shouldTrain = true;
       }
 
-      // شرط الوقت
       if (_triggerOnTime) {
         final prefs = await SharedPreferences.getInstance();
         final lastTrainStr = prefs.getString('auto_last_train_time');
@@ -194,9 +189,14 @@ class _TrainingScreenState extends State<TrainingScreen> {
       }
 
       if (shouldTrain) {
+        _log('AutoTrain: Conditions met. Sending...');
         await _executeFrontendAutoTrain();
       }
     });
+  }
+
+  void _log(String msg) {
+    TrafficLog.add('ST', '[AutoTrain] $msg');
   }
 
   Future<void> _executeFrontendAutoTrain() async {
@@ -206,6 +206,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     
     if (validUnits.isEmpty) {
       _isAutoSending = false;
+      _log('No valid units selected');
       return;
     }
 
@@ -214,7 +215,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     final amount = _autoSelectedAmounts[wodId] ?? 10;
 
     try {
-      await _throttle(); // ✅ التأخير العشوائي قبل الإرسال
+      await _throttle(); 
 
       final res = await widget.client.trainUnits(
         areaId: _castle!.areaId,
@@ -232,23 +233,20 @@ class _TrainingScreenState extends State<TrainingScreen> {
         await prefs.setInt('auto_total_trained', _autoTotalTrained);
         await prefs.setInt('auto_rotation_index', _autoRotationIndex);
         
-        TrafficLog.add('ST', '[AutoTrain] Success WID=$wodId AMT=$amount');
+        _log('Success! WID=$wodId AMT=$amount');
         await _loadSlots(force: true);
       } else {
-        // لو فشل، بنأخر المحاولة الجاية
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('auto_last_train_time', DateTime.now().toIso8601String());
-        TrafficLog.add('ER', '[AutoTrain] Failed WID=$wodId: ${res.error}');
+        _log('Failed WID=$wodId: ${res.error}');
       }
     } catch (e) {
-      TrafficLog.add('ER', '[AutoTrain] Error: $e');
+      _log('Error: $e');
     } finally {
       await Future.delayed(const Duration(seconds: 3));
       _isAutoSending = false;
     }
   }
-
-  // ═══════════════════════════════════════════════════════
 
   Future<void> _loadAutoSettings() async {
     final prefs = await SharedPreferences.getInstance();
@@ -422,7 +420,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (amt > _maxPerBatch) { _snack(S.isAr ? 'الحد الأقصى $_maxPerBatch' : 'Max $_maxPerBatch', color: AppTheme.orange); return; }
 
     setState(() => _training = true);
-    await _throttle(); // حماية للتدريب اليدوي كمان
+    await _throttle(); 
     final result = await widget.client.trainUnits(areaId: _castle!.areaId, wodId: _selectedUnit!.wodId, amount: amt);
 
     if (!mounted) return;
@@ -905,7 +903,12 @@ class _TrainingScreenState extends State<TrainingScreen> {
               Switch(
                 value: _autoEnabled,
                 onChanged: (v) {
-                  setState(() => _autoEnabled = v);
+                  setState(() {
+                    _autoEnabled = v;
+                    if (v && !_triggerOnSlot && !_triggerOnTime) {
+                      _triggerOnSlot = true;
+                    }
+                  });
                   _saveAutoSettings();
                 },
                 activeColor: AppTheme.purple,
@@ -995,7 +998,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
           Text('الوحدات المطلوبة:', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
           const SizedBox(height: 8),
           
-          // ✅ تصميم جديد ومظبوط لخانة العدد
           ...filtered.map((u) {
             final isSelected = _autoSelectedAmounts.containsKey(u.wodId);
             if (!_autoAmountCtrls.containsKey(u.wodId)) {
@@ -1062,7 +1064,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
                             ),
                           ),
                           const SizedBox(width: 8),
-                          // زرار 80
                           InkWell(
                             onTap: () {
                               _autoAmountCtrls[u.wodId]!.text = '80';
@@ -1078,7 +1079,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
                             ),
                           ),
                           const SizedBox(width: 4),
-                          // زرار تصفير
                           InkWell(
                             onTap: () {
                               _autoAmountCtrls[u.wodId]!.text = '0';
