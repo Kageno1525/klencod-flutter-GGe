@@ -239,6 +239,18 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         errMsg = S.allLordsBusy;
       } else if (errMsg.contains('Max kingdom army movements')) {
         errMsg = S.maxMovements;
+      } else if (errMsg.contains('CROSS_KINGDOM')) {
+        errMsg = S.isAr
+            ? 'المصدر والهدف في مملكتين مختلفتين — cds يعمل داخل نفس المملكة فقط'
+            : 'Source and target in different kingdoms — cds is same-kingdom only';
+      } else if (errMsg.contains('Kingdom switch failed')) {
+        errMsg = S.isAr
+            ? 'فشل الانتقال لمملكة المصدر — حاول مرة أخرى'
+            : 'Failed to switch to source kingdom — retry';
+      } else if (errMsg.contains('(6)') || errMsg.contains('code 6')) {
+        errMsg = S.isAr
+            ? 'خطأ 6: تأكد أن المصدر والقائد صالحين، والهدف قلعة حليف في نفس المملكة'
+            : 'Error 6: verify source castle, lord availability, and target is a same-kingdom ally castle';
       }
       _snack('${S.transferFail}: $errMsg', color: AppTheme.red);
     }
