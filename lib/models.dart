@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+// ═══════════════════════════════════════════
 class OwnedCastle {
   final int kingdomId;
   final int areaType;
@@ -37,6 +38,7 @@ class OwnedCastle {
   String get fullLabel => '$displayName · $kingdomName';
 }
 
+// ═══════════════════════════════════════════
 class UnitCatalogEntry {
   final int wodId;
   final String? type;
@@ -65,12 +67,8 @@ class UnitCatalogEntry {
         t.contains('Moat');
   }
 
-  // ✅ FIX: More robust check for Barracks units
-  bool get isTrainable {
-    final n = (name ?? '').toLowerCase();
-    final t = (type ?? '').toLowerCase();
-    return (n.contains('barracks') || t.contains('barracks')) && isCombat;
-  }
+  // ✅ تم التعديل: بنشيك على isCombat بس عشان نضمن إننا بنقرا كل الجنود من الكتالوج
+  bool get isTrainable => isCombat;
 
   String get displayName {
     final t = (type ?? '').replaceFirst('Barracks_Unit_', '');
@@ -78,6 +76,7 @@ class UnitCatalogEntry {
   }
 }
 
+// ═══════════════════════════════════════════
 class CastleUnit {
   final int wodId;
   final int amount;
@@ -103,6 +102,7 @@ class CastleUnit {
   bool get isDefensive => info?.isDefensive == true;
 }
 
+// ═══════════════════════════════════════════
 class Lord {
   final int id;
   final int visibleIndex;
@@ -124,6 +124,7 @@ class Lord {
   }
 }
 
+// ═══════════════════════════════════════════
 class LordMovement {
   final int movementId;
   final int type;
@@ -194,6 +195,7 @@ class LordMovement {
   }
 }
 
+// ═══════════════════════════════════════════
 class CommanderInfo {
   final Lord lord;
   final LordMovement? movement;
@@ -203,6 +205,7 @@ class CommanderInfo {
   bool get isBusy => movement != null;
 }
 
+// ═══════════════════════════════════════════
 class XtMessage {
   final String command;
   final int roomId;
@@ -213,6 +216,7 @@ class XtMessage {
   XtMessage(this.command, this.roomId, this.resultCode, this.payload, this.raw);
 }
 
+// ═══════════════════════════════════════════
 class AllyCastle {
   final int kingdomId;
   final int areaId;
@@ -247,6 +251,7 @@ class AllyCastle {
   String get displayLabel => '$typeName · $kingdomName ($x,$y)';
 }
 
+// ═══════════════════════════════════════════
 class AllyMember {
   final int playerId;
   final String name;
@@ -306,6 +311,7 @@ class AllyMember {
   }
 }
 
+// ═══════════════════════════════════════════
 const Map<int, String> ggeErrors = {
   0: 'Success', 1: 'General error', 2: 'Invalid parameter', 5: 'Invalid object',
   27: 'Account is banned', 50: 'Wrong mode', 55: 'Not enough resources',
@@ -322,6 +328,7 @@ const Map<int, String> ggeErrors = {
 
 String errorName(int code) => ggeErrors[code] ?? 'Error $code';
 
+// ═══════════════════════════════════════════
 class AppStorage {
   static const _kUser = 'username';
   static const _kPass = 'password';
@@ -369,6 +376,7 @@ class AppStorage {
   }
 }
 
+// ═══════════════════════════════════════════
 class CastleStats {
   final int areaId;
   final int kingdomId;
@@ -427,6 +435,7 @@ class CastleStats {
       };
 }
 
+// ═══════════════════════════════════════════
 class AttackUnit {
   final int wodId;
   final int amount;
@@ -452,6 +461,7 @@ class AttackUnit {
   }
 }
 
+// ═══════════════════════════════════════════
 class AttackAlert {
   final int movementId;
   final int attackerId;

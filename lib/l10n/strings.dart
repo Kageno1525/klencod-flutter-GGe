@@ -5,6 +5,7 @@ class S {
   static bool get isAr => current.languageCode == 'ar';
   static String _(String key) => (_map[isAr ? 'ar' : 'en'] ?? {})[key] ?? key;
 
+  // ═══ Getters ═══
   static String get appName        => _('appName');
   static String get login          => _('login');
   static String get username       => _('username');
@@ -112,6 +113,9 @@ class S {
   static String get none     => _('none');
   static String get refresh  => _('refresh');
 
+  // ═══════════════════════════════════════════════════════
+  //  Unit name translation
+  // ═══════════════════════════════════════════════════════
   static String unitName(String? englishName) {
     if (englishName == null || englishName.isEmpty) {
       return isAr ? 'جندي مجهول' : 'Unknown unit';
@@ -126,20 +130,19 @@ class S {
 
     final lower = clean.toLowerCase();
     
-    // 1. Direct match
     if (_unitAr.containsKey(lower)) return _unitAr[lower]!;
 
-    // 2. Fallback for common typos
     final fixed = lower
         .replaceAll('speerman', 'spearman')
         .replaceAll('swordman', 'swordsman');
-
     if (_unitAr.containsKey(fixed)) return _unitAr[fixed]!;
 
-    // 3. Fallback to English
     return englishName;
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  Full mapping of ALL units (No Duplicates)
+  // ═══════════════════════════════════════════════════════
   static const Map<String, String> _unitAr = {
     // ═══ 1. Core & Level Units (User's exact names) ═══
     'maceman': 'جندي بهراوة',
@@ -294,15 +297,13 @@ class S {
     'compositebowman': 'نشاب مركب',
     'veterancompositebowman': 'نشاب مركب محترف',
 
-    // ═══ 8. بيريموند والأبطال ═══
+    // ═══ 8. بيريموند والأبطال (تم مسح المكرر) ═══
     'marksman': 'قناص',
     'muscleman': 'رجل العضلات',
     'lionwarrior': 'محارب الأسد',
     'bearwarrior': 'محارب الدب',
     'lionbowman': 'نشاب الأسد',
     'bearbowman': 'نشاب الدب',
-    'valkyrieranger': 'فارسة فالكيري',
-    'valkyriesniper': 'قناصة فالكيري',
     'forsakenmaiden': 'عذراء مهجورة',
     'forlornranger': 'حارسة منبوذة',
     'candycaneprotector': 'حامي عصا الحلوى',
@@ -366,8 +367,6 @@ class S {
     'assassin': 'سفاح',
     'renegadecavesmasher': 'ساحق الكهف مارق',
     'renegadecavehunter': 'صياد الكهف مارق',
-    'glasswingarcher': 'رامي الجناح الزجاجي',
-    'scaleshardmarksman': 'قناص شظايا الحراشف',
 
     // ═══ 9. الأدوات والمعدات ═══
     'ladder': 'سلم',
