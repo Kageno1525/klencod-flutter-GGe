@@ -10,7 +10,6 @@ import 'package:gge/widgets/animated_widgets.dart';
 class SmuggleScreen extends StatefulWidget {
   final GgeClient client;
   const SmuggleScreen({super.key, required this.client});
-
   @override
   State<SmuggleScreen> createState() => _SmuggleScreenState();
 }
@@ -20,21 +19,17 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   Map<int, UnitCatalogEntry> _catalog = {};
   List<AllyMember> _members = [];
   List<CommanderInfo> _commanders = [];
-
   OwnedCastle? _source;
   AllyMember? _target;
   AllyCastle? _targetCastle;
   Lord? _selectedLord;
-
   List<CastleUnit> _units = [];
   final Map<int, TextEditingController> _amtCtrl = {};
   final _timeCtrl = TextEditingController(text: '12');
-
   bool _loadingUnits = false;
   bool _loadingMembers = false;
   bool _loadingCommanders = false;
   bool _sending = false;
-
   String _filter = 'all';
   String? _error;
 
@@ -53,10 +48,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         _castles = castles;
         _catalog = catalog;
         if (castles.isNotEmpty) {
-          _source = castles.firstWhere(
-            (c) => c.areaType == 1,
-            orElse: () => castles.first,
-          );
+          _source = castles.firstWhere((c) => c.areaType == 1,
+              orElse: () => castles.first);
         }
       });
       await _loadMembers();
@@ -79,9 +72,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           _selectedLord = free.first.lord;
         } else if (_selectedLord != null) {
           final current = _commanders.firstWhere(
-            (c) => c.lord.id == _selectedLord!.id,
-            orElse: () => CommanderInfo(lord: _selectedLord!),
-          );
+              (c) => c.lord.id == _selectedLord!.id,
+              orElse: () => CommanderInfo(lord: _selectedLord!));
           if (current.isBusy) _selectedLord = null;
         }
       });
@@ -193,7 +185,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       _snack(S.allLordsBusy, color: AppTheme.red);
       return;
     }
-
     if (_targetCastle!.kingdomId != _source!.kingdomId) {
       _snack(
         S.isAr
@@ -203,20 +194,16 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       );
       return;
     }
-
     final toSend = <List<int>>[];
     for (final u in _units) {
       final a = int.tryParse(_amtCtrl[u.wodId]?.text ?? '0') ?? 0;
       if (a > 0) toSend.add([u.wodId, a.clamp(0, u.amount)]);
     }
-
     if (toSend.isEmpty) {
       _snack(S.noUnitsSelected, color: AppTheme.orange);
       return;
     }
-
     final stationTime = int.tryParse(_timeCtrl.text) ?? 12;
-
     setState(() => _sending = true);
     final result = await widget.client.sendToAlly(
       source: _source!,
@@ -227,15 +214,12 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     );
     if (!mounted) return;
     setState(() => _sending = false);
-
     if (result.success) {
       _snack('✓ ${S.transferOk}', color: AppTheme.green);
       HapticFeedback.mediumImpact();
-
       setState(() {
         final sentMap = <int, int>{};
         for (var item in toSend) sentMap[item[0]] = item[1];
-
         for (int i = 0; i < _units.length; i++) {
           if (sentMap.containsKey(_units[i].wodId)) {
             _units[i] = CastleUnit(
@@ -248,7 +232,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         _units.removeWhere((u) => u.amount <= 0);
         _clearAllUnits();
       });
-
       _loadCommanders();
     } else {
       String errMsg = result.error ?? 'Unknown';
@@ -265,7 +248,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
+        content: Text(msg,
+            style: const TextStyle(decoration: TextDecoration.none)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
       ));
@@ -577,7 +561,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         !freeLords.any((l) => l.id == _selectedLord!.id)) {
       _selectedLord = null;
     }
-
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
@@ -722,7 +705,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
 
   Widget _membersSection(BuildContext context) {
     final filtered = _filteredMembers;
-
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
@@ -808,15 +790,9 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // ✅ التعديل الوحيد في هذا الملف:
-  //    - تحذير لو الهدف مش في نفس KID المصدر
-  //    - اختيار قلعة الهدف من نفس KID المصدر لو موجودة
-  // ═══════════════════════════════════════════════════════════
   Widget _memberTile(BuildContext context, AllyMember m) {
     final selected = _target?.playerId == m.playerId;
     final hasPeace = m.hasPeace;
-
     String distanceLabel = '';
     if (_source != null) {
       final d = m.closestDistance(_source!.kingdomId, _source!.x, _source!.y);
@@ -824,12 +800,10 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           ? 'Diff. kingdom'
           : '${d.toStringAsFixed(0)} ${S.clicks}';
     }
-
     return GestureDetector(
       onTap: () {
         setState(() {
           _target = m;
-          // ✅ نفضّل قلعة نفس KID المصدر
           final sameKingdomCastle = m.castleIn(_source?.kingdomId ?? 0);
           _targetCastle = sameKingdomCastle ??
               (m.castles.isNotEmpty ? m.castles.first : null);
@@ -838,7 +812,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           _amtCtrl.clear();
         });
         if (_targetCastle != null) {
-          // ✅ تحذير واضح لو الهدف مش في نفس KID
           if (_targetCastle!.kingdomId != _source?.kingdomId) {
             _snack(
               S.isAr
@@ -1201,7 +1174,316 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  S.unitName(u.displayName),   // ✅ Arabic
+                  S.unitName(u.displayName),
                   style: TextStyle(
                       color: AppTheme.textColor(context),
-                      fontWeight: FontWeight.bold
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                      decoration: TextDecoration.none),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  '${S.available}: ${u.amount}',
+                  style: TextStyle(
+                      color: AppTheme.subTextColor(context),
+                      fontSize: 10,
+                      decoration: TextDecoration.none),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 70,
+            height: 36,
+            child: TextField(
+              controller: _amtCtrl[u.wodId],
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: AppTheme.textColor(context),
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none),
+              decoration: InputDecoration(
+                contentPadding: const EdgeInsets.symmetric(vertical: 6),
+                hintText: '0',
+                hintStyle: TextStyle(
+                    color: AppTheme.subTextColor(context).withOpacity(0.5)),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(
+                      color: AppTheme.subTextColor(context).withOpacity(0.1)),
+                ),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+          const SizedBox(width: 4),
+          InkWell(
+            onTap: () {
+              _amtCtrl[u.wodId]?.text = u.amount.toString();
+              setState(() {});
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: AppTheme.teal.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.keyboard_double_arrow_up_rounded,
+                  color: AppTheme.teal, size: 16),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═════════════════════════════════════════════════════════════
+//  Traffic Log Bottom Sheet
+// ═════════════════════════════════════════════════════════════
+class _TrafficLogSheet extends StatefulWidget {
+  const _TrafficLogSheet();
+  @override
+  State<_TrafficLogSheet> createState() => _TrafficLogSheetState();
+}
+
+class _TrafficLogSheetState extends State<_TrafficLogSheet> {
+  final ScrollController _scroll = ScrollController();
+  StreamSubscription? _sub;
+  bool _autoScroll = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = TrafficLog.stream.listen((_) {
+      if (!mounted) return;
+      setState(() {});
+      if (_autoScroll) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scroll.hasClients) {
+            _scroll.jumpTo(_scroll.position.maxScrollExtent);
+          }
+        });
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _copyAll() async {
+    await Clipboard.setData(ClipboardData(text: TrafficLog.dump()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Copied ${TrafficLog.entries.length} entries ✓',
+            style: const TextStyle(decoration: TextDecoration.none)),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppTheme.green,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = TrafficLog.entries;
+    final h = MediaQuery.of(context).size.height;
+    return Container(
+      height: h * 0.9,
+      decoration: const BoxDecoration(
+        color: Color(0xFF0B0B14),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            Container(
+              width: 44,
+              height: 5,
+              margin: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      gradient: AppTheme.orangeGradient,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.terminal_rounded,
+                        color: Colors.white, size: 18),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Traffic Log',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                        Text(
+                          '${entries.length} entries',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.5),
+                            fontSize: 11,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _logBtn(
+                    icon: _autoScroll
+                        ? Icons.vertical_align_bottom_rounded
+                        : Icons.vertical_align_center_rounded,
+                    color: _autoScroll ? AppTheme.blue : Colors.grey,
+                    onTap: () => setState(() => _autoScroll = !_autoScroll),
+                  ),
+                  const SizedBox(width: 6),
+                  _logBtn(
+                    icon: Icons.content_copy_rounded,
+                    color: AppTheme.blue,
+                    onTap: _copyAll,
+                  ),
+                  const SizedBox(width: 6),
+                  _logBtn(
+                    icon: Icons.delete_sweep_rounded,
+                    color: AppTheme.red,
+                    onTap: () {
+                      TrafficLog.clear();
+                      setState(() {});
+                    },
+                  ),
+                  const SizedBox(width: 6),
+                  _logBtn(
+                    icon: Icons.close_rounded,
+                    color: Colors.white,
+                    onTap: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                ),
+                child: entries.isEmpty
+                    ? const Center(
+                        child: Text(
+                          'No traffic yet.\nTry refreshing.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              color: Colors.grey,
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              decoration: TextDecoration.none),
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _scroll,
+                        itemCount: entries.length,
+                        itemBuilder: (_, i) {
+                          final line = entries[i];
+                          Color color = AppTheme.green;
+                          if (line.contains('[RX]')) color = AppTheme.blue;
+                          else if (line.contains('[ST]')) color = AppTheme.teal;
+                          else if (line.contains('[ER]')) color = AppTheme.red;
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 1),
+                            child: SelectableText(
+                              line,
+                              style: TextStyle(
+                                color: color,
+                                fontFamily: 'monospace',
+                                fontSize: 10,
+                                height: 1.4,
+                                decoration: TextDecoration.none,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  onPressed: _copyAll,
+                  icon: const Icon(Icons.content_copy_rounded, size: 18),
+                  label: Text(
+                    'Copy All (${entries.length})',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.none),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.blue,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _logBtn({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Icon(icon, color: color, size: 18),
+      ),
+    );
+  }
+}
