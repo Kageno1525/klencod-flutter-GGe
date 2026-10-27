@@ -114,7 +114,7 @@ class S {
   static String get refresh  => _('refresh');
 
   // ═══════════════════════════════════════════════════════
-  //  Unit name translation - Bulletproof Parser
+  //  Unit name translation - Bulletproof
   // ═══════════════════════════════════════════════════════
   static String unitName(String? englishName) {
     if (englishName == null || englishName.isEmpty) {
@@ -126,11 +126,11 @@ class S {
     final lower = englishName.toLowerCase();
     if (_unitAr.containsKey(lower)) return _unitAr[lower]!;
 
-    // 2. Strip prefixes and rebuild (e.g., Barracks_Unit_Spearman)
+    // 2. Clean string and match
     String clean = lower.replaceAll('barracks_unit_', '').replaceAll('barracks', '').replaceAll('_', '').replaceAll(' ', '').trim();
     if (_unitAr.containsKey(clean)) return _unitAr[clean]!;
 
-    // 3. Smart Keyword Matching
+    // 3. Keyword matching fallback
     String prefix = '';
     if (clean.contains('veteran')) prefix += 'محنك ';
     if (clean.contains('relic')) prefix += 'تذكاري ';
@@ -145,23 +145,12 @@ class S {
     if (clean.contains('longbowman') || clean.contains('longbow')) return '${prefix}قوس طويل';
     if (clean.contains('bowman') || clean.contains('bow') || clean.contains('archer')) return '${prefix}نشاب';
     if (clean.contains('halberdier') || clean.contains('halberd')) return '${prefix}هالبرد';
-    if (clean.contains('maiden')) return '${prefix}محاربة';
-    if (clean.contains('north')) return 'حامي الشمال';
-    if (clean.contains('valkyrie')) return '${prefix}فالكيري';
-    if (clean.contains('glasswing')) return 'رامي زجاجي';
-    if (clean.contains('flamebreath')) return 'مهاجم النيران المجنون';
-    if (clean.contains('scalebound')) return 'حارس القشور';
-    if (clean.contains('scaleshard')) return 'قناص حرشفي';
-
-    // 4. Fallback to original if nothing matched
+    
     return englishName;
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Full mapping of ALL units (User's exact names)
-  // ═══════════════════════════════════════════════════════
   static const Map<String, String> _unitAr = {
-    // ═══ 1. Core & Level Units (User's exact names) ═══
+    // ═══ Core ═══
     'maceman': 'جندي بهراوة',
     'spearman': 'جندي رماح',
     'bowman': 'نشاب',
@@ -189,97 +178,193 @@ class S {
     'flamebreathberserker': 'مهاجم النيران المجنون',
     'scaleboundguardian': 'حارس القشور',
     'scaleshardmarksman': 'قناص حرشفي',
-
-    // ═══ 2. باقي الوحدات الأساسية ═══
-    'mace': 'صولجان', 'spear': 'رمح', 'sword': 'سياف', 'halberd': 'هالبرد', 'axe': 'فأس',
-    'pikeman': 'رمح طويل', 'twohandedsword': 'سياف بيدين', 'heavycrossbow': 'قوس مستعرض ثقيل',
-    'heavyspearman': 'رمح ثقيل', 'heavyswordsman': 'سياف ثقيل', 'heavyhalberdier': 'هالبرد ثقيل',
-    'heavymaceman': 'صولجان ثقيل', 'heavyaxeman': 'فأس ثقيل', 'heavylongbowman': 'قوس طويل ثقيل',
-    'heavyarcher': 'رامي ثقيل', 'shortbowman': 'نشاب قصير', 'cavalryarcher': 'فارس رامي',
-
-    // ═══ 3. وحدات الدفاع ═══
-    'militia': 'ميليشيا', 'armedcitizen': 'مواطن مسلح', 'peasant': 'فلاح',
-    'defensivearcher': 'رامي دفاعي', 'wallarcher': 'رامي سور', 'wallcrossbowman': 'قوس سور',
-    'wallspearman': 'رمح سور', 'wallswordsman': 'سياف سور', 'wallmaceman': 'صولجان سور',
-    'wallspadesman': 'مهندس سور', 'wallhalberdier': 'هالبرد سور', 'moatdefender': 'مدافع خندق',
-    'moatspearman': 'رمح خندق', 'moatcrossbowman': 'قوس خندق', 'moatarcher': 'رامي خندق',
-    'gatedefender': 'مدافع بوابة', 'gatespearman': 'رمح بوابة', 'gateswordsman': 'سياف بوابة',
-    'gatespadesman': 'مهندس بوابة', 'gatecrossbowman': 'قوس بوابة', 'gatearcher': 'رامي بوابة',
-
-    // ═══ 4. النخبة والملكية ═══
-    'royalknight': 'فارس ملكي', 'royalcrossbowman': 'قوس ملكي', 'royalsentinel': 'حارس ملكي',
-    'royalscout': 'مستكشف ملكي', 'royalbowman': 'نشاب ملكي', 'royalspearman': 'رمح ملكي',
-    'kingscrossbowman': 'قوس ملكي', 'kingsmace': 'صولجان ملكي', 'kingsmaceman': 'صولجان ملكي',
-    'kingsknight': 'فارس ملكي', 'eliteknight': 'فارس نخبة', 'elitecrossbowman': 'قوس نخبة',
-    'elitebowman': 'نشاب نخبة', 'elitehalberd': 'هالبرد نخبة', 'elitehalberdier': 'هالبرد نخبة',
-    'elitespearman': 'رمح نخبة', 'elitespeerman': 'رمح نخبة', 'eliteswordsman': 'سياف نخبة',
-    'eliteswordman': 'سياف نخبة', 'elitemace': 'صولجان نخبة', 'elitemaceman': 'صولجان نخبة',
-    'elitetwohandedsword': 'سياف بيدين نخبة', 'elitetwohandedswordsman': 'سياف بيدين نخبة',
-    'eliteheavycrossbowman': 'قوس ثقيل نخبة', 'elitekingscrossbowman': 'قوس ملكي نخبة',
-    'elitekingsmace': 'صولجان ملكي نخبة', 'eliteheavyhalberdier': 'هالبرد ثقيل نخبة',
-    'travellingknight': 'فارس مسافر', 'travellingcrossbowman': 'قوس مسافر',
-
-    // ═══ 5. الإمبراطورية والأحداث ═══
-    'imperialknight': 'فارس إمبراطوري', 'imperialmarksman': 'قناص إمبراطوري',
-    'imperialguardsman': 'حارس إمبراطوري', 'imperialbowman': 'نشاب إمبراطوري',
-    'imperialspearman': 'رمح إمبراطوري', 'imperialswordsman': 'سياف إمبراطوري',
-    'khanguards': 'حراس الخان', 'sabercleaver': 'قطاع السيف', 'slingshot': 'مقذاف',
-    'veteransabercleaver': 'قطاع السيف محترف', 'veteranslingshot': 'مقذاف محترف',
-    'renegadelancer': 'رماح مارق', 'renegadespearthrower': 'رامي رماح مارق',
-    'renegadesaiwarrior': 'محارب ساي مارق', 'renegadekunaithrower': 'رامي كوناي مارق',
-    'renegadekatanawarrior': 'محارب كاتانا مارق', 'renegadebowmaster': 'سيد القوس مارق',
-    
-    // ═══ 6. وحدات الظل والرعب ═══
-    'shadowmaceman': 'صولجان الظل', 'shadowcrossbowman': 'قوس الظل', 'shadowrogue': 'مارق الظل',
-    'shadowfelon': 'مجرم الظل', 'shadowscoundrel': 'وغد الظل', 'shadowwretch': 'خسيس الظل',
-    'demonshadow': 'ظل شيطاني', 'deathlyshadow': 'ظل مميت', 'demonhorror': 'رعب شيطاني',
-    'deathlyhorror': 'رعب مميت', 'veterandemonhorror': 'رعب شيطاني محترف',
+    'mace': 'صولجان',
+    'spear': 'رمح',
+    'sword': 'سياف',
+    'halberd': 'هالبرد',
+    'axe': 'فأس',
+    'pikeman': 'رمح طويل',
+    'twohandedsword': 'سياف بيدين',
+    'heavycrossbow': 'قوس مستعرض ثقيل',
+    'heavyspearman': 'رمح ثقيل',
+    'heavyswordsman': 'سياف ثقيل',
+    'heavyhalberdier': 'هالبرد ثقيل',
+    'heavymaceman': 'صولجان ثقيل',
+    'heavyaxeman': 'فأس ثقيل',
+    'heavylongbowman': 'قوس طويل ثقيل',
+    'heavyarcher': 'رامي ثقيل',
+    'shortbowman': 'نشاب قصير',
+    'cavalryarcher': 'فارس رامي',
+    // ═══ Defense ═══
+    'militia': 'ميليشيا',
+    'armedcitizen': 'مواطن مسلح',
+    'peasant': 'فلاح',
+    'defensivearcher': 'رامي دفاعي',
+    'wallarcher': 'رامي سور',
+    'wallcrossbowman': 'قوس سور',
+    'wallspearman': 'رمح سور',
+    'wallswordsman': 'سياف سور',
+    'wallmaceman': 'صولجان سور',
+    'wallspadesman': 'مهندس سور',
+    'wallhalberdier': 'هالبرد سور',
+    'moatdefender': 'مدافع خندق',
+    'moatspearman': 'رمح خندق',
+    'moatcrossbowman': 'قوس خندق',
+    'moatarcher': 'رامي خندق',
+    'gatedefender': 'مدافع بوابة',
+    'gatespearman': 'رمح بوابة',
+    'gateswordsman': 'سياف بوابة',
+    'gatespadesman': 'مهندس بوابة',
+    'gatecrossbowman': 'قوس بوابة',
+    'gatearcher': 'رامي بوابة',
+    // ═══ Elite / Royal ═══
+    'royalknight': 'فارس ملكي',
+    'royalcrossbowman': 'قوس ملكي',
+    'royalsentinel': 'حارس ملكي',
+    'royalscout': 'مستكشف ملكي',
+    'royalbowman': 'نشاب ملكي',
+    'royalspearman': 'رمح ملكي',
+    'kingscrossbowman': 'قوس ملكي',
+    'kingsmace': 'صولجان ملكي',
+    'kingsmaceman': 'صولجان ملكي',
+    'kingsknight': 'فارس ملكي',
+    'eliteknight': 'فارس نخبة',
+    'elitecrossbowman': 'قوس نخبة',
+    'elitebowman': 'نشاب نخبة',
+    'elitehalberd': 'هالبرد نخبة',
+    'elitehalberdier': 'هالبرد نخبة',
+    'elitespearman': 'رمح نخبة',
+    'elitespeerman': 'رمح نخبة',
+    'eliteswordsman': 'سياف نخبة',
+    'eliteswordman': 'سياف نخبة',
+    'elitemace': 'صولجان نخبة',
+    'elitemaceman': 'صولجان نخبة',
+    'elitetwohandedsword': 'سياف بيدين نخبة',
+    'elitetwohandedswordsman': 'سياف بيدين نخبة',
+    'eliteheavycrossbowman': 'قوس ثقيل نخبة',
+    'elitekingscrossbowman': 'قوس ملكي نخبة',
+    'elitekingsmace': 'صولجان ملكي نخبة',
+    'eliteheavyhalberdier': 'هالبرد ثقيل نخبة',
+    'travellingknight': 'فارس مسافر',
+    'travellingcrossbowman': 'قوس مسافر',
+    // ═══ Imperial / Events ═══
+    'imperialknight': 'فارس إمبراطوري',
+    'imperialmarksman': 'قناص إمبراطوري',
+    'imperialguardsman': 'حارس إمبراطوري',
+    'imperialbowman': 'نشاب إمبراطوري',
+    'imperialspearman': 'رمح إمبراطوري',
+    'imperialswordsman': 'سياف إمبراطوري',
+    'khanguards': 'حراس الخان',
+    'sabercleaver': 'قطاع السيف',
+    'slingshot': 'مقذاف',
+    'veteransabercleaver': 'قطاع السيف محترف',
+    'veteranslingshot': 'مقذاف محترف',
+    'renegadelancer': 'رماح مارق',
+    'renegadespearthrower': 'رامي رماح مارق',
+    'renegadesaiwarrior': 'محارب ساي مارق',
+    'renegadekunaithrower': 'رامي كوناي مارق',
+    'renegadekatanawarrior': 'محارب كاتانا مارق',
+    'renegadebowmaster': 'سيد القوس مارق',
+    // ═══ Shadow / Horror ═══
+    'shadowmaceman': 'صولجان الظل',
+    'shadowcrossbowman': 'قوس الظل',
+    'shadowrogue': 'مارق الظل',
+    'shadowfelon': 'مجرم الظل',
+    'shadowscoundrel': 'وغد الظل',
+    'shadowwretch': 'خسيس الظل',
+    'demonshadow': 'ظل شيطاني',
+    'deathlyshadow': 'ظل مميت',
+    'demonhorror': 'رعب شيطاني',
+    'deathlyhorror': 'رعب مميت',
+    'veterandemonhorror': 'رعب شيطاني محترف',
     'veterandeathlyhorror': 'رعب مميت محترف',
-
-    // ═══ 7. الجزر والخرائط ═══
-    'renegadestonesmasher': 'ساحق الحجر مارق', 'renegadesharktoothwarrior': 'محارب سن القرش مارق',
-    'renegadesailripper': 'ممزق الشراع مارق', 'renegadeswashbuckler': 'مبارز مارق',
-    'renegadenorsemanwarrior': 'محارب نورسمان مارق', 'renegadenorsemanbowman': 'نشاب نورسمان مارق',
-    'barbarian': 'بربري', 'wolfhound': 'كلب ذئب', 'renegadesaberwarrior': 'محارب سيف مارق',
-    'renegadedesertbowman': 'نشاب صحراوي مارق', 'renegadecultistwarrior': 'محارب طائفي مارق',
-    'renegadecultistbowman': 'نشاب طائفي مارق', 'flamebearer': 'حامل الشعلة',
-    'veteranflamebearer': 'حامل الشعلة محترف', 'compositebowman': 'نشاب مركب',
+    // ═══ Maps / Islands ═══
+    'renegadestonesmasher': 'ساحق الحجر مارق',
+    'renegadesharktoothwarrior': 'محارب سن القرش مارق',
+    'renegadesailripper': 'ممزق الشراع مارق',
+    'renegadeswashbuckler': 'مبارز مارق',
+    'renegadenorsemanwarrior': 'محارب نورسمان مارق',
+    'renegadenorsemanbowman': 'نشاب نورسمان مارق',
+    'barbarian': 'بربري',
+    'wolfhound': 'كلب ذئب',
+    'renegadesaberwarrior': 'محارب سيف مارق',
+    'renegadedesertbowman': 'نشاب صحراوي مارق',
+    'renegadecultistwarrior': 'محارب طائفي مارق',
+    'renegadecultistbowman': 'نشاب طائفي مارق',
+    'flamebearer': 'حامل الشعلة',
+    'veteranflamebearer': 'حامل الشعلة محترف',
+    'compositebowman': 'نشاب مركب',
     'veterancompositebowman': 'نشاب مركب محترف',
-
-    // ═══ 8. بيريموند والأبطال ═══
-    'marksman': 'قناص', 'muscleman': 'رجل العضلات', 'lionwarrior': 'محارب الأسد',
-    'bearwarrior': 'محارب الدب', 'lionbowman': 'نشاب الأسد', 'bearbowman': 'نشاب الدب',
-    'forsakenmaiden': 'عذراء مهجورة', 'forlornranger': 'حارسة منبوذة',
-    'candycaneprotector': 'حامي عصا الحلوى', 'jollygingerbreadsniper': 'قناص الزنجبيل المرح',
-    'easterchampioness': 'بطلة الفصح', 'valkyriehuntress': 'صيادة فالكيري',
-    'guardianofspring': 'حامي الربيع', 'celestialmarksman': 'قناص سماوي',
-    'fruitpirate': 'قرصان الفواكه', 'summerhuntress': 'صيادة الصيف', 'fruitbreaker': 'كاسر الفواكه',
-    'summermarksman': 'قناص الصيف', 'steinsmasher': 'ساحق الكوب', 'caskmarksmann': 'قناص البرميل',
-    'pretzelguardian': 'حامي البريتزل', 'bavarianbrewer': 'صانع جعة بافاري',
-    'glacialamazonwarrior': 'محاربة أمازونية جليدية', 'glacialamazonarcher': 'رامية أمازونية جليدية',
-    'glacialamazonguardian': 'حامية أمازونية جليدية', 'glacialamazonhuntress': 'صيادة أمازونية جليدية',
-    'christmaswarrior': 'محارب الكريسماس', 'christmasarcher': 'رامي الكريسماس',
-    'christmasguardian': 'حامي الكريسماس', 'christmashuntress': 'صيادة الكريسماس',
-    'berserker': 'بيرسيركر', 'spearwoman': 'امرأة الرمح', 'gingerbreadmaiden': 'عذراء الزنجبيل',
-    'masterswordsman': 'سياف أستاذ', 'masterarcher': 'رامي أستاذ', 'forestwarrior': 'محارب الغابة',
-    'foresthunter': 'صياد الغابة', 'forestguardian': 'حامي الغابة', 'forestbowman': 'نشاب الغابة',
-    'springhuntress': 'صيادة الربيع', 'springfootsoldier': 'جندي ربيع',
-    'shamrockhuntsman': 'صياد البرسيم', 'shamrockassassin': 'سفاح البرسيم',
-    'pumpkinbutcher': 'جزار اليقطين', 'ravenchomper': 'قاطع الغراب', 'skeletonwarrior': 'محارب هيكلي',
-    'skeletonbowman': 'نشاب هيكلي', 'skeletalscytheman': 'حاصد هيكلي', 'skeletalhunter': 'صياد هيكلي',
-    'bonerattler': 'مقلق العظام', 'firewitch': 'ساحرة النار', 'gnomadwarrior': 'محارب جوال',
-    'gnomadarcher': 'رامي جوال', 'gingerbreadbrawler': 'مشاجر الزنجبيل',
-    'gingerbreadsniper': 'قناص الزنجبيل', 'cowberdier': 'بقرة هالبرد', 'longbowox': 'ثور قوس طويل',
-    'marauder': 'سالب', 'pyromaniac': 'مهووس بالنار', 'veteranmarauder': 'سالب محترف',
-    'veteranpyromaniac': 'مهووس بالنار محترف', 'masterfrostbowman': 'نشاب الصقيع الأستاذ',
-    'frostbowman': 'نشاب الصقيع', 'masterbonehuntress': 'صيادة العظام الأستاذة',
-    'bonehuntress': 'صيادة العظام', 'demonslayer': 'قاتل الشياطين', 'assassin': 'سفاح',
-    'renegadecavesmasher': 'ساحق الكهف مارق', 'renegadecavehunter': 'صياد الكهف مارق',
-
-    // ═══ 9. الأدوات والمعدات ═══
-    'ladder': 'سلم', 'siegetower': 'برج حصار', 'batteringram': 'كبش حصار', 'catapult': 'منجنيق',
-    'mantlet': 'متراس', 'ironmantlet': 'متراس حديدي', 'firearrow': 'سهم ناري', 'wall': 'سور',
-    'gate': 'بوابة', 'moat': 'خندق',
+    // ═══ Heroes / Berimond ═══
+    'marksman': 'قناص',
+    'muscleman': 'رجل العضلات',
+    'lionwarrior': 'محارب الأسد',
+    'bearwarrior': 'محارب الدب',
+    'lionbowman': 'نشاب الأسد',
+    'bearbowman': 'نشاب الدب',
+    'forsakenmaiden': 'عذراء مهجورة',
+    'forlornranger': 'حارسة منبوذة',
+    'candycaneprotector': 'حامي عصا الحلوى',
+    'jollygingerbreadsniper': 'قناص الزنجبيل المرح',
+    'easterchampioness': 'بطلة الفصح',
+    'valkyriehuntress': 'صيادة فالكيري',
+    'guardianofspring': 'حامي الربيع',
+    'celestialmarksman': 'قناص سماوي',
+    'fruitpirate': 'قرصان الفواكه',
+    'summerhuntress': 'صيادة الصيف',
+    'fruitbreaker': 'كاسر الفواكه',
+    'summermarksman': 'قناص الصيف',
+    'steinsmasher': 'ساحق الكوب',
+    'caskmarksmann': 'قناص البرميل',
+    'pretzelguardian': 'حامي البريتزل',
+    'bavarianbrewer': 'صانع جعة بافاري',
+    'glacialamazonwarrior': 'محاربة أمازونية جليدية',
+    'glacialamazonarcher': 'رامية أمازونية جليدية',
+    'glacialamazonguardian': 'حامية أمازونية جليدية',
+    'glacialamazonhuntress': 'صيادة أمازونية جليدية',
+    'christmaswarrior': 'محارب الكريسماس',
+    'christmasarcher': 'رامي الكريسماس',
+    'christmasguardian': 'حامي الكريسماس',
+    'christmashuntress': 'صيادة الكريسماس',
+    'berserker': 'بيرسيركر',
+    'spearwoman': 'امرأة الرمح',
+    'gingerbreadmaiden': 'عذراء الزنجبيل',
+    'masterswordsman': 'سياف أستاذ',
+    'masterarcher': 'رامي أستاذ',
+    'forestwarrior': 'محارب الغابة',
+    'foresthunter': 'صياد الغابة',
+    'forestguardian': 'حامي الغابة',
+    'forestbowman': 'نشاب الغابة',
+    'springhuntress': 'صيادة الربيع',
+    'springfootsoldier': 'جندي ربيع',
+    'shamrockhuntsman': 'صياد البرسيم',
+    'shamrockassassin': 'سفاح البرسيم',
+    'pumpkinbutcher': 'جزار اليقطين',
+    'ravenchomper': 'قاطع الغراب',
+    'skeletonwarrior': 'محارب هيكلي',
+    'skeletonbowman': 'نشاب هيكلي',
+    'skeletalscytheman': 'حاصد هيكلي',
+    'skeletalhunter': 'صياد هيكلي',
+    'bonerattler': 'مقلق العظام',
+    'firewitch': 'ساحرة النار',
+    'gnomadwarrior': 'محارب جوال',
+    'gnomadarcher': 'رامي جوال',
+    'gingerbreadbrawler': 'مشاجر الزنجبيل',
+    'gingerbreadsniper': 'قناص الزنجبيل',
+    'cowberdier': 'بقرة هالبرد',
+    'longbowox': 'ثور قوس طويل',
+    'marauder': 'سالب',
+    'pyromaniac': 'مهووس بالنار',
+    'veteranmarauder': 'سالب محترف',
+    'veteranpyromaniac': 'مهووس بالنار محترف',
+    'masterfrostbowman': 'نشاب الصقيع الأستاذ',
+    'frostbowman': 'نشاب الصقيع',
+    'masterbonehuntress': 'صيادة العظام الأستاذة',
+    'bonehuntress': 'صيادة العظام',
+    'demonslayer': 'قاتل الشياطين',
+    'assassin': 'سفاح',
+    'renegadecavesmasher': 'ساحق الكهف مارق',
+    'renegadecavehunter': 'صياد الكهف مارق',
   };
 
   static const Map<String, Map<String, String>> _map = {

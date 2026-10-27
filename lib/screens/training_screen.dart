@@ -133,7 +133,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
   Future<void> _fetchBarracksLevel() async {
     if (_castle == null) return;
     try {
-      // ✅ السيرفر بيبعت بيانات المباني صح لما بنطلب CID: -1
       await widget.client.sendXtAndWait(
         'jca',
         jsonEncode({'CID': -1, 'KID': 0}),
@@ -174,12 +173,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
       final spl = data['spl'] ?? data;
       final ps = spl['PS'] as Map?;
       final qs = spl['QS'] as List?;
-      final tct = spl['TCT'] as num? ?? 0; // إجمالي الوقت
+      final tct = spl['TCT'] as num? ?? 0;
 
       final now = DateTime.now();
       final parsedSlots = <SlotInfo>[];
 
-      // الخانة الشغالة (PS)
       if (ps != null && ps.isNotEmpty) {
         final rct = ps['RCT'] as num? ?? 0;
         final tua = ps['TUA'] as num? ?? 0;
@@ -187,7 +185,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
         parsedSlots.add(SlotInfo(rut: rct.toInt(), fetchedAt: now, isTraining: true, units: tua.toInt(), wodId: wid.toInt()));
       }
 
-      // الخانات الخمسة (QS)
       if (qs != null) {
         for (final q in qs) {
           if (q is! Map) continue;
@@ -339,18 +336,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text(S.selectCastle, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.subTextColor(context), letterSpacing: 0.8, decoration: TextDecoration.none)),
-                    const Spacer(),
-                    if (_castle != null && widget.client.getBarracksLevel(_castle!.areaId) != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(color: AppTheme.teal.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
-                        child: Text('الباراكس لفل ${widget.client.getBarracksLevel(_castle!.areaId)}', style: const TextStyle(color: AppTheme.teal, fontSize: 9, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
-                      ),
-                  ],
-                ),
+                Text(S.selectCastle, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.subTextColor(context), letterSpacing: 0.8, decoration: TextDecoration.none)),
                 const SizedBox(height: 2),
                 if (_castles.isEmpty)
                   Text(S.isAr ? 'لا توجد قلاع' : 'No castles', style: TextStyle(color: AppTheme.subTextColor(context), fontSize: 12, decoration: TextDecoration.none))
@@ -502,24 +488,21 @@ class _TrainingScreenState extends State<TrainingScreen> {
             size: isMain ? 24 : 18,
           ),
           const SizedBox(height: 4),
-          Text(
-            s.timeLabel,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: c, fontSize: isMain ? 12 : 9, fontWeight: FontWeight.bold, decoration: TextDecoration.none),
-          ),
-          if (s.isBusy) ...[
-            const SizedBox(height: 2),
+          if (isMain) ...[
+            // الخانة الكبيرة (الشغالة)
+            Text(s.timeLabel, style: TextStyle(color: c, fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none), textAlign: TextAlign.center),
+            if (s.isBusy) ...[
+              Text(unitName, style: TextStyle(color: c, fontSize: 10, decoration: TextDecoration.none), maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: TextAlign.center),
+              Text('${s.units} جندي', style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+            ]
+          ] else ...[
+            // الخانات الصغيرة (الـ 5)
             Text(
-              unitName,
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: c, fontSize: isMain ? 10 : 8, decoration: TextDecoration.none),
+              s.isFree ? 'متاحة' : (s.isBusy ? 'مشغولة' : 'مقفولة'),
+              style: TextStyle(color: c, fontSize: 9, fontWeight: FontWeight.bold, decoration: TextDecoration.none),
             ),
-            Text(
-              '${s.units} جندي',
-              style: TextStyle(color: c, fontSize: isMain ? 10 : 8, fontWeight: FontWeight.bold, decoration: TextDecoration.none),
-            ),
+            if (s.isBusy)
+              Text(s.timeLabel, style: TextStyle(color: c, fontSize: 8, decoration: TextDecoration.none)),
           ],
         ],
       ),
