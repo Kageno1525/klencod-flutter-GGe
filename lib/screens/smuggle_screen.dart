@@ -10,6 +10,7 @@ import 'package:gge/widgets/animated_widgets.dart';
 class SmuggleScreen extends StatefulWidget {
   final GgeClient client;
   const SmuggleScreen({super.key, required this.client});
+
   @override
   State<SmuggleScreen> createState() => _SmuggleScreenState();
 }
@@ -19,17 +20,21 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   Map<int, UnitCatalogEntry> _catalog = {};
   List<AllyMember> _members = [];
   List<CommanderInfo> _commanders = [];
+
   OwnedCastle? _source;
   AllyMember? _target;
   AllyCastle? _targetCastle;
   Lord? _selectedLord;
+
   List<CastleUnit> _units = [];
   final Map<int, TextEditingController> _amtCtrl = {};
   final _timeCtrl = TextEditingController(text: '12');
+
   bool _loadingUnits = false;
   bool _loadingMembers = false;
   bool _loadingCommanders = false;
   bool _sending = false;
+
   String _filter = 'all';
   String? _error;
 
@@ -48,8 +53,10 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         _castles = castles;
         _catalog = catalog;
         if (castles.isNotEmpty) {
-          _source = castles.firstWhere((c) => c.areaType == 1,
-              orElse: () => castles.first);
+          _source = castles.firstWhere(
+            (c) => c.areaType == 1,
+            orElse: () => castles.first,
+          );
         }
       });
       await _loadMembers();
@@ -68,7 +75,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         _commanders = cmds;
         _loadingCommanders = false;
 
-        // ✅ الافتراضي = اللورد الرئيسي (LID=0) — يقدر يقود من أي قلعة
+        // ✅ الافتراضي = اللورد الرئيسي (LID=0)
         if (_selectedLord == null) {
           try {
             _selectedLord = cmds.firstWhere((c) => c.lord.id == 0).lord;
@@ -80,7 +87,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           final current = cmds.firstWhere(
               (c) => c.lord.id == _selectedLord!.id,
               orElse: () => CommanderInfo(lord: _selectedLord!));
-          // LID=0 مايتشالش أبداً — غيره لو مشغول يتشال
+          // LID=0 مايتشالش أبداً
           if (_selectedLord!.id != 0 && current.isBusy) {
             _selectedLord = null;
           }
@@ -135,6 +142,14 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         }
         _loadingUnits = false;
       });
+      if (units.isEmpty) {
+        _snack(
+          S.isAr
+              ? 'لا توجد وحدات في ${_source!.displayName}'
+              : 'No units at ${_source!.displayName}',
+          color: AppTheme.orange,
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingUnits = false);
@@ -149,6 +164,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     return _members;
   }
 
+  // ✅ FIX: 'all' ميفلترش خالص — يعرض كل الوحدات حتى لو الكتالوج ناقص
   List<CastleUnit> get _filteredUnits {
     switch (_filter) {
       case 'offense':
@@ -156,7 +172,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       case 'defense':
         return _units.where((u) => u.isCombat && u.isDefensive).toList();
       default:
-        return _units.where((u) => u.isCombat).toList();
+        return _units; // ✅ كل الوحدات
     }
   }
 
@@ -197,23 +213,27 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     if (_targetCastle!.kingdomId != _source!.kingdomId) {
       _snack(
         S.isAr
-            ? '⚠️ الهدف في KID ${_targetCastle!.kingdomId} والمصدر في KID ${_source!.kingdomId}. cds لا يدعم عبر الممالك.'
-            : '⚠️ Cross-kingdom: target KID=${_targetCastle!.kingdomId}, source KID=${_source!.kingdomId}. cds does not support.',
+            ? '⚠️ الهدف في KID ${_targetCastle!.kingdomId} والمصدر في KID ${_source!.kingdomId}.'
+            : '⚠️ Cross-kingdom: target KID=${_targetCastle!.kingdomId}, source KID=${_source!.kingdomId}.',
         color: AppTheme.orange,
       );
       return;
     }
+
     final toSend = <List<int>>[];
     for (final u in _units) {
       final a = int.tryParse(_amtCtrl[u.wodId]?.text ?? '0') ?? 0;
       if (a > 0) toSend.add([u.wodId, a.clamp(0, u.amount)]);
     }
+
     if (toSend.isEmpty) {
       _snack(S.noUnitsSelected, color: AppTheme.orange);
       return;
     }
+
     final stationTime = int.tryParse(_timeCtrl.text) ?? 12;
     setState(() => _sending = true);
+
     final result = await widget.client.sendToAlly(
       source: _source!,
       target: _targetCastle!,
@@ -223,9 +243,11 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     );
     if (!mounted) return;
     setState(() => _sending = false);
+
     if (result.success) {
       _snack('✓ ${S.transferOk}', color: AppTheme.green);
       HapticFeedback.mediumImpact();
+
       setState(() {
         final sentMap = <int, int>{};
         for (var item in toSend) sentMap[item[0]] = item[1];
@@ -254,16 +276,16 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         errMsg = S.maxMovements;
       } else if (errMsg.contains('CROSS_KINGDOM')) {
         errMsg = S.isAr
-            ? 'المصدر والهدف في مملكتين مختلفتين — cds يعمل داخل نفس المملكة فقط'
-            : 'Source and target in different kingdoms — cds is same-kingdom only';
+            ? 'المصدر والهدف في مملكتين مختلفتين'
+            : 'Source and target in different kingdoms';
       } else if (errMsg.contains('Kingdom switch failed')) {
         errMsg = S.isAr
             ? 'فشل الانتقال لمملكة المصدر — حاول مرة أخرى'
             : 'Failed to switch to source kingdom — retry';
       } else if (errMsg.contains('(6)') || errMsg.contains('code 6')) {
         errMsg = S.isAr
-            ? 'خطأ 6: القائد مش موجود في قلعة المصدر. استخدم اللورد الرئيسي (LID=0)'
-            : 'Error 6: commander not at source castle. Use Main Lord (LID=0)';
+            ? 'خطأ 6: القائد مش موجود في قلعة المصدر'
+            : 'Error 6: commander not at source castle';
       }
       _snack('${S.transferFail}: $errMsg', color: AppTheme.red);
     }
@@ -273,8 +295,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(msg,
-            style: const TextStyle(decoration: TextDecoration.none)),
+        content: Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
       ));
@@ -568,26 +589,22 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                         for (final c in _amtCtrl.values) c.dispose();
                         _amtCtrl.clear();
                       });
-                      // ✅ لو في عضو مختار، نعيد تحميل الوحدات للمصدر الجديد
-                      if (_target != null && _targetCastle != null) {
-                        // نتأكد إن الهدف في نفس مملكة المصدر الجديد
+                      // ✅ FIX: لو في target مختار، نتحقق من التوافق ونعيد التحميل
+                      if (_target != null && v != null) {
                         final newTargetCastle =
-                            _target!.castleIn(v?.kingdomId ?? 0);
+                            _target!.castleIn(v.kingdomId);
                         if (newTargetCastle != null) {
-                          setState(() {
-                            _targetCastle = newTargetCastle;
-                          });
+                          setState(() => _targetCastle = newTargetCastle);
                           _loadUnits();
                         } else {
-                          // الهدف مش عنده قلعة في المملكة دي — نمسح الهدف
                           setState(() {
                             _target = null;
                             _targetCastle = null;
                           });
                           _snack(
                             S.isAr
-                                ? '⚠️ ${_target?.name ?? "العضو"} ليس لديه قلعة في هذه المملكة — اختر عضواً آخر'
-                                : '⚠️ Member has no castle in this kingdom — pick another',
+                                ? '${_target?.name} ليس لديه قلعة في هذه المملكة'
+                                : 'No castle for target in this kingdom',
                             color: AppTheme.orange,
                           );
                         }
@@ -604,7 +621,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   Widget _lordPicker(BuildContext context) {
-    // ✅ اللورد الرئيسي (LID=0) دايماً متاح + القواد الفاضيين
+    // ✅ اللورد الرئيسي (LID=0) دايماً + القواد المتاحين
     final availableLords = _commanders
         .where((c) => c.lord.id == 0 || !c.isBusy)
         .map((c) => c.lord)
@@ -765,6 +782,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
 
   Widget _membersSection(BuildContext context) {
     final filtered = _filteredMembers;
+
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
@@ -853,6 +871,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   Widget _memberTile(BuildContext context, AllyMember m) {
     final selected = _target?.playerId == m.playerId;
     final hasPeace = m.hasPeace;
+
     String distanceLabel = '';
     if (_source != null) {
       final d = m.closestDistance(_source!.kingdomId, _source!.x, _source!.y);
@@ -860,28 +879,27 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           ? 'Diff. kingdom'
           : '${d.toStringAsFixed(0)} ${S.clicks}';
     }
+
     return GestureDetector(
       onTap: () {
+        final sameKingdom = m.castleIn(_source?.kingdomId ?? 0);
+        if (sameKingdom == null) {
+          _snack(
+            S.isAr
+                ? '${m.name} ليس لديه قلعة في مملكتك'
+                : '${m.name} has no castle in your kingdom',
+            color: AppTheme.orange,
+          );
+          return;
+        }
         setState(() {
           _target = m;
-          final sameKingdomCastle = m.castleIn(_source?.kingdomId ?? 0);
-          _targetCastle = sameKingdomCastle ??
-              (m.castles.isNotEmpty ? m.castles.first : null);
+          _targetCastle = sameKingdom;
           _units = [];
           for (final c in _amtCtrl.values) c.dispose();
           _amtCtrl.clear();
         });
-        if (_targetCastle != null) {
-          if (_targetCastle!.kingdomId != _source?.kingdomId) {
-            _snack(
-              S.isAr
-                  ? '⚠️ ${m.name} ليس لديه قلعة في خريطتك (KID ${_source?.kingdomId}). cds لا يدعم عبر الممالك.'
-                  : '⚠️ ${m.name} has no castle in your kingdom (KID ${_source?.kingdomId}). cds is same-kingdom only.',
-              color: AppTheme.orange,
-            );
-          }
-          _loadUnits();
-        }
+        _loadUnits();
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
@@ -1128,7 +1146,22 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          ..._filteredUnits.map((u) => _unitRow(context, u)),
+          if (_filteredUnits.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Center(
+                child: Text(
+                  S.isAr
+                      ? 'لا توجد وحدات في هذه القلعة'
+                      : 'No units at this castle',
+                  style: TextStyle(
+                      color: AppTheme.subTextColor(context),
+                      decoration: TextDecoration.none),
+                ),
+              ),
+            )
+          else
+            ..._filteredUnits.map((u) => _unitRow(context, u)),
           const SizedBox(height: 10),
           Container(
             padding: const EdgeInsets.all(14),
@@ -1308,6 +1341,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
 // ═════════════════════════════════════════════════════════════
 class _TrafficLogSheet extends StatefulWidget {
   const _TrafficLogSheet();
+
   @override
   State<_TrafficLogSheet> createState() => _TrafficLogSheetState();
 }
@@ -1363,6 +1397,7 @@ class _TrafficLogSheetState extends State<_TrafficLogSheet> {
   Widget build(BuildContext context) {
     final entries = TrafficLog.entries;
     final h = MediaQuery.of(context).size.height;
+
     return Container(
       height: h * 0.9,
       decoration: const BoxDecoration(

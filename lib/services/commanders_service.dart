@@ -22,7 +22,7 @@ class CommandersService {
         id: _asInt(l['ID']),
         visibleIndex: _asInt(l['VIS']),
         factionId: _asInt(l['FID']),
-        name: _asString(l['N']), // ✅ قراءة آمنة
+        name: _asString(l['N']),
       ));
     }
 
@@ -50,8 +50,6 @@ class CommandersService {
         final pt = _asInt(mov['PT']);
         final movType = _asInt(mov['T']);
 
-        // Show T=0 (attack) and T=1 (support/smuggle) always
-        // Skip T=2/T=3 only when already arrived (completed)
         if ((movType == 2 || movType == 3) && tt <= pt) continue;
 
         final ta = mov['TA'] as List?;
@@ -77,6 +75,17 @@ class CommandersService {
         lid ??= _asIntOrNull(mov['LID']);
         lid ??= _asIntOrNull(m['LID']);
 
+        // ✅ FIX: تجاهل حركة اللورد الرئيسي "الوهمية"
+        //    SID == OID == myPid = هو بيتحرك في نفس قلعته (visual فقط)
+        //    عشان كده LID=0 كان دايماً يبان busy وميظهرش في القائمة
+        if (lid == 0) {
+          final sid = _asInt(sa[3]);
+          final oid = _asInt(sa[4]);
+          if (sid == oid && myPid != null && sid == myPid) {
+            continue;
+          }
+        }
+
         if (lid != null && lid >= 0) {
           movementsMap[lid] = LordMovement(
             movementId: _asInt(mov['MID']),
@@ -101,8 +110,12 @@ class CommandersService {
       ));
     }
 
-    result.sort(
-        (a, b) => a.lord.visibleIndex.compareTo(b.lord.visibleIndex));
+    // ✅ اللورد الرئيسي (LID=0) الأول دايماً
+    result.sort((a, b) {
+      if (a.lord.id == 0) return -1;
+      if (b.lord.id == 0) return 1;
+      return a.lord.visibleIndex.compareTo(b.lord.visibleIndex);
+    });
     return result;
   }
 
@@ -125,7 +138,6 @@ class CommandersService {
     }
   }
 
-  // ✅ دالة مساعدة لقراءة الأرقام بأمان
   static int _asInt(dynamic v, [int def = 0]) {
     if (v is int) return v;
     if (v is num) return v.toInt();
@@ -141,7 +153,6 @@ class CommandersService {
     return null;
   }
 
-  // ✅ دالة مساعدة لقراءة النصوص بأمان (حتى لو جت رقم)
   static String? _asString(dynamic v) {
     if (v == null) return null;
     if (v is String) return v;
