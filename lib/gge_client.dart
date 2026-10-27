@@ -96,10 +96,17 @@ class GgeClient {
   bool _reconnecting = false;
   bool _appForeground = true;
   DateTime? _lastRxTime;
-  bool _networkWaitActive = false; // ✅ عشان نمنع التعارض
+  bool _networkWaitActive = false;
 
   int? _cachedPlayerId;
   final Map<int, AttackAlert> _latestAlertByMid = {};
+
+  // ✅ إضافة الوحدات المفتوحة ومستوى الباراكس
+  final Set<int> _unlockedUnitIds = {};
+  Set<int> get unlockedUnitIds => _unlockedUnitIds;
+
+  final Map<int, int> _barracksLevelByCastle = {};
+  int? getBarracksLevel(int areaId) => _barracksLevelByCastle[areaId];
 
   Map<int, CastleStats>? _cachedStatsByArea;
   Map<int, CastleStats>? get cachedStatsByArea => _cachedStatsByArea;
@@ -116,10 +123,6 @@ class GgeClient {
 
   static bool _isPlausibleAllianceId(int? aid) =>
       aid != null && aid > 0 && aid < _maxPlausibleAllianceId;
-
-  // ═══ Barracks Levels per castle ═══
-  final Map<int, int> _barracksLevelByCastle = {};
-  int? getBarracksLevel(int areaId) => _barracksLevelByCastle[areaId];
 
   late final CastleService castleService = CastleService(this);
   late final AllianceService allianceService = AllianceService(this);
@@ -192,6 +195,28 @@ class GgeClient {
               TrafficLog.add('ST',
                   '✅ Cached ${_cachedAllianceMembers!.length} members from gbd.ain');
             }
+          }
+        }
+
+        // ✅ قراءة الوحدات المفتوحة
+        final gpc = data['gpc'];
+        if (gpc is Map) {
+          final areas = gpc['A'] as List?;
+          if (areas != null) {
+            _unlockedUnitIds.clear();
+            for (final area in areas) {
+              if (area is! Map) continue;
+              final u = area['U'];
+              if (u is! Map) continue;
+              final unlocked = u['U'] as List?;
+              if (unlocked != null) {
+                for (final id in unlocked) {
+                  final wod = _asIntOrNull(id);
+                  if (wod != null && wod > 0) _unlockedUnitIds.add(wod);
+                }
+              }
+            }
+            TrafficLog.add('ST', '✅ Unlocked units: ${_unlockedUnitIds.length}');
           }
         }
       } catch (e) {
@@ -814,7 +839,7 @@ class GgeClient {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  ✅ HERO UPDATE: No spam on reconnection
+  //  HERO RECONNECT LOGIC (No Spam / Network Waiter)
   // ═══════════════════════════════════════════════════════
   
   Future<bool> _hasInternet() async {
@@ -831,22 +856,19 @@ class GgeClient {
     if (_disposed) return;
     if (!_appForeground && !allowBackgroundReconnect) return;
     if (!isLoggedIn) return;
-    if (_networkWaitActive) return; // بنمنع الـ spam
+    if (_networkWaitActive) return; 
 
-    // بنستنى 3 ثواني عشان نتأكد من الحالة
     Future.delayed(const Duration(seconds: 3), () async {
       if (_disposed || _connected) return;
       if (!_appForeground && !allowBackgroundReconnect) return;
       if (!isLoggedIn) return;
 
-      // الحالة 1: النت قاطع → نستنى لما يرجع
       final hasNet = await _hasInternet();
       if (!hasNet) {
         _status('⚠️ Network lost. Waiting for internet to return...');
         _networkWaitActive = true;
         _waitForNetworkAndReconnect();
       } else {
-        // الحالة 2: النت شغال بس الاتصال اتقطع → غالباً انت فتحت اللعبة
         _status('🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
         _status('👉 Tap "Login" to reconnect manually when done.');
       }
