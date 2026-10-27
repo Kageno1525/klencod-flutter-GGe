@@ -14,12 +14,14 @@ class SlotInfo {
   final DateTime fetchedAt;
   final bool isTraining;
   final int units;
+  final int? wodId;
 
   SlotInfo({
     required this.rut,
     required this.fetchedAt,
     this.isTraining = false,
     this.units = 0,
+    this.wodId,
   });
 
   bool get isLocked => rut == -1;
@@ -58,24 +60,24 @@ class TrainingScreen extends StatefulWidget {
 class _TrainingScreenState extends State<TrainingScreen> {
   static const int _maxPerBatch = 80;
 
-  // ═══ Mapping of Barracks Level -> Trainable Unit Names ═══
+  // ═══ DICTIONARY: EXACT UNIT NAMES ALLOWED PER LEVEL ═══
   static const Map<int, List<String>> _levelUnits = {
-    1: ['mace', 'spear'],
-    2: ['bow', 'crossbow'],
-    3: ['sword', 'archer'],
-    4: ['twohanded', 'halberd'],
-    5: ['heavy crossbow', 'longbow'],
-    6: ['veteran spear', 'veteran twohanded', 'veteran longbow', 'veteran heavy crossbow'],
-    7: ['relic axe'],
-    9: ['relic shortbow'],
-    11: ['relic hammer'],
-    13: ['relic longbow'],
-    14: ['shield maiden', 'protector of the north'],
-    15: ['valkyrie ranger', 'valkyrie sniper'],
-    16: ['glasswing archer'],
-    17: ['flamebreath berserker'],
-    19: ['scalebound guardian'],
-    20: ['scaleshard marksman'],
+    1: ['maceman', 'spearman'],
+    2: ['bowman', 'crossbowman'],
+    3: ['swordsman', 'archer'],
+    4: ['twohandedswordsman', 'halberdier'],
+    5: ['heavycrossbowman', 'longbowman'],
+    6: ['veteranhalberdier', 'veterantwohandedswordsman', 'veteranlongbowman', 'veteranheavycrossbowman'],
+    7: ['relicaxeman'],
+    9: ['relicshortbowman'],
+    11: ['relichammerman'],
+    13: ['reliclongbowman'],
+    14: ['shieldmaiden', 'protectorofthenorth'],
+    15: ['valkyrieranger', 'valkyriesniper'],
+    16: ['glasswingarcher'],
+    17: ['flamebreathberserker'],
+    19: ['scaleboundguardian'],
+    20: ['scaleshardmarksman'],
   };
 
   List<OwnedCastle> _castles = [];
@@ -157,7 +159,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
         timeoutMs: 8000,
         isAction: false,
       );
-      if (mounted) setState(() {});
+      if (mounted) setState(() {
+        _selectedUnit = _filteredTrainable.isNotEmpty ? _filteredTrainable.first : null;
+      });
     } catch (e) {
       TrafficLog.add('ER', 'jca fetch error: $e');
     }
@@ -194,12 +198,15 @@ class _TrainingScreenState extends State<TrainingScreen> {
       final now = DateTime.now();
       final parsedSlots = <SlotInfo>[];
 
+      // 1. الخانة اللي بتتصنع حالياً
       if (ps != null && ps.isNotEmpty) {
         final rct = ps['RCT'] as num? ?? 0;
         final tua = ps['TUA'] as num? ?? 0;
-        parsedSlots.add(SlotInfo(rut: rct.toInt(), fetchedAt: now, isTraining: true, units: tua.toInt()));
+        final wid = ps['WID'] as num? ?? 0;
+        parsedSlots.add(SlotInfo(rut: rct.toInt(), fetchedAt: now, isTraining: true, units: tua.toInt(), wodId: wid.toInt()));
       }
 
+      // 2. باقي الخانات
       if (qs != null) {
         for (final q in qs) {
           if (q is! Map) continue;
@@ -222,18 +229,28 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
+  // ═══ CUMULATIVE FILTER (Level 1 to Current) ═══
   List<UnitCatalogEntry> get _filteredTrainable {
-    final level = widget.client.getBarracksLevel(_castle?.areaId ?? 0);
+    final level = widget.client.getBarracksLevel(_castle?.areaId ?? 0) ?? 1;
     
-    // Default to L1 if level unknown
-    final allowedNames = _levelUnits[level ?? 1] ?? [];
+    // جمع كل الوحدات من المستوى 1 لحد المستوى الحالي
+    final allowedKeys = <String>[];
+    for (int i = 1; i <= level; i++) {
+      if (_levelUnits.containsKey(i)) {
+        allowedKeys.addAll(_levelUnits[i]!);
+      }
+    }
     
-    // In case the mapping is empty (e.g. L8), show empty
-    if (allowedNames.isEmpty) return [];
+    if (allowedKeys.isEmpty) return [];
 
     return _trainable.where((u) {
-      final name = u.displayName.toLowerCase();
-      return allowedNames.any((allowed) => name.contains(allowed));
+      // تنظيف الاسم عشان نطابقه بالظبط
+      final clean = u.displayName.toLowerCase()
+          .replaceAll('barracks_unit_', '')
+          .replaceAll(' ', '')
+          .replaceAll('_', '');
+      
+      return allowedKeys.contains(clean);
     }).toList();
   }
 
@@ -399,7 +416,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
     int freeCount = slots?.where((s) => s.isFree).length ?? 0;
     int busyCount = slots?.where((s) => s.isBusy).length ?? 0;
-    int totalActive = freeCount + busyCount;
+    int totalAvailable = freeCount + busyCount;
 
     return AppTheme.glassCard(
       context: context,
@@ -417,8 +434,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 onTap: () => _loadSlots(force: true),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(color: totalActive > 0 && freeCount == 0 ? AppTheme.red.withOpacity(0.15) : AppTheme.teal.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
-                  child: Text('$freeCount/$totalActive', style: TextStyle(color: totalActive > 0 && freeCount == 0 ? AppTheme.red : AppTheme.teal, fontWeight: FontWeight.bold, fontSize: 11, decoration: TextDecoration.none)),
+                  decoration: BoxDecoration(color: totalAvailable > 0 && freeCount == 0 ? AppTheme.red.withOpacity(0.15) : AppTheme.teal.withOpacity(0.15), borderRadius: BorderRadius.circular(8)),
+                  child: Text('$freeCount/$totalAvailable', style: TextStyle(color: totalAvailable > 0 && freeCount == 0 ? AppTheme.red : AppTheme.teal, fontWeight: FontWeight.bold, fontSize: 11, decoration: TextDecoration.none)),
                 ),
               ),
             ],
@@ -434,7 +451,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 Color c = isFree ? AppTheme.green : (isBusy ? AppTheme.orange : AppTheme.subTextColor(context));
 
                 return Container(
-                  width: 65,
+                  width: 70,
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   decoration: BoxDecoration(
                     color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(10),
@@ -446,8 +463,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       Icon(isFree ? Icons.check_circle_outline_rounded : (isBusy ? Icons.hourglass_top_rounded : Icons.lock_rounded), color: c, size: 16),
                       const SizedBox(height: 4),
                       Text(s.timeLabel, style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
-                      if (s.isTraining)
-                        Text('${s.units}x', style: TextStyle(color: c, fontSize: 9, decoration: TextDecoration.none)),
+                      if (s.isTraining && s.wodId != null) ...[
+                        const SizedBox(height: 2),
+                        Text(_catalog[s.wodId]?.displayName != null ? S.unitName(_catalog[s.wodId]!.displayName) : 'شغال', style: TextStyle(color: c, fontSize: 8, decoration: TextDecoration.none), overflow: TextOverflow.ellipsis),
+                        Text('${s.units} جندي', style: TextStyle(color: c, fontSize: 8, decoration: TextDecoration.none)),
+                      ],
                     ],
                   ),
                 );

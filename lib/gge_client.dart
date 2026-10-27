@@ -225,7 +225,6 @@ class GgeClient {
           }
         }
         
-        // AID logic
         int? aid;
         if (gca is Map) {
           final o = gca['O'] as Map?;
@@ -300,7 +299,6 @@ class GgeClient {
       } catch (_) {}
     }
 
-    // ═══ Movement recall (attacker withdrew army) ═══
     if (msg.command == 'mrm' && msg.payload != null) {
       try {
         final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
