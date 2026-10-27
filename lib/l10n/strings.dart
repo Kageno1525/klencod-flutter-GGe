@@ -190,10 +190,6 @@ class S {
     return englishName;
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Full mapping of ALL units (Server sends them in many
-  //  formats, so we handle both exact and lowercase).
-  // ═══════════════════════════════════════════════════════
   static const Map<String, String> _unitAr = {
     // ═══ CORE BARRACKS · MELEE ═══
     'Maceman': 'صولجان', 'maceman': 'صولجان', 'Mace': 'صولجان', 'mace': 'صولجان',
@@ -366,7 +362,7 @@ class S {
     'ProtectorOfTheNorth': 'حامي الشمال', 'protectorofthenorth': 'حامي الشمال',
     'ValkyrieSniper': 'قناصة فالكيري', 'valkyriesniper': 'قناصة فالكيري',
 
-    // ═══ SOVEREIGN EVENT EDITIONS (specific) ═══
+    // ═══ SOVEREIGN EVENT EDITIONS ═══
     'ForsakenMaiden': 'عذراء مهجورة', 'forsakenmaiden': 'عذراء مهجورة',
     'ForlornRanger': 'حارسة منبوذة', 'forlornranger': 'حارسة منبوذة',
     'CandyCaneProtector': 'حامي عصا الحلوى', 'candycaneprotector': 'حامي عصا الحلوى',
@@ -390,7 +386,7 @@ class S {
     'ChristmasWarrior': 'محارب الكريسماس', 'christmaswarrior': 'محارب الكريسماس',
     'ChristmasArcher': 'رامي الكريسماس', 'christmasarcher': 'رامي الكريسماس',
     'ChristmasGuardian': 'حامي الكريسماس', 'christmasguardian': 'حامي الكريسماس',
-    'ChristmasHuntress': 'صيادة الكريسماس', 'christmas huntress': 'صيادة الكريسماس',
+    'ChristmasHuntress': 'صيادة الكريسماس', 'christmashuntress': 'صيادة الكريسماس', // ✅ تم إصلاح المسافة هنا
 
     // ═══ GLORY TITLE UNITS ═══
     'Berserker': 'بيرسيركر', 'berserker': 'بيرسيركر',
@@ -453,8 +449,7 @@ class S {
     'RenegadeCaveSmasher': 'ساحق الكهف مارق', 'renegadecavesmasher': 'ساحق الكهف مارق',
     'RenegadeCaveHunter': 'صياد الكهف مارق', 'renegadecavehunter': 'صياد الكهف مارق',
 
-    // ═══ BEEF / DRAGON ═══
-    'FlamebreathBerserker': 'بيرسيركر نَفَس اللهب', 'flamebreathberserker': 'بيرسيركر نَفَس اللهب',
+    // ═══ BEEF / DRAGON (Removed the duplicate here) ═══
     'GlasswingArcher': 'رامي الجناح الزجاجي', 'glasswingarcher': 'رامي الجناح الزجاجي',
     'ScaleboundGuardian': 'حامي الحراشف', 'scaleboundguardian': 'حامي الحراشف',
     'ScaleshardMarksman': 'قناص شظايا الحراشف', 'scaleshardmarksman': 'قناص شظايا الحراشف',
