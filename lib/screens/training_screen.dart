@@ -60,18 +60,18 @@ class TrainingScreen extends StatefulWidget {
 class _TrainingScreenState extends State<TrainingScreen> {
   static const int _maxPerBatch = 80;
 
-  // ═══ DICTIONARY: KEYWORDS ALLOWED PER LEVEL ═══
+  // ═══ DICTIONARY: EXACT NAMES ALLOWED PER LEVEL ═══
   static const Map<int, List<String>> _levelUnits = {
-    1: ['mace', 'spear'],
-    2: ['bow', 'crossbow'],
-    3: ['sword', 'archer'],
-    4: ['twohanded', 'halberd'],
-    5: ['heavycrossbow', 'longbow'],
-    6: ['veteranhalberd', 'veterantwohanded', 'veteranlongbow', 'veteranheavycrossbow'],
-    7: ['relicaxeman'],
-    9: ['relicshortbowman'],
-    11: ['relichammerman'],
-    13: ['reliclongbowman'],
+    1: ['mace', 'maceman', 'spear', 'spearman'],
+    2: ['bow', 'bowman', 'crossbow', 'crossbowman'],
+    3: ['sword', 'swordsman', 'archer'],
+    4: ['twohandedsword', 'twohandedswordsman', 'halberd', 'halberdier'],
+    5: ['heavycrossbow', 'heavycrossbowman', 'longbow', 'longbowman'],
+    6: ['veteranhalberd', 'veteranhalberdier', 'veterantwohandedsword', 'veterantwohandedswordsman', 'veteranlongbow', 'veteranlongbowman', 'veteranheavycrossbow', 'veteranheavycrossbowman'],
+    7: ['relicaxe', 'relicaxeman'],
+    9: ['relicshortbow', 'relicshortbowman'],
+    11: ['relichammer', 'relichammerman'],
+    13: ['reliclongbow', 'reliclongbowman'],
     14: ['shieldmaiden', 'protectorofthenorth'],
     15: ['valkyrieranger', 'valkyriesniper'],
     16: ['glasswingarcher'],
@@ -135,7 +135,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
         }
         _trainable = catalog.values.where((e) => e.isTrainable).toList()
           ..sort((a, b) => a.displayName.compareTo(b.displayName));
-        _selectedUnit = _filteredTrainable.isNotEmpty ? _filteredTrainable.first : null;
+        
+        // تحديث الوحدة المختارة بناءً على الفلتر الجديد
+        final filtered = _filteredTrainable;
+        _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
       });
 
       if (_castle != null) {
@@ -160,7 +163,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
         isAction: false,
       );
       if (mounted) setState(() {
-        _selectedUnit = _filteredTrainable.isNotEmpty ? _filteredTrainable.first : null;
+        final filtered = _filteredTrainable;
+        _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
       });
     } catch (e) {
       TrafficLog.add('ER', 'jca fetch error: $e');
@@ -229,12 +233,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  // ═══ ULTIMATE FLEXIBLE FILTER ═══
+  // ═══ ULTIMATE STRICT FILTER (Exact Match) ═══
   List<UnitCatalogEntry> get _filteredTrainable {
     final level = widget.client.getBarracksLevel(_castle?.areaId ?? 0) ?? 1;
     
-    // جمع كل الكلمات المفتاحية من المستوى 1 لحد المستوى الحالي
-    final allowedKeys = <String>[];
+    final allowedKeys = <String>{};
     for (int i = 1; i <= level; i++) {
       if (_levelUnits.containsKey(i)) {
         allowedKeys.addAll(_levelUnits[i]!);
@@ -244,23 +247,16 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (allowedKeys.isEmpty) return [];
 
     return _trainable.where((u) {
-      // تنظيف الاسم من أي حاجة زيادة (زي Barracks_Unit_ أو مسافات)
+      // تنظيف الاسم
       final clean = u.displayName.toLowerCase()
           .replaceAll('barracks_unit_', '')
           .replaceAll('barracks', '')
-          .replaceAll('unit', '')
           .replaceAll('_', '')
           .replaceAll(' ', '')
           .trim();
       
-      // المطابقة: لو الاسم فيه أي كلمة من الـ allowedKeys أو العكس
-      // ده هيضمن إن mace هتلاقي maceman، و spear هتلاقي spearman، إلخ
-      for (final key in allowedKeys) {
-        if (clean == key || clean.contains(key) || key.contains(clean)) {
-          return true;
-        }
-      }
-      return false;
+      // مطابقة دقيقة جداً
+      return allowedKeys.contains(clean);
     }).toList();
   }
 
@@ -553,7 +549,9 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 const SizedBox(height: 2),
                 DropdownButtonHideUnderline(
                   child: DropdownButton<UnitCatalogEntry>(
-                    value: _selectedUnit, isExpanded: true, isDense: true, dropdownColor: Theme.of(context).colorScheme.surface, borderRadius: BorderRadius.circular(14), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textColor(context)),
+                    // التأكد من إن القيمة الحالية موجودة في القائمة المفلترة
+                    value: filtered.contains(_selectedUnit) ? _selectedUnit : filtered.first,
+                    isExpanded: true, isDense: true, dropdownColor: Theme.of(context).colorScheme.surface, borderRadius: BorderRadius.circular(14), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textColor(context)),
                     items: filtered.map((u) {
                       return DropdownMenuItem(
                         value: u,
