@@ -8,7 +8,6 @@ import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
 
-// ═══════════════════════════════════════════════════════════
 class SlotInfo {
   final int rut;
   final DateTime fetchedAt;
@@ -48,7 +47,6 @@ class SlotInfo {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
 class TrainingScreen extends StatefulWidget {
   final GgeClient client;
   const TrainingScreen({super.key, required this.client});
@@ -60,18 +58,18 @@ class TrainingScreen extends StatefulWidget {
 class _TrainingScreenState extends State<TrainingScreen> {
   static const int _maxPerBatch = 80;
 
-  // ═══ DICTIONARY: EXACT NAMES ALLOWED PER LEVEL ═══
+  // ═══ القائمة الصارمة للوحدات المتاحة لكل لفل ═══
   static const Map<int, List<String>> _levelUnits = {
-    1: ['mace', 'maceman', 'spear', 'spearman'],
-    2: ['bow', 'bowman', 'crossbow', 'crossbowman'],
-    3: ['sword', 'swordsman', 'archer'],
-    4: ['twohandedsword', 'twohandedswordsman', 'halberd', 'halberdier'],
-    5: ['heavycrossbow', 'heavycrossbowman', 'longbow', 'longbowman'],
-    6: ['veteranhalberd', 'veteranhalberdier', 'veterantwohandedsword', 'veterantwohandedswordsman', 'veteranlongbow', 'veteranlongbowman', 'veteranheavycrossbow', 'veteranheavycrossbowman'],
-    7: ['relicaxe', 'relicaxeman'],
-    9: ['relicshortbow', 'relicshortbowman'],
-    11: ['relichammer', 'relichammerman'],
-    13: ['reliclongbow', 'reliclongbowman'],
+    1: ['maceman', 'spearman'],
+    2: ['bowman', 'crossbowman'],
+    3: ['swordsman', 'archer'],
+    4: ['twohandedswordsman', 'halberdier'],
+    5: ['heavycrossbowman', 'longbowman'],
+    6: ['veteranhalberdier', 'veterantwohandedswordsman', 'veteranlongbowman', 'veteranheavycrossbowman'],
+    7: ['relicaxeman'],
+    9: ['relicshortbowman'],
+    11: ['relichammerman'],
+    13: ['reliclongbowman'],
     14: ['shieldmaiden', 'protectorofthenorth'],
     15: ['valkyrieranger', 'valkyriesniper'],
     16: ['glasswingarcher'],
@@ -136,7 +134,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
         _trainable = catalog.values.where((e) => e.isTrainable).toList()
           ..sort((a, b) => a.displayName.compareTo(b.displayName));
         
-        // تحديث الوحدة المختارة بناءً على الفلتر الجديد
         final filtered = _filteredTrainable;
         _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
       });
@@ -233,10 +230,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  // ═══ ULTIMATE STRICT FILTER (Exact Match) ═══
+  // ═══ THE STRICT CUMULATIVE FILTER ═══
   List<UnitCatalogEntry> get _filteredTrainable {
     final level = widget.client.getBarracksLevel(_castle?.areaId ?? 0) ?? 1;
     
+    // تجميع كل الوحدات من المستوى 1 لحد المستوى الحالي
     final allowedKeys = <String>{};
     for (int i = 1; i <= level; i++) {
       if (_levelUnits.containsKey(i)) {
@@ -247,7 +245,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     if (allowedKeys.isEmpty) return [];
 
     return _trainable.where((u) {
-      // تنظيف الاسم
+      // تنظيف الاسم من أي إضافات
       final clean = u.displayName.toLowerCase()
           .replaceAll('barracks_unit_', '')
           .replaceAll('barracks', '')
@@ -255,7 +253,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
           .replaceAll(' ', '')
           .trim();
       
-      // مطابقة دقيقة جداً
+      // مطابقة دقيقة: الاسم لازم يكون موجود بالظبط في القايمة
       return allowedKeys.contains(clean);
     }).toList();
   }
@@ -549,7 +547,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 const SizedBox(height: 2),
                 DropdownButtonHideUnderline(
                   child: DropdownButton<UnitCatalogEntry>(
-                    // التأكد من إن القيمة الحالية موجودة في القائمة المفلترة
                     value: filtered.contains(_selectedUnit) ? _selectedUnit : filtered.first,
                     isExpanded: true, isDense: true, dropdownColor: Theme.of(context).colorScheme.surface, borderRadius: BorderRadius.circular(14), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.textColor(context)),
                     items: filtered.map((u) {
