@@ -17,8 +17,10 @@ import 'services/transfer_service.dart';
 class TransferResult {
   final bool success;
   final String? error;
-  TransferResult._(this.success, this.error);
-  factory TransferResult.ok() => TransferResult._(true, null);
+  final int? movementId; // ✅ MID بعد نجاح cds — مطلوب للـ recall
+  TransferResult._(this.success, this.error, [this.movementId]);
+  factory TransferResult.ok([int? movementId]) =>
+      TransferResult._(true, null, movementId);
   factory TransferResult.fail(String err) => TransferResult._(false, err);
 }
 
@@ -106,7 +108,6 @@ class GgeClient {
   Set<int> get unlockedUnitIds => _unlockedUnitIds;
 
   // ✅ الوحدات المفتوحة لكل قلعة على حدة (AID → Set of wodIds)
-  //    ده اللي بيتحكم في إيه اللي ينفع يتبعت من قلعة معينة
   final Map<int, Set<int>> _unlockedByAreaId = {};
   Set<int> getUnlockedForArea(int areaId) =>
       _unlockedByAreaId[areaId] ?? const <int>{};
@@ -472,6 +473,9 @@ class GgeClient {
         }
       }
 
+      // ✅ FIX: احتفظ بـ TT/PT من أول gam — عشان العداد ميقفزش
+      //    لما السيرفر يبعت gam تاني بـ PT متقدم، الـ arrivalAt هيتحسب صح
+      //    ومش هيبان "وصل" قبل الوقت الحقيقي.
       final alert = AttackAlert(
         movementId: mid,
         attackerId: sourcePid,
@@ -487,8 +491,8 @@ class GgeClient {
         targetAreaId: targetAreaId,
         targetPlayerName: targetPlayerName,
         kingdomId: _asInt(mov['KID']),
-        totalTime: _asInt(mov['TT']),
-        paidTime: _asInt(mov['PT']),
+        totalTime: existing?.totalTime ?? _asInt(mov['TT']),
+        paidTime: existing?.paidTime ?? _asInt(mov['PT']),
         units: units,
         receivedAt: existing?.receivedAt ?? DateTime.now(),
         isAllianceAttack: isAllyAttacked,

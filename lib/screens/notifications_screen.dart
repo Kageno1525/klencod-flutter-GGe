@@ -5,6 +5,7 @@ import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/services/notifications_service.dart';
+import 'package:gge/screens/auto_defense_screen.dart'; // ✅ NEW
 import 'package:gge/screens/notifications_settings_screen.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
@@ -118,6 +119,21 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               ],
             ),
           ),
+          // ✅ NEW: زر الدفاع التلقائي
+          AppIconBtn(
+            icon: Icons.shield_moon_rounded,
+            color: AppTheme.teal,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => AutoDefenseScreen(client: widget.client),
+                ),
+              );
+            },
+            size: 42,
+          ),
+          const SizedBox(width: 8),
           AppIconBtn(
             icon: Icons.settings_rounded,
             onTap: () {
@@ -220,7 +236,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ─── Header ───
             Row(
               children: [
                 Container(
@@ -230,10 +245,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                     gradient: isAlly
                         ? AppTheme.successGradient
                         : isCancelled
-                            ? const LinearGradient(colors: [
-                                Colors.grey,
-                                Colors.grey,
-                              ])
+                            ? const LinearGradient(
+                                colors: [Colors.grey, Colors.grey])
                             : AppTheme.dangerGradient,
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -265,7 +278,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          // ✅ NEW: show victim name for alliance attacks
                           if (showTarget) ...[
                             const SizedBox(width: 4),
                             const Icon(Icons.arrow_forward_rounded,
@@ -341,8 +353,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                 ),
               ],
             ),
-
-            // ─── Timing block ───
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.symmetric(
@@ -350,8 +360,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               decoration: BoxDecoration(
                 color: AppTheme.blue.withOpacity(0.06),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: AppTheme.blue.withOpacity(0.18)),
+                border:
+                    Border.all(color: AppTheme.blue.withOpacity(0.18)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -414,9 +424,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                               ? Icons.check_circle_rounded
                               : Icons.flag_rounded,
                           size: 13,
-                          color: isArrived
-                              ? AppTheme.green
-                              : AppTheme.orange,
+                          color:
+                              isArrived ? AppTheme.green : AppTheme.orange,
                         ),
                         const SizedBox(width: 6),
                         Text(
@@ -458,8 +467,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                 ],
               ),
             ),
-
-            // ─── Info chips ───
             const SizedBox(height: 10),
             Wrap(
               spacing: 6,
@@ -490,8 +497,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
                 ),
               ],
             ),
-
-            // ─── Actions ───
             const SizedBox(height: 10),
             Row(
               children: [
@@ -564,8 +569,7 @@ class _NotificationsScreenState extends State<NotificationsScreen>
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: Theme.of(context).colorScheme.surface,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text(S.delete,
             style: const TextStyle(decoration: TextDecoration.none)),
         content: Text(S.deleteAlertConfirm,
@@ -578,8 +582,8 @@ class _NotificationsScreenState extends State<NotificationsScreen>
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
-            child: Text(S.delete,
-                style: const TextStyle(color: Colors.white)),
+            child:
+                Text(S.delete, style: const TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -751,8 +755,7 @@ class _AlertDetailsDialog extends StatelessWidget {
                                           ? '${alert.cancelledAtLabel ?? ""}'
                                           : alert.liveRemainingLabel,
                                       style: TextStyle(
-                                        color:
-                                            Colors.white.withOpacity(0.85),
+                                        color: Colors.white.withOpacity(0.85),
                                         fontSize: 12,
                                         decoration: TextDecoration.none,
                                       ),
@@ -765,7 +768,6 @@ class _AlertDetailsDialog extends StatelessWidget {
                         ],
                       ),
                     ),
-
                     Flexible(
                       child: SingleChildScrollView(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
@@ -781,7 +783,6 @@ class _AlertDetailsDialog extends StatelessWidget {
                             const SizedBox(height: 8),
                             _timingBlock(context),
                             const SizedBox(height: 16),
-
                             _sectionLabel(
                               context,
                               S.isAr ? 'معلومات المهاجم' : 'Attacker info',
@@ -805,8 +806,7 @@ class _AlertDetailsDialog extends StatelessWidget {
                               _infoRow(context,
                                   icon: Icons.group_rounded,
                                   label: S.isAr ? 'التحالف' : 'Alliance',
-                                  value:
-                                      S.isAr ? 'بدون تحالف' : 'No alliance',
+                                  value: S.isAr ? 'بدون تحالف' : 'No alliance',
                                   color: AppTheme.subTextColor(context)),
                             if (alert.attackerCastleName != null &&
                                 alert.attackerCastleName!.isNotEmpty)
@@ -816,8 +816,6 @@ class _AlertDetailsDialog extends StatelessWidget {
                                   value:
                                       '${alert.attackerCastleName!}\n(${alert.attackerX}, ${alert.attackerY})',
                                   color: AppTheme.blue),
-
-                            // ✅ NEW: target player info for alliance attacks
                             if (showTarget) ...[
                               const SizedBox(height: 8),
                               _infoRow(context,
@@ -828,9 +826,7 @@ class _AlertDetailsDialog extends StatelessWidget {
                                   value: alert.targetPlayerName!,
                                   color: AppTheme.teal),
                             ],
-
                             const SizedBox(height: 16),
-
                             _sectionLabel(
                               context,
                               S.isAr ? 'معلومات الهجوم' : 'Attack info',
@@ -851,15 +847,9 @@ class _AlertDetailsDialog extends StatelessWidget {
                                   value:
                                       '${alert.targetCastleName!}\n(${alert.targetX}, ${alert.targetY})',
                                   color: AppTheme.purple),
-
                             const SizedBox(height: 16),
-
-                            _sectionLabel(
-                              context,
-                              S.attackingUnits,
-                              Icons.military_tech_rounded,
-                              AppTheme.red,
-                            ),
+                            _sectionLabel(context, S.attackingUnits,
+                                Icons.military_tech_rounded, AppTheme.red),
                             const SizedBox(height: 8),
                             if (alert.units.isEmpty)
                               _noDataCard(
@@ -878,15 +868,9 @@ class _AlertDetailsDialog extends StatelessWidget {
                                 alert.units,
                                 color: AppTheme.red,
                               ),
-
                             const SizedBox(height: 16),
-
-                            _sectionLabel(
-                              context,
-                              S.defenseInfo,
-                              Icons.shield_moon_rounded,
-                              AppTheme.teal,
-                            ),
+                            _sectionLabel(context, S.defenseInfo,
+                                Icons.shield_moon_rounded, AppTheme.teal),
                             const SizedBox(height: 8),
                             if (defense == null)
                               _noDataCard(context, S.defenseNotAvailable)
@@ -910,7 +894,6 @@ class _AlertDetailsDialog extends StatelessWidget {
                                   color: AppTheme.teal,
                                 ),
                             ],
-
                             const SizedBox(height: 10),
                           ],
                         ),
@@ -1165,8 +1148,7 @@ class _AlertDetailsDialog extends StatelessWidget {
             ),
           ),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: color.withOpacity(0.15),
               borderRadius: BorderRadius.circular(8),

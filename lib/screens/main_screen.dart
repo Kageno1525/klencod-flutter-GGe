@@ -14,6 +14,8 @@ import 'package:gge/screens/stats_screen.dart';
 import 'package:gge/screens/notifications_screen.dart';
 import 'package:gge/services/notifications_service.dart';
 import 'package:gge/services/background_service.dart';
+import 'package:gge/screens/auto_defense_screen.dart';
+
 
 class MainScreen extends StatefulWidget {
   final GgeClient client;

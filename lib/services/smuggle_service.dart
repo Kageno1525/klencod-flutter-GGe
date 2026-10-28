@@ -27,8 +27,12 @@ class SmuggleService {
           'CROSS_KINGDOM: source KID=${source.kingdomId}, target KID=${target.kingdomId}');
     }
 
+    // ⚠️ حماية: السيرفر بيرفض > 10 أنواع (ban risk)
+    if (filtered.length > 10) {
+      return TransferResult.fail('TOO_MANY_UNIT_TYPES');
+    }
+
     // ✅ LID=0 = اللورد الرئيسي — يقدر يقود من أي قلعة في أي مملكة
-    //    لكن لو هو مشغول، السيرفر هيرجع 218. الشاشة مسؤولة تتأكد إنه فاضي قبل الإرسال.
     int lid = lordId ?? 0;
     if (lid < 0) lid = 0;
 
@@ -105,27 +109,25 @@ class SmuggleService {
       TrafficLog.add('ST',
           '[CDS-RESP] result=${resp.resultCode} (${_cdsErrorMessage(resp.resultCode)})');
 
-      if (resp.resultCode == 0) return TransferResult.ok();
+      if (resp.resultCode == 0) {
+        // ✅ استخرج MID من payload عشان نقدر نعمل recall بعدين
+        final mid = _extractMid(resp.payload);
+        TrafficLog.add('ST', '[CDS-OK] MID=$mid');
+        return TransferResult.ok(mid);
+      }
 
-      // ✅ 91: وحدة مش قابلة للإرسال من القلعة المصدر (Defensive/Non-sendable)
-      //     معناها: wodId مش موجود في gpc.U[source.areaId]
-      //     الشاشة مسؤولة تفلتر الوحدات دي قبل ما توصل هنا، لكن ده defense-in-depth
       if (resp.resultCode == 91) {
         return TransferResult.fail('UNIT_NOT_SENDABLE_91');
       }
 
-      // ✅ 218: اللورد المختار مشغول أو مش متاح (شائع جداً مع LID=0)
-      //     الحل: المستخدم يختار لورد فاضي أو يستنى رجوع اللورد الرئيسي
       if (resp.resultCode == 218) {
         return TransferResult.fail('LORD_BUSY_218');
       }
 
-      // لورد unavailable (أي كود تاني من عيلة اللوردات) — لو LID ≠ 0
       if ([219, 222, 256, 404].contains(resp.resultCode) && lid != 0) {
         return TransferResult.fail('LORD_UNAVAILABLE');
       }
 
-      // 219 لو LID=0 — يعني السيرفر رفض اللورد الرئيسي تحديداً
       if (resp.resultCode == 219) {
         return TransferResult.fail(
             'Main Lord rejected (LID=0) — retry in a moment');
@@ -146,6 +148,22 @@ class SmuggleService {
       TrafficLog.add('ER', '[CDS] exception: $e');
       return TransferResult.fail('$e');
     }
+  }
+
+  /// استخراج MID من cds response payload:
+  /// {"A":{"M":{"MID":353773379, ...}}, ...}
+  int? _extractMid(String? payload) {
+    if (payload == null || payload.isEmpty) return null;
+    try {
+      final data = jsonDecode(payload) as Map<String, dynamic>;
+      final a = data['A'] as Map?;
+      final m = a?['M'] as Map?;
+      final mid = m?['MID'];
+      if (mid is int) return mid;
+      if (mid is num) return mid.toInt();
+      if (mid is String) return int.tryParse(mid);
+    } catch (_) {}
+    return null;
   }
 
   String _cdsErrorMessage(int code) {
