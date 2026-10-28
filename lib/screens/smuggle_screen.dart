@@ -16,6 +16,10 @@ class SmuggleScreen extends StatefulWidget {
 }
 
 class _SmuggleScreenState extends State<SmuggleScreen> {
+  /// ⚠️ الحد الأقصى لأنواع الجنود في طلب واحد = 10.
+  ///    تجاوز هذا الرقم = ban (bot detection). السبب الحقيقي للبان ساعتين.
+  static const int kMaxUnitTypes = 10;
+
   List<OwnedCastle> _castles = [];
   Map<int, UnitCatalogEntry> _catalog = {};
   List<AllyMember> _members = [];
@@ -35,8 +39,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   bool _loadingCommanders = false;
   bool _sending = false;
 
-  // ✅ عدد الوحدات اللي في القلعة بس مش قابلة للإرسال (Defensive).
-  //    بنعرضه في الواجهة عشان المستخدم يفهم ليه مش شايفها.
   int _hiddenUnitsCount = 0;
 
   String _filter = 'all';
@@ -79,8 +81,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         _commanders = cmds;
         _loadingCommanders = false;
 
-        // ✅ الافتراضي = أول لورد فاضي، والأفضلية لـ LID=0 لو هو فاضي.
-        //    مفيش استثناء لـ LID=0 — لو مشغول مش بنختاره.
         if (_selectedLord == null) {
           final free = cmds.where((c) => !c.isBusy).toList();
           if (free.isNotEmpty) {
@@ -91,7 +91,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
             }
           }
         } else {
-          // ✅ لو اللورد المختار بقى مشغول، نصفّره (بما فيهم LID=0)
           final current = cmds.firstWhere(
             (c) => c.lord.id == _selectedLord!.id,
             orElse: () => CommanderInfo(lord: _selectedLord!),
@@ -145,8 +144,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           .getCastleUnits(_source!.kingdomId, _source!.areaId, _catalog);
       if (!mounted) return;
 
-      // ✅ فلترة الوحدات القابلة للإرسال بناءً على gpc.U الخاصة بالقلعة دي.
-      //    أي وحدة مش في gpc.U[source.areaId] = Defensive/Wall/Gate = السيرفر هيرفضها (91).
       final unlocked = widget.client.getUnlockedForArea(_source!.areaId);
       final sendable = <CastleUnit>[];
       int hidden = 0;
@@ -196,8 +193,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     return _members;
   }
 
-  // ✅ _units تحتوي فقط على الوحدات القابلة للإرسال.
-  //    الفلاتر (offense/defense) مجرد طبقة عرض فوقها.
   List<CastleUnit> get _filteredUnits {
     switch (_filter) {
       case 'offense':
@@ -209,6 +204,16 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     }
   }
 
+  /// ✅ عدد الأنواع المحددة حالياً (كل نوع فيه amount > 0)
+  int get _selectedTypesCount {
+    int t = 0;
+    for (final u in _units) {
+      final a = int.tryParse(_amtCtrl[u.wodId]?.text ?? '0') ?? 0;
+      if (a > 0) t++;
+    }
+    return t;
+  }
+
   int get _totalSelected {
     int t = 0;
     for (final u in _units) {
@@ -218,11 +223,39 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     return t;
   }
 
+  /// ✅ تحديد الكل — بحد أقصى [kMaxUnitTypes] أنواع (يفضّل الهجوم أولاً).
+  ///    السبب: GGE بيعتبر أي طلب فيه > 10 أنواع = bot behavior → ban.
   void _selectAllUnits() {
-    for (final u in _filteredUnits) {
+    // 1) صفّر الكل الأول
+    for (final c in _amtCtrl.values) {
+      c.text = '0';
+    }
+
+    // 2) رتّب: هجوم أولاً، ثم دفاع، ثم باقي
+    final offensive =
+        _filteredUnits.where((u) => u.isCombat && !u.isDefensive).toList();
+    final defensive =
+        _filteredUnits.where((u) => u.isCombat && u.isDefensive).toList();
+    final others = _filteredUnits.where((u) => !u.isCombat).toList();
+    final ordered = [...offensive, ...defensive, ...others];
+
+    // 3) اختار أول kMaxUnitTypes فقط
+    final toSelect = ordered.take(kMaxUnitTypes).toList();
+    for (final u in toSelect) {
       _amtCtrl[u.wodId]?.text = u.amount.toString();
     }
+
     setState(() {});
+
+    // 4) تنبيه لو فيه وحدات زيادة مش اتحددت
+    if (ordered.length > kMaxUnitTypes) {
+      _snack(
+        S.isAr
+            ? 'تم تحديد $kMaxUnitTypes أنواع فقط (الحد الأقصى) — باقي الأنواع لم تُحدد'
+            : 'Only $kMaxUnitTypes types selected (max limit) — others not selected',
+        color: AppTheme.orange,
+      );
+    }
   }
 
   void _clearAllUnits() {
@@ -266,6 +299,18 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       return;
     }
 
+    // ⚠️ حماية نهائية: منع أكتر من kMaxUnitTypes أنواع (ده اللي جاب البان ساعتين)
+    if (toSend.length > kMaxUnitTypes) {
+      _snack(
+        S.isAr
+            ? '🚫 خطر بان: لا يمكن إرسال أكثر من $kMaxUnitTypes أنواع في طلب واحد (المحدد: ${toSend.length})'
+            : '🚫 Ban risk: cannot send more than $kMaxUnitTypes unit types in one request (selected: ${toSend.length})',
+        color: AppTheme.red,
+      );
+      HapticFeedback.heavyImpact();
+      return;
+    }
+
     final stationTime = int.tryParse(_timeCtrl.text) ?? 12;
     setState(() => _sending = true);
 
@@ -304,13 +349,10 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       if (errMsg == 'ALL_LORDS_BUSY') {
         errMsg = S.allLordsBusy;
       } else if (errMsg == 'UNIT_NOT_SENDABLE_91') {
-        // ✅ الوحدة مش قابلة للإرسال — يفضل إن ده ما يحصلش لأننا فلترنا،
-        //    لكن لو حصل (سباق أو stale data)، نطلب من المستخدم يحدّث.
         errMsg = S.isAr
             ? 'الوحدة دي مش قابلة للإرسال من القلعة دي — حدّث الشاشة وحاول تاني'
             : 'This unit is not sendable from this castle — refresh and retry';
       } else if (errMsg == 'LORD_BUSY_218') {
-        // ✅ 218 = اللورد مشغول (شائع جداً مع LID=0)
         errMsg = S.isAr
             ? 'اللورد المختار مشغول — اختر لورد فاضي أو استنى رجوعه'
             : 'Selected lord is busy — pick a free lord or wait';
@@ -335,7 +377,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       }
       _snack('${S.transferFail}: $errMsg', color: AppTheme.red);
 
-      // لو 218 — نعيد تحميل القواد عشان الحالة تتحدث
       if (result.error == 'LORD_BUSY_218') {
         _loadCommanders();
       }
@@ -646,7 +687,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                         }
                         _amtCtrl.clear();
                       });
-                      // لو في target مختار، نتحقق من التوافق ونعيد التحميل
                       if (_target != null && v != null) {
                         final newTargetCastle = _target!.castleIn(v.kingdomId);
                         if (newTargetCastle != null) {
@@ -678,18 +718,15 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   Widget _lordPicker(BuildContext context) {
-    // ✅ اللوردات المتاحين فقط — مفيش استثناء لـ LID=0
     final availableLords = _commanders
         .where((c) => !c.isBusy)
         .map((c) => c.lord)
         .toList();
 
-    // Fail-safe (لو الحالة قديمة): نصفّر الاختيار لو اللورد مبقاش متاح
     if (_selectedLord != null &&
         !availableLords.any((l) => l.id == _selectedLord!.id)) {
       _selectedLord = null;
     }
-    // Default fallback: أول لورد فاضي (بأفضلية LID=0 لو فاضي)
     if (_selectedLord == null && availableLords.isNotEmpty) {
       try {
         _selectedLord = availableLords.firstWhere((l) => l.id == 0);
@@ -1134,6 +1171,11 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
             child: CircularProgressIndicator(color: AppTheme.purple)),
       );
     }
+
+    final typesCount = _selectedTypesCount;
+    final atLimit = typesCount >= kMaxUnitTypes;
+    final overLimit = typesCount > kMaxUnitTypes;
+
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
@@ -1177,10 +1219,40 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                   ],
                 ),
               ),
+              // ✅ مؤشر X/10 لأنواع الجنود — أحمر عند الوصول للحد
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: overLimit
+                      ? AppTheme.red.withOpacity(0.15)
+                      : (atLimit
+                          ? AppTheme.orange.withOpacity(0.15)
+                          : AppTheme.teal.withOpacity(0.12)),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: overLimit
+                        ? AppTheme.red.withOpacity(0.4)
+                        : (atLimit
+                            ? AppTheme.orange.withOpacity(0.4)
+                            : AppTheme.teal.withOpacity(0.3)),
+                  ),
+                ),
+                child: Text(
+                  '$typesCount / $kMaxUnitTypes',
+                  style: TextStyle(
+                    color: overLimit
+                        ? AppTheme.red
+                        : (atLimit ? AppTheme.orange : AppTheme.teal),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                    decoration: TextDecoration.none,
+                  ),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 12),
-          // ✅ ملاحظة: في وحدات دفاعية مش ظاهرة (مش قابلة للإرسال)
           if (_hiddenUnitsCount > 0)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -1189,8 +1261,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                 decoration: BoxDecoration(
                   color: AppTheme.orange.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                      color: AppTheme.orange.withOpacity(0.3)),
+                  border:
+                      Border.all(color: AppTheme.orange.withOpacity(0.3)),
                 ),
                 child: Row(
                   children: [
@@ -1202,6 +1274,36 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                         S.isAr
                             ? '$_hiddenUnitsCount نوع وحدة دفاعية غير قابل للإرسال (مخفي)'
                             : '$_hiddenUnitsCount defensive unit type(s) not sendable (hidden)',
+                        style: const TextStyle(
+                          color: AppTheme.orange,
+                          fontSize: 10.5,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (atLimit && !overLimit)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppTheme.orange.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded,
+                        color: AppTheme.orange, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        S.isAr
+                            ? 'وصلت للحد الأقصى ($kMaxUnitTypes أنواع) — أي نوع إضافي سيرفضه السيرفر'
+                            : 'You reached the maximum ($kMaxUnitTypes types) — extra types will be rejected',
                         style: const TextStyle(
                           color: AppTheme.orange,
                           fontSize: 10.5,
@@ -1296,14 +1398,32 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                       decoration: TextDecoration.none),
                 ),
                 const Spacer(),
-                Text(
-                  '$_totalSelected',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 22,
-                    decoration: TextDecoration.none,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '$_totalSelected',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 22,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                    Text(
+                      S.isAr
+                          ? '$typesCount / $kMaxUnitTypes أنواع'
+                          : '$typesCount / $kMaxUnitTypes types',
+                      style: TextStyle(
+                        color: overLimit
+                            ? const Color(0xFFFFCDD2)
+                            : Colors.white70,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

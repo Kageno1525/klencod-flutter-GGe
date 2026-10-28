@@ -50,7 +50,21 @@ class CommandersService {
         final pt = _asInt(mov['PT']);
         final movType = _asInt(mov['T']);
 
-        if ((movType == 2 || movType == 3) && tt <= pt) continue;
+        // ── استخراج بيانات الدعم (TWD/PWD) من UM ──
+        final um = m['UM'] as Map<String, dynamic>?;
+        final twd = _asIntOrNull(um?['TWD']);
+        final pwd = _asIntOrNull(um?['PWD']);
+
+        // ── فلتر "خلاص" الحركات ──
+        //   • السفر لسه ما خلصش (pt < tt) → include
+        //   • السفر خلص (pt >= tt):
+        //       - نوع support (T=1) و لسه في الدعم (TWD > PWD) → include
+        //       - غير كده → skip (خلاص تماماً)
+        if (pt >= tt) {
+          final isActiveSupport =
+              movType == 1 && twd != null && pwd != null && twd > pwd;
+          if (!isActiveSupport) continue;
+        }
 
         final ta = mov['TA'] as List?;
         final sa = mov['SA'] as List?;
@@ -70,14 +84,12 @@ class CommandersService {
           targetName = ownersMap[targetPid] ?? 'Unknown';
         }
 
-        final um = m['UM'] as Map<String, dynamic>?;
         int? lid = _asIntOrNull((um?['L'] as Map?)?['ID']);
         lid ??= _asIntOrNull(mov['LID']);
         lid ??= _asIntOrNull(m['LID']);
 
-        // ✅ FIX: تجاهل حركة اللورد الرئيسي "الوهمية"
+        // ✅ تجاهل حركة اللورد الرئيسي "الوهمية"
         //    SID == OID == myPid = هو بيتحرك في نفس قلعته (visual فقط)
-        //    عشان كده LID=0 كان دايماً يبان busy وميظهرش في القائمة
         if (lid == 0) {
           final sid = _asInt(sa[3]);
           final oid = _asInt(sa[4]);
@@ -97,6 +109,8 @@ class CommandersService {
             targetKid: _asInt(mov['KID']),
             targetPlayerName: targetName,
             fetchedAt: fetchedAt,
+            stationTotalSeconds: twd,
+            stationPaidSeconds: pwd,
           );
         }
       }

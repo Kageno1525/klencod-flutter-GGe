@@ -127,14 +127,21 @@ class Lord {
 class LordMovement {
   final int movementId;
   final int type;
-  final int totalTime;
-  final int paidTime;
+  final int totalTime; // TT — travel time
+  final int paidTime; // PT — travel time paid
   final int targetX;
   final int targetY;
   final int targetKid;
   final String? targetPlayerName;
   final String? targetAllianceName;
   final DateTime fetchedAt;
+
+  /// ⚠️ مدة الدعم الكلية في قلعة الحليف (TWD من UM)
+  /// null لو الحركة مش support أو مفيش بيانات support
+  final int? stationTotalSeconds;
+
+  /// ⚠️ مدة الدعم المدفوعة لحد الآن (PWD من UM)
+  final int? stationPaidSeconds;
 
   LordMovement({
     required this.movementId,
@@ -147,8 +154,11 @@ class LordMovement {
     this.targetPlayerName,
     this.targetAllianceName,
     DateTime? fetchedAt,
+    this.stationTotalSeconds,
+    this.stationPaidSeconds,
   }) : fetchedAt = fetchedAt ?? DateTime.now();
 
+  // ─── حركة السفر ─────────────────────────────
   int get timeRemaining => totalTime - paidTime;
 
   int get liveRemainingSeconds {
@@ -157,7 +167,31 @@ class LordMovement {
   }
 
   bool get isArrived => liveRemainingSeconds <= 0;
-  bool get isStationed => type == 1 && isArrived;
+
+  /// عدد الثواني المتبقية من الدعم في قلعة الحليف.
+  /// القيمة 0 لو الحركة مش stationed أو معلومات الدعم مش متوفرة.
+  int get stationRemainingSeconds {
+    if (stationTotalSeconds == null || stationPaidSeconds == null) return 0;
+    final elapsed = DateTime.now().difference(fetchedAt).inSeconds;
+    return (stationTotalSeconds! - stationPaidSeconds! - elapsed)
+        .clamp(0, 999999);
+  }
+
+  /// الوقت المطلق اللي القائد هيرجع فيه من الدعم.
+  DateTime? get stationReturnAt {
+    if (stationTotalSeconds == null || stationPaidSeconds == null) return null;
+    return fetchedAt
+        .add(Duration(seconds: stationTotalSeconds! - stationPaidSeconds!));
+  }
+
+  /// نوع support + وصل + لسه في الدعم
+  bool get isStationed =>
+      type == 1 && isArrived && stationRemainingSeconds > 0;
+
+  bool get isReturning => type == 2;
+
+  /// حركة لسه "شغالة" فعلياً (تستحق العداد والتحديث)
+  bool get isActive => !isArrived || isStationed;
 
   DateTime get startedAt => fetchedAt.subtract(Duration(seconds: paidTime));
   DateTime get arrivalAt => fetchedAt.add(Duration(seconds: timeRemaining));
@@ -169,8 +203,22 @@ class LordMovement {
 
   String get startedAtLabel => _fmt(startedAt);
   String get arrivalAtLabel => _fmt(arrivalAt);
+  String? get stationReturnAtLabel =>
+      stationReturnAt == null ? null : _fmt(stationReturnAt!);
 
+  /// العداد الحي — بيتحدث كل ثانية في الـ UI.
+  /// لو stationed → عدّاد الدعم، غير كده → عدّاد السفر.
   String get timeLabel {
+    if (isStationed) {
+      final s = stationRemainingSeconds;
+      if (s <= 0) return 'Expiring...';
+      final h = s ~/ 3600;
+      final m = (s % 3600) ~/ 60;
+      final sec = s % 60;
+      if (h > 0) return '${h}h ${m}m';
+      if (m > 0) return '${m}m ${sec}s';
+      return '${sec}s';
+    }
     final s = liveRemainingSeconds;
     if (s <= 0) return type == 1 ? 'Stationed' : 'Arrived';
     final h = s ~/ 3600;
@@ -181,15 +229,24 @@ class LordMovement {
     return '${sec}s';
   }
 
+  String get actionWithTimeLabel => '${actionLabel} · $timeLabel';
+
   String get actionLabel {
     switch (type) {
-      case 0: return 'Attacking';
-      case 1: return 'Supporting / Smuggling';
-      case 2: return 'Returning';
-      case 3: return 'Transporting';
-      default: return 'Moving';
+      case 0:
+        return 'Attacking';
+      case 1:
+        return 'Supporting / Smuggling';
+      case 2:
+        return 'Returning';
+      case 3:
+        return 'Transporting';
+      default:
+        return 'Moving';
     }
   }
+
+  String get scheduleLabel => '$startedAtLabel → $arrivalAtLabel';
 }
 
 // ═══════════════════════════════════════════
@@ -199,7 +256,12 @@ class CommanderInfo {
 
   CommanderInfo({required this.lord, this.movement});
 
-  bool get isBusy => movement != null;
+  /// القائد "مشغول" فقط لو:
+  ///   • لسه بيسافر (مش وصل) ، أو
+  ///   • متمركز في قلعة حليف ووقت الدعم لسه ما خلصش
+  ///
+  /// بعد السفر + انتهاء الدعم → القائد متاح فوراً بدون refresh.
+  bool get isBusy => movement != null && movement!.isActive;
 }
 
 // ═══════════════════════════════════════════
@@ -308,11 +370,6 @@ class AllyMember {
   }
 }
 
-// ═══════════════════════════════════════════
-//  GGE server error codes.
-//  ⚠️ 91  = unit not in `gpc.U` for source castle (Defensive/Non-combat).
-//  ⚠️ 218 = target lord unavailable — most commonly the Main Lord (LID=0)
-//          is busy with an existing movement/support.
 // ═══════════════════════════════════════════
 const Map<int, String> ggeErrors = {
   0: 'Success',

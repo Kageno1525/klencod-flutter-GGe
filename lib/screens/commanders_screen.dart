@@ -18,21 +18,23 @@ class _CommandersScreenState extends State<CommandersScreen> {
   List<CommanderInfo> _commanders = [];
   bool _loading = true;
   Timer? _timer;
-  StreamSubscription? _gamSub;
+
+  /// عدد مرات محاولة reload تلقائي بعد ما تنتهي الحركات.
+  /// بيمنع spam على gam لو السيرفر لسه بيرجع الحركات القديمة.
+  int _staleReloadAttempts = 0;
+  static const int _maxStaleReloadAttempts = 3;
 
   @override
   void initState() {
     super.initState();
     _loadCommanders();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && _commanders.any((c) => c.isBusy)) {
-        setState(() {});
-      }
-    });
   }
 
   Future<void> _loadCommanders({bool silent = false}) async {
-    if (!silent) setState(() => _loading = true);
+    if (!silent) {
+      setState(() => _loading = true);
+      _staleReloadAttempts = 0;
+    }
     try {
       final cmds = await widget.client.getCommanders();
       if (!mounted) return;
@@ -46,6 +48,72 @@ class _CommandersScreenState extends State<CommandersScreen> {
         setState(() => _loading = false);
         _snack('$e', color: AppTheme.red);
       }
+    } finally {
+      if (mounted) _startTimer();
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  Timer — بيحدث الـ countdowns و يكتشف transition
+  //  (قائد وصل / stationed خلص) و يعمل reload تلقائي.
+  // ═══════════════════════════════════════════════════════════
+  void _startTimer() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+
+      // مفيش أي movement في الكاش — بلاش timer أصلاً
+      final hasAnyMovement = _commanders.any((c) => c.movement != null);
+      if (!hasAnyMovement) {
+        _timer?.cancel();
+        return;
+      }
+
+      // فيه حركة "شغالة" فعلاً (مسافرة أو stationed لسه في الدعم)
+      final hasActiveMovement = _commanders.any((c) =>
+          c.movement != null && !_isMovementFullyDone(c.movement!));
+
+      if (hasActiveMovement) {
+        // حدّث الـ countdowns
+        setState(() {});
+        return;
+      }
+
+      // كل الحركات في الكاش خلصت — اعمل setState نهائي، ألغِ الـ timer،
+      // و جرّب reload واحد لتنضيف الكاش (بدون spam)
+      setState(() {});
+      _timer?.cancel();
+      _silentReloadAndRestart();
+    });
+  }
+
+  bool _isMovementFullyDone(LordMovement m) {
+    // لسه بيسافر
+    if (!m.isArrived) return false;
+    // stationed و لسه في وقت الدعم
+    if (m.type == 1 && m.isStationed) return false;
+    // غير كده → خلص تماماً
+    return true;
+  }
+
+  Future<void> _silentReloadAndRestart() async {
+    if (_staleReloadAttempts >= _maxStaleReloadAttempts) {
+      // السيرفر لسه بيرجع الحركات القديمة — استسلم، المستخدم يعمل refresh يدوي.
+      return;
+    }
+    _staleReloadAttempts++;
+
+    await Future.delayed(const Duration(seconds: 3));
+    if (!mounted) return;
+
+    await _loadCommanders(silent: true);
+    if (!mounted) return;
+
+    // لو الـ reload نجح و نضّف الحركات، صفّر العداد
+    final stillStale = _commanders.any((c) =>
+        c.movement != null && _isMovementFullyDone(c.movement!));
+    if (!stillStale) {
+      _staleReloadAttempts = 0;
     }
   }
 
@@ -55,8 +123,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: Theme.of(context).colorScheme.surface,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text(S.recall,
             style: const TextStyle(decoration: TextDecoration.none)),
         content: Text('${S.recall} ${cmd.lord.displayName}?',
@@ -67,8 +135,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
               child: Text(S.cancel)),
           ElevatedButton(
               onPressed: () => Navigator.pop(context, true),
-              style:
-                  ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
               child: Text(S.recall,
                   style: const TextStyle(color: Colors.white))),
         ],
@@ -94,8 +161,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(msg,
-            style: const TextStyle(decoration: TextDecoration.none)),
+        content:
+            Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
       ));
@@ -104,7 +171,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    _gamSub?.cancel();
     super.dispose();
   }
 
@@ -140,15 +206,15 @@ class _CommandersScreenState extends State<CommandersScreen> {
                       : _commanders.isEmpty
                           ? _empty(context)
                           : RefreshIndicator(
-                              onRefresh: _loadCommanders,
+                              onRefresh: () => _loadCommanders(),
                               color: AppTheme.purple,
                               child: ListView.builder(
                                 padding:
                                     const EdgeInsets.fromLTRB(16, 8, 16, 24),
                                 itemCount: _commanders.length,
                                 itemBuilder: (_, i) => FadeSlideIn(
-                                  delay: Duration(
-                                      milliseconds: 100 + i * 60),
+                                  delay:
+                                      Duration(milliseconds: 100 + i * 60),
                                   child:
                                       _commanderCard(context, _commanders[i]),
                                 ),
@@ -240,9 +306,10 @@ class _CommandersScreenState extends State<CommandersScreen> {
   }
 
   Widget _commanderCard(BuildContext context, CommanderInfo cmd) {
+    final movement = cmd.movement;
     final isBusy = cmd.isBusy;
-    final isReturning = cmd.movement?.type == 2;
-    final isStationed = cmd.movement?.isStationed ?? false;
+    final isStationed = movement?.isStationed ?? false;
+    final isReturning = movement?.isReturning ?? false;
     final accent = isBusy ? AppTheme.orange : AppTheme.green;
     final gradient =
         isBusy ? AppTheme.orangeGradient : AppTheme.successGradient;
@@ -317,8 +384,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
                         decoration: BoxDecoration(
                           color: accent.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(8),
-                          border:
-                              Border.all(color: accent.withOpacity(0.3)),
+                          border: Border.all(color: accent.withOpacity(0.3)),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -350,7 +416,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
               ],
             ),
           ),
-          if (isBusy && cmd.movement != null) ...[
+          if (isBusy && movement != null) ...[
             Container(
               margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
               padding: const EdgeInsets.all(14),
@@ -363,6 +429,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
               ),
               child: Column(
                 children: [
+                  // ─── Action row ─────────────────────────────
                   Row(
                     children: [
                       Container(
@@ -374,10 +441,10 @@ class _CommandersScreenState extends State<CommandersScreen> {
                         child: Icon(
                           isStationed
                               ? Icons.flag_rounded
-                              : cmd.movement!.type == 1
-                                  ? Icons.shield_rounded
-                                  : (isReturning
-                                      ? Icons.undo_rounded
+                              : (isReturning
+                                  ? Icons.undo_rounded
+                                  : movement.type == 1
+                                      ? Icons.shield_rounded
                                       : Icons.gavel_rounded),
                           color: accent,
                           size: 16,
@@ -389,8 +456,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
                           isStationed
                               ? (S.isAr
                                   ? 'متمركز في قلعة الحليف'
-                                  : 'Stationed')
-                              : cmd.movement!.actionLabel,
+                                  : 'Stationed at ally')
+                              : movement.actionLabel,
                           style: TextStyle(
                             color: AppTheme.textColor(context),
                             fontWeight: FontWeight.bold,
@@ -402,6 +469,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ],
                   ),
                   const SizedBox(height: 10),
+
+                  // ─── Target ──────────────────────────────────
                   Row(
                     children: [
                       const Icon(Icons.place_rounded,
@@ -409,7 +478,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          '${cmd.movement!.targetPlayerName ?? "Unknown"} (${cmd.movement!.targetX}, ${cmd.movement!.targetY})',
+                          '${movement.targetPlayerName ?? "Unknown"} '
+                          '(${movement.targetX}, ${movement.targetY})',
                           style: TextStyle(
                             color: AppTheme.subTextColor(context),
                             fontSize: 11.5,
@@ -421,13 +491,15 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
+
+                  // ─── Started + Return time ──────────────────
                   Row(
                     children: [
                       const Icon(Icons.play_arrow_rounded,
                           size: 12, color: AppTheme.blue),
                       const SizedBox(width: 4),
                       Text(
-                        '${S.isAr ? "بدأ" : "Started"}: ${cmd.movement!.startedAtLabel}',
+                        '${S.isAr ? "بدأ" : "Started"}: ${movement.startedAtLabel}',
                         style: TextStyle(
                             color: AppTheme.subTextColor(context),
                             fontSize: 10.5,
@@ -435,24 +507,26 @@ class _CommandersScreenState extends State<CommandersScreen> {
                             decoration: TextDecoration.none),
                       ),
                       const Spacer(),
+                      // ✅ لما stationed: نعرض وقت الرجوع المتوقع (returnAt)
+                      //    غير كده: نعرض وقت الوصول (arrivalAt)
                       Icon(
-                        cmd.movement!.isArrived
+                        movement.isArrived
                             ? Icons.check_circle_rounded
                             : Icons.flag_rounded,
                         size: 12,
-                        color: cmd.movement!.isArrived
+                        color: movement.isArrived
                             ? AppTheme.green
                             : AppTheme.orange,
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        cmd.movement!.isArrived
-                            ? (isStationed
-                                ? (S.isAr ? 'متمركز' : 'Stationed')
-                                : (S.isAr ? 'وصل' : 'Arrived'))
-                            : '${S.isAr ? "هيوصل" : "Arrives"}: ${cmd.movement!.arrivalAtLabel}',
+                        isStationed
+                            ? '${S.isAr ? "يعود" : "Returns"}: ${movement.stationReturnAtLabel ?? "..."}'
+                            : (movement.isArrived
+                                ? (S.isAr ? 'وصل' : 'Arrived')
+                                : '${S.isAr ? "هيوصل" : "Arrives"}: ${movement.arrivalAtLabel}'),
                         style: TextStyle(
-                            color: cmd.movement!.isArrived
+                            color: movement.isArrived
                                 ? AppTheme.green
                                 : AppTheme.orange,
                             fontSize: 10.5,
@@ -462,13 +536,19 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
+
+                  // ─── Countdown ───────────────────────────────
                   Row(
                     children: [
                       const Icon(Icons.timer_rounded,
                           color: AppTheme.orange, size: 14),
                       const SizedBox(width: 6),
                       Text(
-                        S.timeRemaining,
+                        isStationed
+                            ? (S.isAr
+                                ? 'الوقت المتبقي في الدعم'
+                                : 'Station time remaining')
+                            : S.timeRemaining,
                         style: TextStyle(
                           color: AppTheme.subTextColor(context),
                           fontSize: 11.5,
@@ -484,7 +564,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          cmd.movement!.timeLabel,
+                          movement.timeLabel,
                           style: const TextStyle(
                             color: AppTheme.blue,
                             fontWeight: FontWeight.bold,
