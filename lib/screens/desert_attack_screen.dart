@@ -7,6 +7,7 @@ import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/services/desert_attack_service.dart';
 import 'package:gge/services/desert_auto_service.dart';
+import 'package:gge/services/background_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
