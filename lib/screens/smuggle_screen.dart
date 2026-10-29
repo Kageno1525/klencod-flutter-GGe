@@ -39,7 +39,15 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
 
   int _hiddenUnitsCount = 0;
 
-  String _filter = 'all';
+  // ✅ فلتر الجنود: all | offense | defense
+  String _unitFilter = 'all';
+
+  // ✅ فلتر الأعضاء: all | peace
+  String _memberFilter = 'all';
+
+  // ✅ ترتيب الأعضاء: default | closest | highest_peace
+  String _memberSort = 'default';
+
   String? _error;
 
   @override
@@ -126,49 +134,19 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     }
   }
 
-  /// ✅ هل الوحدة قابلة للإرسال في smuggle؟
-  ///   - combat (melee/ranged) + defense units (militia/peasant/anti) = مسموح
-  ///   - wall/gate/moat/trap = مرفوض
-  ///   - tools = مرفوض (smuggle مش هجوم)
+  /// ✅ White-list: فقط الجنود اللي role=melee/ranged.
+  ///    الأدوات (Shields, Chests, Boosts, Ram, Ladder) كلها role مختلف → بتختفي.
   bool _isSendableForSmuggle(CastleUnit u) {
     final info = u.info;
-    if (info == null) {
-      // Unknown unit — range heuristic
-      if (u.wodId >= 700 && u.wodId <= 800) return false;
-      return true;
-    }
-    final type = (info.type ?? '').toLowerCase();
-    final role = (info.role ?? '').toLowerCase();
+    if (info == null) return false;
 
-    // Wall/Gate/Moat/Trap
-    if (role == 'wall' || role == 'gate' || role == 'moat' || role == 'trap') {
-      return false;
-    }
-    if (type.contains('def_building') ||
-        type.contains('defbuilding') ||
-        type.contains('_wall') ||
-        type.contains('wall_') ||
-        type.contains('_gate') ||
-        type.contains('gate_') ||
-        type.contains('_moat') ||
-        type.contains('moat_') ||
-        type.contains('_trap') ||
-        type.contains('trap_')) {
-      return false;
-    }
+    if (info.role != 'melee' && info.role != 'ranged') return false;
 
-    // Tools
-    if (role == 'tool' ||
-        type.contains('_tool') ||
-        type.contains('tool_') ||
-        type.contains('ram_') ||
-        type.contains('_ram') ||
-        type.contains('ladder_') ||
-        type.contains('_ladder') ||
-        type.contains('siege_tower') ||
-        type.contains('siegetower') ||
-        type.contains('catapult') ||
-        type.contains('ballista')) {
+    // استبعاد أمان: الجدران/البوابات/الخنادق حتى لو اتصنفوا melee
+    final type = info.type ?? '';
+    if (type.contains('Wall') ||
+        type.contains('Gate') ||
+        type.contains('Moat')) {
       return false;
     }
 
@@ -189,7 +167,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           .getCastleUnits(_source!.kingdomId, _source!.areaId, _catalog);
       if (!mounted) return;
 
-      // ✅ استبعد الأدوات والـ wall/gate/moat فقط
       final sendable = <CastleUnit>[];
       int hidden = 0;
       for (final u in rawUnits) {
@@ -213,7 +190,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         _snack(
           S.isAr
               ? 'كل الوحدات في ${_source!.displayName} دفاعية/أدوات ومش قابلة للإرسال'
-              : 'All units at ${_source!.displayName} are defensive / non-sendable',
+              : 'All units at ${_source!.displayName} are defensive / tools',
           color: AppTheme.orange,
         );
       } else if (rawUnits.isEmpty) {
@@ -231,13 +208,30 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     }
   }
 
+  /// ✅ فلترة + ترتيب الأعضاء
   List<AllyMember> get _filteredMembers {
-    if (_filter == 'peace') return _members.where((m) => m.hasPeace).toList();
-    return _members;
+    var list = _memberFilter == 'peace'
+        ? _members.where((m) => m.hasPeace).toList()
+        : List<AllyMember>.from(_members);
+
+    if (_memberSort == 'closest' && _source != null) {
+      list.sort((a, b) {
+        final da = a.closestDistance(_source!.kingdomId, _source!.x, _source!.y);
+        final db = b.closestDistance(_source!.kingdomId, _source!.x, _source!.y);
+        if (da == double.infinity && db == double.infinity) return 0;
+        if (da == double.infinity) return 1;
+        if (db == double.infinity) return -1;
+        return da.compareTo(db);
+      });
+    } else if (_memberSort == 'highest_peace') {
+      list.sort((a, b) => b.peaceTimeSeconds.compareTo(a.peaceTimeSeconds));
+    }
+
+    return list;
   }
 
   List<CastleUnit> get _filteredUnits {
-    switch (_filter) {
+    switch (_unitFilter) {
       case 'offense':
         return _units.where((u) => u.isCombat && !u.isDefensive).toList();
       case 'defense':
@@ -266,15 +260,12 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   void _selectAllUnits() {
-    for (final c in _amtCtrl.values) {
-      c.text = '0';
-    }
+    for (final c in _amtCtrl.values) c.text = '0';
     final offensive =
         _filteredUnits.where((u) => u.isCombat && !u.isDefensive).toList();
     final defensive =
         _filteredUnits.where((u) => u.isCombat && u.isDefensive).toList();
-    final others = _filteredUnits.where((u) => !u.isCombat).toList();
-    final ordered = [...offensive, ...defensive, ...others];
+    final ordered = [...offensive, ...defensive];
     for (final u in ordered.take(kMaxUnitTypes)) {
       _amtCtrl[u.wodId]?.text = u.amount.toString();
     }
@@ -290,9 +281,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   void _clearAllUnits() {
-    for (final c in _amtCtrl.values) {
-      c.text = '0';
-    }
+    for (final c in _amtCtrl.values) c.text = '0';
     setState(() {});
   }
 
@@ -491,7 +480,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                         color: AppTheme.textColor(context),
                         letterSpacing: -0.3,
                         decoration: TextDecoration.none)),
-                Text('${_members.length} ${S.allianceMembers}',
+                Text('${_filteredMembers.length} / ${_members.length} ${S.allianceMembers}',
                     style: TextStyle(
                         fontSize: 11,
                         color: AppTheme.subTextColor(context),
@@ -799,6 +788,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header row: title + filter chips + sort
           Row(children: [
             Container(
                 width: 32,
@@ -816,16 +806,24 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                         fontWeight: FontWeight.bold,
                         fontSize: 14,
                         decoration: TextDecoration.none))),
-            _smallChip(context, 'all', S.allMembers),
+            _memberChip(context, 'all', S.allMembers),
             const SizedBox(width: 6),
-            _smallChip(context, 'peace', S.peaceOnly),
+            _memberChip(context, 'peace', S.peaceOnly),
+            const SizedBox(width: 4),
+            _memberSortButton(context),
           ]),
           const SizedBox(height: 12),
           if (filtered.isEmpty)
             Padding(
                 padding: const EdgeInsets.all(20),
                 child: Center(
-                    child: Text(S.noAllianceMembers,
+                    child: Text(
+                        _memberFilter == 'peace'
+                            ? (S.isAr
+                                ? 'مفيش أعضاء عليهم حماية حالياً'
+                                : 'No members with peace shield')
+                            : S.noAllianceMembers,
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                             color: AppTheme.subTextColor(context),
                             decoration: TextDecoration.none))))
@@ -836,10 +834,10 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     );
   }
 
-  Widget _smallChip(BuildContext context, String key, String label) {
-    final sel = _filter == key;
+  Widget _memberChip(BuildContext context, String key, String label) {
+    final sel = _memberFilter == key;
     return GestureDetector(
-      onTap: () => setState(() => _filter = key),
+      onTap: () => setState(() => _memberFilter = key),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
@@ -856,27 +854,89 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         child: Text(label,
             style: TextStyle(
                 color: sel ? Colors.white : AppTheme.subTextColor(context),
-                fontSize: 10.5,
+                fontSize: 10,
                 fontWeight: sel ? FontWeight.bold : FontWeight.w500,
                 decoration: TextDecoration.none)),
       ),
     );
   }
 
+  Widget _memberSortButton(BuildContext context) {
+    final active = _memberSort != 'default';
+    final icon = switch (_memberSort) {
+      'closest' => Icons.near_me_rounded,
+      'highest_peace' => Icons.shield_rounded,
+      _ => Icons.sort_rounded,
+    };
+
+    return PopupMenuButton<String>(
+      onSelected: (v) => setState(() => _memberSort = v),
+      itemBuilder: (_) => [
+        _sortItem(context, 'default',
+            S.isAr ? 'بدون ترتيب' : 'Default order'),
+        _sortItem(context, 'closest',
+            S.isAr ? 'الأقرب للمصدر' : 'Closest to source'),
+        _sortItem(context, 'highest_peace',
+            S.isAr ? 'أعلى أيام حماية' : 'Highest peace days'),
+      ],
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: active
+              ? AppTheme.teal.withOpacity(0.2)
+              : Theme.of(context).colorScheme.surface.withOpacity(0.6),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+              color: active
+                  ? AppTheme.teal.withOpacity(0.4)
+                  : AppTheme.subTextColor(context).withOpacity(0.1)),
+        ),
+        child: Icon(icon,
+            size: 16,
+            color: active ? AppTheme.teal : AppTheme.subTextColor(context)),
+      ),
+    );
+  }
+
+  PopupMenuItem<String> _sortItem(
+      BuildContext context, String value, String label) {
+    final sel = _memberSort == value;
+    return PopupMenuItem(
+      value: value,
+      child: Row(children: [
+        Icon(sel ? Icons.check_rounded : Icons.radio_button_unchecked,
+            size: 16,
+            color: sel ? AppTheme.green : AppTheme.subTextColor(context)),
+        const SizedBox(width: 8),
+        Text(label,
+            style: TextStyle(
+                color: AppTheme.textColor(context),
+                fontSize: 13,
+                decoration: TextDecoration.none)),
+      ]),
+    );
+  }
+
   Widget _memberTile(BuildContext context, AllyMember m) {
     final selected = _target?.playerId == m.playerId;
     final hasPeace = m.hasPeace;
+
     String distanceLabel = '';
     if (_source != null) {
       final d = m.closestDistance(_source!.kingdomId, _source!.x, _source!.y);
       distanceLabel = d == double.infinity
-          ? 'Diff. kingdom'
+          ? (S.isAr ? 'مملكة أخرى' : 'Diff. kingdom')
           : '${d.toStringAsFixed(0)} ${S.clicks}';
     }
 
     return GestureDetector(
       onTap: () {
-        final sameKingdom = m.castleIn(_source?.kingdomId ?? 0);
+        if (_source == null) {
+          _snack(S.isAr ? 'اختر مصدر أولاً' : 'Select source first',
+              color: AppTheme.orange);
+          return;
+        }
+        final sameKingdom = m.castleIn(_source!.kingdomId);
         if (sameKingdom == null) {
           _snack(
               S.isAr
@@ -940,28 +1000,73 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(m.name,
-                    style: TextStyle(
-                        color: selected
-                            ? Colors.white
-                            : AppTheme.textColor(context),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13.5,
-                        decoration: TextDecoration.none),
-                    overflow: TextOverflow.ellipsis),
+                Row(children: [
+                  Flexible(
+                      child: Text(m.name,
+                          style: TextStyle(
+                              color: selected
+                                  ? Colors.white
+                                  : AppTheme.textColor(context),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13.5,
+                              decoration: TextDecoration.none),
+                          overflow: TextOverflow.ellipsis)),
+                  const SizedBox(width: 6),
+                  Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                          color: selected
+                              ? Colors.white.withOpacity(0.2)
+                              : AppTheme.subTextColor(context).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(6)),
+                      child: Text('Lv ${m.level}',
+                          style: TextStyle(
+                              color: selected
+                                  ? Colors.white
+                                  : AppTheme.subTextColor(context),
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              decoration: TextDecoration.none))),
+                ]),
                 const SizedBox(height: 3),
-                Text(
-                    hasPeace
-                        ? '${S.peaceActive} · ${m.peaceLabel} · $distanceLabel'
-                        : '${S.noPeaceActive} · $distanceLabel',
-                    style: TextStyle(
+                Row(children: [
+                  if (hasPeace) ...[
+                    Icon(Icons.verified_user_rounded,
+                        size: 11,
+                        color: selected ? Colors.white : AppTheme.green),
+                    const SizedBox(width: 3),
+                    Text('${S.peaceActive} · ${m.peaceLabel}',
+                        style: TextStyle(
+                            color: selected ? Colors.white : AppTheme.green,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            decoration: TextDecoration.none)),
+                  ] else
+                    Text(S.noPeaceActive,
+                        style: TextStyle(
+                            color: selected
+                                ? Colors.white70
+                                : AppTheme.subTextColor(context),
+                            fontSize: 10,
+                            decoration: TextDecoration.none)),
+                  const SizedBox(width: 10),
+                  if (distanceLabel.isNotEmpty) ...[
+                    Icon(Icons.place_rounded,
+                        size: 11,
                         color: selected
                             ? Colors.white70
-                            : (hasPeace
-                                ? AppTheme.green
-                                : AppTheme.subTextColor(context)),
-                        fontSize: 10,
-                        decoration: TextDecoration.none)),
+                            : AppTheme.subTextColor(context)),
+                    const SizedBox(width: 3),
+                    Text(distanceLabel,
+                        style: TextStyle(
+                            color: selected
+                                ? Colors.white70
+                                : AppTheme.subTextColor(context),
+                            fontSize: 10,
+                            decoration: TextDecoration.none)),
+                  ],
+                ]),
               ],
             ),
           ),
@@ -1059,7 +1164,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                   Expanded(
                       child: Text(
                           S.isAr
-                              ? '$_hiddenUnitsCount نوع (أدوات/دفاع جدار) مخفي — غير قابل للإرسال'
+                              ? '$_hiddenUnitsCount نوع (أدوات/جدران) مخفي — غير قابل للإرسال'
                               : '$_hiddenUnitsCount unit type(s) hidden (tools/walls)',
                           style: const TextStyle(
                               color: AppTheme.orange,
@@ -1151,9 +1256,9 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   Widget _unitChip(BuildContext context, String key, String label) {
-    final sel = _filter == key;
+    final sel = _unitFilter == key;
     return GestureDetector(
-      onTap: () => setState(() => _filter = key),
+      onTap: () => setState(() => _unitFilter = key),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
