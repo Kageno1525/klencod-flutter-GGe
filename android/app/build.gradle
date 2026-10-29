@@ -25,7 +25,8 @@ if (flutterVersionName == null) {
 android {
     namespace = "com.kageno.gge"
     compileSdk = 36
-    ndkVersion = flutter.ndkVersion
+    // ✅ تثبيت NDK مستقر بدل flutter.ndkVersion (اللي بيجبر 28.2)
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         // ✅ Required by flutter_local_notifications — desugars Java 8+ APIs
