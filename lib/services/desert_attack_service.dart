@@ -173,7 +173,7 @@ class DesertSpyReport {
   final int wallLevel;
   final int gateLevel;
   final int moatLevel;
-  final int rs; // ✅ RS = Respawn Seconds
+  final int rs;
   final DateTime fetchedAt;
 
   DesertSpyReport({
@@ -195,7 +195,6 @@ class DesertSpyReport {
     required this.fetchedAt,
   });
 
-  // ✅ RS > 0 (وكمان < 100000) = البرج ميت، هيقوم بعد RS ثانية
   bool get isDead => rs > 0 && rs < 100000;
 
   int get totalEnemyUnits => left.total + middle.total + right.total;
@@ -678,7 +677,7 @@ class DesertAttackService {
         scoutCount: _asInt(data['SC']),
         scoutReportValue: _asInt(data['SR']),
         wallLevel: wall, gateLevel: gate, moatLevel: moat,
-        rs: _asInt(data['RS']), // ✅ RS
+        rs: _asInt(data['RS']),
         fetchedAt: DateTime.now(),
       );
     } catch (e) {
@@ -751,11 +750,13 @@ class DesertAttackService {
 
     await _ensureKingdom(tower.kid);
     try {
+      // ✅ WT: -1 = استخدم الريشة (أقصى سرعة)
+      // ✅ PTT: 1 = Premium Travel Type = مفعّل
       final payload = {
         'SX': source.x, 'SY': source.y,
         'TX': tower.x, 'TY': tower.y,
         'KID': tower.kid, 'LID': lordId,
-        'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
+        'WT': -1, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
         'LP': 0, 'FC': 0, 'PTT': 1, 'SD': 0, 'ICA': 0, 'CD': 99,
         'A': [{
           'L': {'T': List.generate(2, (_) => [-1, 0]),
@@ -772,7 +773,7 @@ class DesertAttackService {
       final total = flat.fold<int>(0, (s, e) => s + e[1]);
       TrafficLog.add('ST',
           '[Desert-Attack] cra → (${tower.x},${tower.y}) '
-          'total=$total types=${uniqueIds.length} LID=$lordId');
+          'total=$total types=${uniqueIds.length} LID=$lordId PREMIUM=ON');
 
       final resp = await conn.sendXtAndWait(
         'cra', jsonEncode(payload),
