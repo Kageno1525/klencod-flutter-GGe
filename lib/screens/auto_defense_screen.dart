@@ -525,10 +525,10 @@ class _AutoDefenseScreenState extends State<AutoDefenseScreen> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context),
-              child: Text(S.cancel)),
+              child: Text(S.isAr ? 'إلغاء' : 'Cancel')),
           ElevatedButton(
               onPressed: () => Navigator.pop(context, ctrl.text),
-              child: Text(S.save)),
+              child: Text(S.isAr ? 'حفظ' : 'Save')),
         ],
       ),
     );
