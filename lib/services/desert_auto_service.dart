@@ -89,9 +89,6 @@ class DesertAutoService {
 
   bool get isRunning => _running;
 
-  // ══════════════════════════════════════════════════════════
-  //  Failed Towers Persistence
-  // ══════════════════════════════════════════════════════════
   Future<void> _loadFailedTowers() async {
     final p = await SharedPreferences.getInstance();
     final raw = p.getString(_kFailedTowers);
@@ -131,7 +128,7 @@ class DesertAutoService {
     _client = client;
     _svc = DesertAttackService(client);
     await _svc!.loadCooldowns();
-    await _loadFailedTowers(); // ✅ نحمّل الأبراج اللي فشلت قبل كده
+    await _loadFailedTowers();
 
     attacksThisSession = 0;
     towersScanned = 0;
@@ -432,7 +429,7 @@ class DesertAutoService {
         if (report == null || !report.matches(tower)) {
           _setStatus('⏭️ Target ${tower.coordsLabel} destroyed/NPC — skip');
           _markTowerFailed(tower);
-          continue; // ✅ نكمل للبرج اللي بعده بدل return
+          continue;
         }
 
         final viable = _svc!.analyzeAttack(
@@ -444,7 +441,7 @@ class DesertAutoService {
         if (!viable.likelyWin) {
           _setStatus('⏭️ Skip ${tower.coordsLabel}: ${viable.hint}');
           _markTowerFailed(tower);
-          continue; // ✅ نكمل
+          continue;
         }
 
         final suggestion = _svc!.suggestCounter(
@@ -458,7 +455,7 @@ class DesertAutoService {
                 suggestion.right.isEmpty)) {
           _setStatus('⚠️ Empty suggestion for ${tower.coordsLabel}');
           _markTowerFailed(tower);
-          continue; // ✅ نكمل
+          continue;
         }
 
         Lord lord;
@@ -494,7 +491,7 @@ class DesertAutoService {
               '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel}: ${result.error}');
           _markTowerFailed(tower);
-          continue; // ✅ نكمل للبرج اللي بعده
+          continue;
         }
       }
     } catch (e) {
@@ -546,4 +543,4 @@ class DesertAutoService {
       _setStatus('✓ Report: ${report.totalEnemyUnits} units');
     }
   }
-}ج
+}

@@ -168,9 +168,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     if (_loadingAutoData) return;
     setState(() => _loadingAutoData = true);
     try {
-      // القواد
       final cmds = await widget.client.getCommanders();
-      // وحدات القلعة الرئيسية
       OwnedCastle? main;
       for (final c in _castles) {
         if (c.areaType == 1) {
@@ -187,7 +185,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
             main.kingdomId, main.areaId, catalog);
       }
 
-      // الإعدادات المحفوظة
       final savedCmds = await DesertAutoService.instance.getCommanderIds();
       final savedUnits = await DesertAutoService.instance.getTransferUnitIds();
 
@@ -575,7 +572,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
                 ),
               ]),
               const SizedBox(height: 14),
-              // الحالة الحالية بخط كبير
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
@@ -603,7 +599,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
                 ),
               ),
               const SizedBox(height: 10),
-              // عدادات
               Row(children: [
                 Expanded(
                     child: _miniStat('أبراج', svc.towersScanned.toString())),
@@ -1425,7 +1420,7 @@ class _MultiSelectSheetState extends State<_MultiSelectSheet> {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Manual attack sheet (نفس القديم)
+//  Manual attack sheet
 // ═══════════════════════════════════════════════════════════
 class _DesertAttackSheet extends StatefulWidget {
   final GgeClient client;
@@ -1686,6 +1681,7 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
 
     final report = await widget.svc.fetchSpyReport(
       messageId: msgId,
+      tower: widget.tower,
       catalog: _catalog,
     );
 
