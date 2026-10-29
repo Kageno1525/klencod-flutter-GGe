@@ -8,17 +8,8 @@ import 'package:gge/services/desert_attack_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
 
-const Color kDesertGold = Color(0xFFD4AF37);
 const Color kDesertSand = Color(0xFFE8A317);
 const Color kDesertDark = Color(0xFF8B5A2B);
-
-Color _gcColor(int? gc) {
-  if (gc == null || gc < 40) return Colors.grey;
-  if (gc >= 75) return kDesertGold;
-  if (gc >= 60) return kDesertSand;
-  if (gc >= 50) return const Color(0xFFCD7F32); // bronze
-  return kDesertDark;
-}
 
 class DesertAttackScreen extends StatefulWidget {
   final GgeClient client;
@@ -36,7 +27,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
   OwnedCastle? _source;
   List<DesertTower> _towers = [];
   bool _scanning = false;
-  bool _enriching = false;
   int _scanDone = 0, _scanTotal = 0;
   bool _loading = true;
 
@@ -51,7 +41,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
     _settings = await DesertAttackSettings.load();
     try {
       final castles = await widget.client.getCastles();
-      // نفضل قلاع KID=1 (الصحراء) أو 12 (external)
       final preferred = castles
           .where((c) => c.kingdomId == 1 || c.areaType == 12)
           .toList();
@@ -98,8 +87,10 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
         radiusTiles: _settings.radiusTiles,
         onProgress: (d, t) {
           if (!mounted) return;
-          setState(() => _scanDone = d);
-          setState(() => _scanTotal = t);
+          setState(() {
+            _scanDone = d;
+            _scanTotal = t;
+          });
         },
       );
       if (!mounted) return;
@@ -109,9 +100,10 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
       });
       if (found.isEmpty) {
         _snack('مفيش أبراج صحراء في النطاق ده', color: AppTheme.orange);
-        return;
+      } else {
+        _snack('تم العثور على ${found.length} برج',
+            color: AppTheme.green);
       }
-      _enrichBatch(found.take(30).toList());
     } catch (e) {
       if (!mounted) return;
       setState(() => _scanning = false);
@@ -119,44 +111,23 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
     }
   }
 
-  Future<void> _enrichBatch(List<DesertTower> batch) async {
-    if (_enriching || batch.isEmpty) return;
-    setState(() => _enriching = true);
-    for (final t in batch) {
-      if (!mounted) break;
-      try {
-        final enriched = await _svc.preview(t);
-        if (!mounted) break;
-        setState(() {
-          final idx = _towers
-              .indexWhere((x) => x.x == t.x && x.y == t.y);
-          if (idx >= 0) _towers[idx] = enriched;
-        });
-      } catch (_) {}
-      await Future.delayed(
-          Duration(milliseconds: 800 + (DateTime.now().millisecond % 400)));
-    }
-    if (mounted) setState(() => _enriching = false);
-  }
-
   List<DesertTower> get _filtered {
     var list = _towers.toList();
-    if (_settings.minGC > 0) {
-      list = list
-          .where((t) => (t.goldCampValue ?? 0) >= _settings.minGC)
-          .toList();
-    }
     switch (_settings.sortBy) {
-      case 'gc':
-        list.sort((a, b) {
-          final c = (b.goldCampValue ?? 0).compareTo(a.goldCampValue ?? 0);
-          if (c != 0) return c;
-          return a.distanceFromSource.compareTo(b.distanceFromSource);
-        });
-        break;
       case 'distance':
-        list.sort((a, b) =>
-            a.distanceFromSource.compareTo(b.distanceFromSource));
+        list.sort(
+            (a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
+        break;
+      case 'spy':
+        // اللي اتجسس عليهم مؤخراً الأول
+        list.sort((a, b) {
+          if (a.lastSpyAt == null && b.lastSpyAt == null) {
+            return a.distanceFromSource.compareTo(b.distanceFromSource);
+          }
+          if (a.lastSpyAt == null) return 1;
+          if (b.lastSpyAt == null) return -1;
+          return b.lastSpyAt!.compareTo(a.lastSpyAt!);
+        });
         break;
     }
     return list;
@@ -176,19 +147,34 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
         source: _source!,
         tower: tower,
         svc: _svc,
+        onSpySent: (mid) {
+          // تحديث الكارت بعد التجسس
+          if (!mounted) return;
+          setState(() {
+            final idx =
+                _towers.indexWhere((x) => x.x == tower.x && x.y == tower.y);
+            if (idx >= 0) {
+              _towers[idx] = _towers[idx].copyWith(
+                lastSpyAt: DateTime.now(),
+                lastSpyMid: mid,
+              );
+            }
+          });
+        },
       ),
     );
     if (result == true && mounted) {
-      try {
-        final fresh = await _svc.preview(tower);
-        if (mounted) {
-          setState(() {
-            final idx = _towers
-                .indexWhere((x) => x.x == tower.x && x.y == tower.y);
-            if (idx >= 0) _towers[idx] = fresh;
-          });
+      // هجوم اتبعت — نحدّث الكارت
+      setState(() {
+        final idx =
+            _towers.indexWhere((x) => x.x == tower.x && x.y == tower.y);
+        if (idx >= 0) {
+          _towers[idx] = _towers[idx].copyWith(
+            lastAttackAt: DateTime.now(),
+            lastAttackMid: -1,
+          );
         }
-      } catch (_) {}
+      });
     }
   }
 
@@ -197,9 +183,11 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
         content: Text(msg,
-            style: const TextStyle(decoration: TextDecoration.none)),
+            style: const TextStyle(decoration: TextDecoration.none),
+            maxLines: 3),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 4),
       ));
   }
 
@@ -217,13 +205,13 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                 if (_loading)
                   const Expanded(
                     child: Center(
-                      child: CircularProgressIndicator(color: AppTheme.orange),
+                      child: CircularProgressIndicator(color: kDesertSand),
                     ),
                   )
                 else ...[
                   _sourcePicker(context),
                   _filterBar(context),
-                  if (_scanning || _enriching) _progressBar(context),
+                  if (_scanning) _progressBar(context),
                   Expanded(
                     child: filtered.isEmpty
                         ? _emptyView(context)
@@ -250,8 +238,8 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                   ? 'جارٍ المسح ($_scanDone/$_scanTotal)'
                   : 'مسح الصحراء (${_settings.radiusTiles} tile)',
               icon: Icons.landscape_rounded,
-              gradient: const LinearGradient(
-                  colors: [kDesertSand, kDesertDark]),
+              gradient:
+                  const LinearGradient(colors: [kDesertSand, kDesertDark]),
               loading: _scanning,
               onPressed: _scanning ? null : _scan,
             ),
@@ -283,7 +271,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                         color: AppTheme.textColor(context),
                         letterSpacing: -0.3,
                         decoration: TextDecoration.none)),
-                Text('${_towers.length} برج · ${_filtered.length} ظاهر',
+                Text('${_towers.length} برج',
                     style: TextStyle(
                         fontSize: 11,
                         color: AppTheme.subTextColor(context),
@@ -291,12 +279,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
               ],
             ),
           ),
-          if (_enriching)
-            const SizedBox(
-              width: 20, height: 20,
-              child: CircularProgressIndicator(
-                  strokeWidth: 2, color: kDesertSand),
-            ),
         ],
       ),
     );
@@ -360,23 +342,23 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
   }
 
   Widget _filterBar(BuildContext context) {
+    final labels = {'distance': 'المسافة', 'spy': 'آخر تجسس'};
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            _chip(context,
-                icon: Icons.tune_rounded,
-                label: 'فلترة GC',
-                color: kDesertSand,
-                onTap: _openFilterSheet),
-            const SizedBox(width: 8),
-            _sortChip(context),
-            const SizedBox(width: 8),
-            _distanceChip(context),
-          ],
-        ),
+      child: Row(
+        children: [
+          _chip(context,
+              icon: Icons.sort_rounded,
+              label: 'ترتيب: ${labels[_settings.sortBy] ?? ""}',
+              color: kDesertSand,
+              onTap: () => _openSortMenu(context)),
+          const SizedBox(width: 8),
+          _chip(context,
+              icon: Icons.place_rounded,
+              label: '${_settings.radiusTiles} tile',
+              color: AppTheme.orange,
+              onTap: () => _openRadiusSheet(context)),
+        ],
       ),
     );
   }
@@ -402,72 +384,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
           Text(label,
               style: TextStyle(
                   color: color,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.none)),
-        ]),
-      ),
-    );
-  }
-
-  Widget _sortChip(BuildContext context) {
-    final labels = {'gc': 'GC', 'distance': 'المسافة'};
-    return PopupMenuButton<String>(
-      onSelected: (v) {
-        setState(() {
-          _settings.sortBy = v;
-          _settings.save();
-        });
-      },
-      itemBuilder: (_) => labels.entries
-          .map((e) => PopupMenuItem(
-                value: e.key,
-                child: Row(children: [
-                  if (_settings.sortBy == e.key)
-                    const Icon(Icons.check, size: 14, color: AppTheme.green),
-                  const SizedBox(width: 6),
-                  Text(e.value,
-                      style: TextStyle(color: AppTheme.textColor(context))),
-                ]),
-              ))
-          .toList(),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: kDesertGold.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: kDesertGold.withOpacity(0.3)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.sort_rounded, color: kDesertGold, size: 14),
-          const SizedBox(width: 6),
-          Text(labels[_settings.sortBy] ?? '',
-              style: const TextStyle(
-                  color: kDesertGold,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.none)),
-        ]),
-      ),
-    );
-  }
-
-  Widget _distanceChip(BuildContext context) {
-    return GestureDetector(
-      onTap: () => _openRadiusSheet(context),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: AppTheme.orange.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppTheme.orange.withOpacity(0.3)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.place_rounded, color: AppTheme.orange, size: 14),
-          const SizedBox(width: 6),
-          Text('${_settings.radiusTiles} tile',
-              style: const TextStyle(
-                  color: AppTheme.orange,
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
                   decoration: TextDecoration.none)),
@@ -529,12 +445,10 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
   }
 
   Widget _towerCard(BuildContext context, DesertTower t) {
-    final legendary = t.isLegendary;
-    final borderColor = legendary
+    final spied = t.isSpied;
+    final borderColor = spied
         ? kDesertGold
-        : t.hasGold
-            ? _gcColor(t.goldCampValue)
-            : AppTheme.subTextColor(context).withOpacity(0.2);
+        : AppTheme.subTextColor(context).withOpacity(0.2);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -542,28 +456,11 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
         onTap: () => _openTowerSheet(t),
         child: Container(
           decoration: BoxDecoration(
-            gradient: legendary
-                ? const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0x44D4AF37), Color(0x11FFD700)])
-                : null,
-            color: legendary
-                ? null
-                : (AppTheme.isDark(context)
-                    ? Colors.white.withOpacity(0.04)
-                    : Colors.black.withOpacity(0.03)),
+            color: AppTheme.isDark(context)
+                ? Colors.white.withOpacity(0.04)
+                : Colors.black.withOpacity(0.03),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-                color: borderColor, width: legendary ? 1.6 : 1.2),
-            boxShadow: legendary
-                ? [
-                    BoxShadow(
-                        color: kDesertGold.withOpacity(0.3),
-                        blurRadius: 18,
-                        offset: const Offset(0, 6))
-                  ]
-                : null,
+            border: Border.all(color: borderColor, width: spied ? 1.6 : 1.2),
           ),
           padding: const EdgeInsets.all(12),
           child: Row(
@@ -571,22 +468,11 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
               Container(
                 width: 46, height: 46,
                 decoration: BoxDecoration(
-                  gradient: legendary
-                      ? const LinearGradient(
-                          colors: [kDesertGold, Color(0xFFFFD700)])
-                      : null,
-                  color: legendary
-                      ? null
-                      : kDesertSand.withOpacity(0.15),
+                  color: kDesertSand.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(
-                  legendary
-                      ? Icons.emoji_events_rounded
-                      : Icons.landscape_rounded,
-                  color: legendary ? Colors.black : kDesertSand,
-                  size: 22,
-                ),
+                child: const Icon(Icons.landscape_rounded,
+                    color: kDesertSand, size: 22),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -599,30 +485,48 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                             style: TextStyle(
                                 color: AppTheme.textColor(context),
                                 fontWeight: FontWeight.bold,
-                                fontSize: 13,
+                                fontSize: 15,
                                 decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
-                        if (t.goldCampValue != null)
-                          _gcBadge(t.goldCampValue!, legendary),
-                        if (t.isSpied) ...[
-                          const SizedBox(width: 6),
+                        if (spied && t.isSpyRecent)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.green.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                  color: Colors.green.withOpacity(0.6)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.visibility_rounded,
+                                    size: 10, color: Colors.green),
+                                const SizedBox(width: 3),
+                                Text('تجسس ${t.spyTimeLabel}',
+                                    style: const TextStyle(
+                                        color: Colors.green,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                        decoration: TextDecoration.none)),
+                              ],
+                            ),
+                          )
+                        else if (spied)
                           Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
-                              color: Colors.green.withOpacity(0.15),
+                              color: Colors.grey.withOpacity(0.2),
                               borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
-                                  color: Colors.green.withOpacity(0.5)),
                             ),
-                            child: const Text('تجسس ✓',
+                            child: const Text('تجسس قديم',
                                 style: TextStyle(
-                                    color: Colors.green,
+                                    color: Colors.grey,
                                     fontSize: 9,
-                                    fontWeight: FontWeight.bold,
                                     decoration: TextDecoration.none)),
                           ),
-                        ],
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -638,19 +542,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                                 color: AppTheme.subTextColor(context),
                                 fontSize: 10.5,
                                 decoration: TextDecoration.none)),
-                        if (t.goldCampValue == null) ...[
-                          const SizedBox(width: 8),
-                          Icon(Icons.hourglass_empty_rounded,
-                              size: 11,
-                              color: AppTheme.subTextColor(context)),
-                          const SizedBox(width: 3),
-                          Text('جارٍ الجلب...',
-                              style: TextStyle(
-                                  color: AppTheme.subTextColor(context)
-                                      .withOpacity(0.7),
-                                  fontSize: 10.5,
-                                  decoration: TextDecoration.none)),
-                        ],
                       ],
                     ),
                   ],
@@ -665,41 +556,61 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
     );
   }
 
-  Widget _gcBadge(int gc, bool legendary) {
-    final color = legendary ? kDesertGold : _gcColor(gc);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.18),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withOpacity(0.5)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.star_rounded, color: color, size: 10),
-        const SizedBox(width: 2),
-        Text('GC $gc',
-            style: TextStyle(
-                color: color,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                decoration: TextDecoration.none)),
-      ]),
-    );
-  }
-
-  void _openFilterSheet() {
-    showModalBottomSheet(
+  void _openSortMenu(BuildContext context) async {
+    final selected = await showModalBottomSheet<String>(
       context: context,
-      isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _FilterSheet(
-        settings: _settings,
-        onChanged: () {
-          setState(() {});
-          _settings.save();
-        },
+      builder: (_) => Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF0B0B14),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44, height: 5,
+                margin: const EdgeInsets.only(top: 10, bottom: 12),
+                decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(3)),
+              ),
+              ListTile(
+                leading: const Icon(Icons.place_rounded, color: kDesertSand),
+                title: const Text('المسافة',
+                    style: TextStyle(
+                        color: Colors.white,
+                        decoration: TextDecoration.none)),
+                trailing: _settings.sortBy == 'distance'
+                    ? const Icon(Icons.check, color: AppTheme.green)
+                    : null,
+                onTap: () => Navigator.pop(context, 'distance'),
+              ),
+              ListTile(
+                leading:
+                    const Icon(Icons.visibility_rounded, color: kDesertSand),
+                title: const Text('آخر تجسس',
+                    style: TextStyle(
+                        color: Colors.white,
+                        decoration: TextDecoration.none)),
+                trailing: _settings.sortBy == 'spy'
+                    ? const Icon(Icons.check, color: AppTheme.green)
+                    : null,
+                onTap: () => Navigator.pop(context, 'spy'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
+    if (selected != null) {
+      setState(() {
+        _settings.sortBy = selected;
+        _settings.save();
+      });
+    }
   }
 
   void _openRadiusSheet(BuildContext context) {
@@ -726,27 +637,23 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
               activeColor: kDesertSand,
               label: '${temp.toInt()}',
               onChanged: (v) => setSt(() => temp =
-                  (v / kDesertRadiusStep).round() * kDesertRadiusStep.toDouble()),
+                  (v / kDesertRadiusStep).round() *
+                      kDesertRadiusStep.toDouble()),
             ),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text('$kDesertRadiusMin',
-                  style: TextStyle(
-                      fontSize: 10.5,
-                      color: AppTheme.subTextColor(ctx),
-                      decoration: TextDecoration.none)),
-              Text('$kDesertRadiusMax',
-                  style: TextStyle(
-                      fontSize: 10.5,
-                      color: AppTheme.subTextColor(ctx),
-                      decoration: TextDecoration.none)),
-            ]),
-            const SizedBox(height: 6),
-            Text('خطوة $kDesertRadiusStep · أكبر = بان أعلى',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontSize: 10.5,
-                    color: AppTheme.subTextColor(ctx),
-                    decoration: TextDecoration.none)),
+            Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('$kDesertRadiusMin',
+                      style: TextStyle(
+                          fontSize: 10.5,
+                          color: AppTheme.subTextColor(ctx),
+                          decoration: TextDecoration.none)),
+                  Text('$kDesertRadiusMax',
+                      style: TextStyle(
+                          fontSize: 10.5,
+                          color: AppTheme.subTextColor(ctx),
+                          decoration: TextDecoration.none)),
+                ]),
           ]),
           actions: [
             TextButton(
@@ -769,116 +676,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Filter Sheet
-// ═══════════════════════════════════════════════════════════
-class _FilterSheet extends StatefulWidget {
-  final DesertAttackSettings settings;
-  final VoidCallback onChanged;
-  const _FilterSheet({required this.settings, required this.onChanged});
-  @override
-  State<_FilterSheet> createState() => _FilterSheetState();
-}
-
-class _FilterSheetState extends State<_FilterSheet> {
-  @override
-  Widget build(BuildContext context) {
-    final s = widget.settings;
-    return Container(
-      constraints:
-          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
-      decoration: const BoxDecoration(
-        color: Color(0xFF0B0B14),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 44, height: 5,
-              margin: const EdgeInsets.only(top: 10),
-              decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(3)),
-            ),
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(children: [
-                const Icon(Icons.tune_rounded, color: kDesertSand, size: 20),
-                const SizedBox(width: 8),
-                const Text('فلترة GC',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        decoration: TextDecoration.none)),
-                const Spacer(),
-                TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('تم',
-                        style: TextStyle(color: kDesertSand))),
-              ]),
-            ),
-            const Divider(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('الحد الأدنى للـ GC',
-                        style: TextStyle(
-                            color: Colors.white70,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                            decoration: TextDecoration.none)),
-                    const SizedBox(height: 8),
-                    Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [0, 40, 50, 60, 75].map((val) {
-                          final active = s.minGC == val;
-                          final color = val == 75
-                              ? kDesertGold
-                              : val == 60
-                                  ? kDesertSand
-                                  : kDesertDark;
-                          return GestureDetector(
-                            onTap: () {
-                              setState(() => s.minGC = val);
-                              widget.onChanged();
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 14, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: active
-                                    ? color.withOpacity(0.25)
-                                    : Colors.white.withOpacity(0.05),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                    color: active ? color : Colors.white24),
-                              ),
-                              child: Text(val == 0 ? 'الكل' : 'GC $val+',
-                                  style: TextStyle(
-                                      color:
-                                          active ? color : Colors.white70,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 11,
-                                      decoration: TextDecoration.none)),
-                            ),
-                          );
-                        }).toList()),
-                  ]),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+const Color kDesertGold = Color(0xFFD4AF37);
 
 // ═══════════════════════════════════════════════════════════
 //  Attack Sheet
@@ -888,12 +686,14 @@ class _DesertAttackSheet extends StatefulWidget {
   final OwnedCastle source;
   final DesertTower tower;
   final DesertAttackService svc;
+  final void Function(int? mid) onSpySent;
 
   const _DesertAttackSheet({
     required this.client,
     required this.source,
     required this.tower,
     required this.svc,
+    required this.onSpySent,
   });
 
   @override
@@ -907,12 +707,10 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
   List<CommanderInfo> _commanders = [];
   Lord? _selectedLord;
 
-  // توزيع الوحدات على 3 أجنجة
   Map<int, int> _leftAmt = {};
   Map<int, int> _middleAmt = {};
   Map<int, int> _rightAmt = {};
 
-  // الدفاعات اليدوية (من تقرير التجسس في اللعبة)
   final DefenderSummary _defenders = DefenderSummary();
 
   bool _loading = true;
@@ -920,9 +718,13 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
   bool _spying = false;
   bool _recalling = false;
 
+  // cooldown للتجسس (30 ثانية)
+  DateTime? _lastSpyLocalAt;
+
   @override
   void initState() {
     super.initState();
+    _lastSpyLocalAt = widget.tower.lastSpyAt;
     _load();
   }
 
@@ -1006,21 +808,64 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     _snack(suggestion.reason, color: kDesertSand);
   }
 
+  bool get _canSpy {
+    if (_spying) return false;
+    if (_lastSpyLocalAt == null) return true;
+    return DateTime.now().difference(_lastSpyLocalAt!).inSeconds >= 30;
+  }
+
   Future<void> _spy() async {
-    if (_spying) return;
+    if (!_canSpy) {
+      final remaining =
+          30 - DateTime.now().difference(_lastSpyLocalAt!).inSeconds;
+      _snack('انتظر $remaining ثانية قبل تجسس جديد', color: AppTheme.orange);
+      return;
+    }
     setState(() => _spying = true);
+
     final res = await widget.svc.spy(
       tower: widget.tower,
       source: widget.source,
       scoutCount: 11,
     );
+
     if (!mounted) return;
-    setState(() => _spying = false);
+    setState(() {
+      _spying = false;
+      if (res.success) _lastSpyLocalAt = DateTime.now();
+    });
+
     if (res.success) {
-      _snack(
-          'تم إرسال الجواسيس ✓ (MID=${res.movementId ?? "?"})\n'
-          'افتح تقرير التجسس في اللعبة بعد دقيقة',
-          color: AppTheme.green);
+      widget.onSpySent(res.movementId);
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: Theme.of(ctx).colorScheme.surface,
+          title: const Row(children: [
+            Icon(Icons.check_circle, color: Colors.green),
+            SizedBox(width: 8),
+            Text('تم إرسال الجواسيس',
+                style: TextStyle(decoration: TextDecoration.none)),
+          ]),
+          content: Text(
+            'الهدف: (${widget.tower.x},${widget.tower.y})\n'
+            'MID: ${res.movementId ?? "?"}\n'
+            'عدد الجواسيس: ${res.scoutCount ?? 11}\n\n'
+            '⚠️ مهم: التقرير مش هيظهر هنا في التطبيق.\n'
+            'افتح اللعبة → الرسائل ✉️ → تقارير\n'
+            'هتلاقي تقرير التجسس على البرج ده.',
+            style: const TextStyle(
+                decoration: TextDecoration.none, height: 1.6),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('فهمت'),
+            ),
+          ],
+        ),
+      );
     } else {
       _snack(res.error ?? 'فشل التجسس', color: AppTheme.red);
     }
@@ -1163,10 +1008,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         Container(
           width: 40, height: 40,
           decoration: BoxDecoration(
-            gradient: t.isLegendary
-                ? const LinearGradient(
-                    colors: [kDesertGold, Color(0xFFFFD700)])
-                : const LinearGradient(colors: [kDesertSand, kDesertDark]),
+            gradient: const LinearGradient(
+                colors: [kDesertSand, kDesertDark]),
             borderRadius: BorderRadius.circular(10),
           ),
           child: const Icon(Icons.landscape_rounded,
@@ -1174,24 +1017,12 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('برج صحراء ${t.coordsLabel}',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      decoration: TextDecoration.none)),
-              if (t.goldCampValue != null)
-                Text('GC: ${t.goldCampValue}',
-                    style: TextStyle(
-                        color: _gcColor(t.goldCampValue),
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        decoration: TextDecoration.none)),
-            ],
-          ),
+          child: Text('برج صحراء ${t.coordsLabel}',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none)),
         ),
         IconButton(
             icon: const Icon(Icons.close, color: Colors.white70),
@@ -1201,23 +1032,27 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
   }
 
   Widget _actionRow(DesertTower t) {
+    final spyLabel = _spying
+        ? 'جارٍ الإرسال...'
+        : (_canSpy ? 'تجسس على ${t.coordsLabel}' : 'انتظر قبل تجسس جديد');
     return Row(children: [
       Expanded(
+        flex: 2,
         child: OutlinedButton.icon(
-          onPressed: _spying ? null : _spy,
+          onPressed: _canSpy ? _spy : null,
           icon: _spying
               ? const SizedBox(
                   width: 16, height: 16,
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: kDesertSand))
               : const Icon(Icons.visibility_rounded, size: 18),
-          label: Text(_spying ? 'جارٍ الإرسال...' : 'تجسس',
+          label: Text(spyLabel,
               style: const TextStyle(
-                  decoration: TextDecoration.none, fontSize: 13)),
+                  decoration: TextDecoration.none, fontSize: 12)),
           style: OutlinedButton.styleFrom(
             foregroundColor: kDesertSand,
             side: const BorderSide(color: kDesertSand),
-            padding: const EdgeInsets.symmetric(vertical: 12),
+            padding: const EdgeInsets.symmetric(vertical: 14),
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10)),
           ),
@@ -1236,11 +1071,11 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
                 : const Icon(Icons.replay_rounded, size: 18),
             label: Text(_recalling ? '...' : 'انسحاب',
                 style: const TextStyle(
-                    decoration: TextDecoration.none, fontSize: 13)),
+                    decoration: TextDecoration.none, fontSize: 12)),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppTheme.red,
               side: const BorderSide(color: AppTheme.red),
-              padding: const EdgeInsets.symmetric(vertical: 12),
+              padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10)),
             ),
@@ -1265,17 +1100,18 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
             const Icon(Icons.security_rounded,
                 color: kDesertSand, size: 18),
             const SizedBox(width: 6),
-            const Text('دفاعات العدو (من تقرير التجسس)',
-                style: TextStyle(
-                    color: kDesertSand,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    decoration: TextDecoration.none)),
-            const Spacer(),
+            const Expanded(
+              child: Text('دفاعات العدو (من تقرير التجسس في اللعبة)',
+                  style: TextStyle(
+                      color: kDesertSand,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.none)),
+            ),
             TextButton(
               onPressed: _autoSuggest,
               style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
                   minimumSize: Size.zero,
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap),
               child: const Text('توزيع ذكي 🎯',
@@ -1575,9 +1411,7 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
                         strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.gavel_rounded),
             label: Text(
-                _sending
-                    ? 'جارٍ الإرسال...'
-                    : 'هجوم ($_grandTotal)',
+                _sending ? 'جارٍ الإرسال...' : 'هجوم ($_grandTotal)',
                 style: const TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 15,

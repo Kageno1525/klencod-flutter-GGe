@@ -19,8 +19,6 @@ class DesertTower {
   final int sourceAreaId;
   final String sourceName;
 
-  int? goldCampValue; // من ssi
-  DateTime? lastPreviewAt;
   DateTime? lastSpyAt;
   int? lastSpyMid;
   DateTime? lastAttackAt;
@@ -30,13 +28,11 @@ class DesertTower {
     required this.x, required this.y, required this.kid,
     required this.distanceFromSource, required this.sourceAreaId,
     required this.sourceName,
-    this.goldCampValue, this.lastPreviewAt,
     this.lastSpyAt, this.lastSpyMid,
     this.lastAttackAt, this.lastAttackMid,
   });
 
   DesertTower copyWith({
-    int? goldCampValue, DateTime? lastPreviewAt,
     DateTime? lastSpyAt, int? lastSpyMid,
     DateTime? lastAttackAt, int? lastAttackMid,
   }) => DesertTower(
@@ -44,30 +40,29 @@ class DesertTower {
     distanceFromSource: distanceFromSource,
     sourceAreaId: sourceAreaId,
     sourceName: sourceName,
-    goldCampValue: goldCampValue ?? this.goldCampValue,
-    lastPreviewAt: lastPreviewAt ?? this.lastPreviewAt,
     lastSpyAt: lastSpyAt ?? this.lastSpyAt,
     lastSpyMid: lastSpyMid ?? this.lastSpyMid,
     lastAttackAt: lastAttackAt ?? this.lastAttackAt,
     lastAttackMid: lastAttackMid ?? this.lastAttackMid,
   );
 
-  bool get isPreviewed => lastPreviewAt != null;
   bool get isSpied => lastSpyAt != null;
+  bool get isSpyRecent {
+    if (lastSpyAt == null) return false;
+    return DateTime.now().difference(lastSpyAt!).inMinutes < 5;
+  }
+
   bool get hasActiveAttack {
     if (lastAttackAt == null) return false;
     return DateTime.now().difference(lastAttackAt!).inMinutes < 30;
   }
-  bool get isStalePreview {
-    if (lastPreviewAt == null) return true;
-    return DateTime.now().difference(lastPreviewAt!).inMinutes >= 5;
-  }
-
-  // Legendary = GC>=75 (بدون شرط level لأن مفيش levels في الصحراء)
-  bool get isLegendary => (goldCampValue ?? 0) >= 75;
-  bool get hasGold => (goldCampValue ?? 0) >= 40;
 
   String get coordsLabel => '($x,$y)';
+  String get spyTimeLabel {
+    if (lastSpyAt == null) return '';
+    final t = lastSpyAt!;
+    return '${t.hour.toString().padLeft(2, "0")}:${t.minute.toString().padLeft(2, "0")}';
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -78,17 +73,17 @@ class DesertSpyResult {
   final String? error;
   final int? movementId;
   final int? scoutCount;
-  final int? defenderCount; // SR value
+  final int? scoutReportValue; // SR من الرد
 
   DesertSpyResult._({
     required this.success, this.error, this.movementId,
-    this.scoutCount, this.defenderCount,
+    this.scoutCount, this.scoutReportValue,
   });
 
-  factory DesertSpyResult.ok(int? mid, int? scouts, int? defenders) =>
+  factory DesertSpyResult.ok(int? mid, int? scouts, int? sr) =>
       DesertSpyResult._(
           success: true, movementId: mid,
-          scoutCount: scouts, defenderCount: defenders);
+          scoutCount: scouts, scoutReportValue: sr);
   factory DesertSpyResult.fail(String err) =>
       DesertSpyResult._(success: false, error: err);
 }
@@ -141,7 +136,7 @@ class DefenderSummary {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  UnitSuggestion — نتيجة التوزيع الذكي
+//  UnitSuggestion
 // ═══════════════════════════════════════════════════════════
 class UnitSuggestion {
   final List<List<int>> left;
@@ -165,21 +160,18 @@ class UnitSuggestion {
 // ═══════════════════════════════════════════════════════════
 class DesertAttackSettings {
   int radiusTiles;
-  int minGC;
   String sortBy;
   int sourceAreaId;
 
   DesertAttackSettings({
     this.radiusTiles = 50,
-    this.minGC = 0,
-    this.sortBy = 'gc',
+    this.sortBy = 'distance',
     this.sourceAreaId = 0,
   });
 
-  static const _kRadius = 'desert_radius';
-  static const _kMinGC = 'desert_min_gc';
-  static const _kSort = 'desert_sort';
-  static const _kSource = 'desert_source';
+  static const _kRadius = 'desert_radius_v2';
+  static const _kSort = 'desert_sort_v2';
+  static const _kSource = 'desert_source_v2';
 
   static Future<DesertAttackSettings> load() async {
     final p = await SharedPreferences.getInstance();
@@ -188,8 +180,7 @@ class DesertAttackSettings {
     if (radius > kDesertRadiusMax) radius = kDesertRadiusMax;
     return DesertAttackSettings(
       radiusTiles: radius,
-      minGC: p.getInt(_kMinGC) ?? 0,
-      sortBy: p.getString(_kSort) ?? 'gc',
+      sortBy: p.getString(_kSort) ?? 'distance',
       sourceAreaId: p.getInt(_kSource) ?? 0,
     );
   }
@@ -197,7 +188,6 @@ class DesertAttackSettings {
   Future<void> save() async {
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kRadius, radiusTiles);
-    await p.setInt(_kMinGC, minGC);
     await p.setString(_kSort, sortBy);
     await p.setInt(_kSource, sourceAreaId);
   }
@@ -234,7 +224,7 @@ class DesertAttackService {
     }
   }
 
-  /// يمسح المنطقة ويرجع أبراج الصحراء (type 2)
+  /// يمسح المنطقة ويرجع أبراج الصحراء (type 2) — مفيش ssi بعد المسح
   Future<List<DesertTower>> scanArea({
     required OwnedCastle source,
     required int radiusTiles,
@@ -335,29 +325,7 @@ class DesertAttackService {
     return found;
   }
 
-  /// ssi — يجيب GC
-  Future<DesertTower> preview(DesertTower tower) async {
-    await _ensureKingdom(tower.kid);
-    try {
-      final resp = await conn.sendXtAndWait(
-        'ssi',
-        jsonEncode({'TX': tower.x, 'TY': tower.y, 'KID': tower.kid}),
-        responseCmd: 'ssi',
-        timeoutMs: 10000,
-        isAction: false,
-      );
-      if (resp.resultCode != 0 || resp.payload == null) return tower;
-      final data = jsonDecode(resp.payload!) as Map<String, dynamic>;
-      final gc = _asInt(data['GC']);
-      TrafficLog.add('ST', '[Desert] ssi (${tower.x},${tower.y}) GC=$gc');
-      return tower.copyWith(goldCampValue: gc, lastPreviewAt: DateTime.now());
-    } catch (e) {
-      TrafficLog.add('ER', '[Desert] ssi error: $e');
-      return tower;
-    }
-  }
-
-  /// csm — يبعت جواسيس (spies)
+  /// csm — إرسال جواسيس
   Future<DesertSpyResult> spy({
     required DesertTower tower,
     required OwnedCastle source,
@@ -384,28 +352,29 @@ class DesertAttackService {
         isAction: true,
       );
 
-      TrafficLog.add('ST',
-          '[Desert-Spy] csm resp result=${resp.resultCode} payload=${resp.payload}');
-
       if (resp.resultCode == 0 && resp.payload != null) {
+        int? mid, scouts, sr;
         try {
           final data = jsonDecode(resp.payload!) as Map<String, dynamic>;
-          final mid = _extractMovementMid(data);
-          int? scouts, defenders;
+          mid = _extractMovementMid(data);
           final s = data['S'] as Map?;
           if (s != null) {
             scouts = _asInt(s['SC']);
-            defenders = _asInt(s['SR']);
+            sr = _asInt(s['SR']);
           }
-          return DesertSpyResult.ok(mid, scouts, defenders);
         } catch (e) {
           TrafficLog.add('ER', '[Desert-Spy] parse error: $e');
         }
+        TrafficLog.add('ST',
+            '[Desert-Spy] ✓ sent MID=$mid scouts=$scouts SR=$sr — '
+            'التقرير هيظهر في اللعبة → الرسائل ✉️ → تقارير');
+        return DesertSpyResult.ok(mid, scouts, sr);
       }
       if (resp.resultCode == 218) return DesertSpyResult.fail('LORD_BUSY_218');
       if (resp.resultCode == 181) return DesertSpyResult.fail('MAX_MOVEMENTS_181');
-      return DesertSpyResult.fail(
-          'CSM ${resp.resultCode}: ${resp.payload ?? ""}');
+      if (resp.resultCode == 91) return DesertSpyResult.fail('UNIT_NOT_SENDABLE_91');
+      TrafficLog.add('ER', '[Desert-Spy] csm error ${resp.resultCode}');
+      return DesertSpyResult.fail('CSM ${resp.resultCode}');
     } catch (e) {
       TrafficLog.add('ER', '[Desert-Spy] exception: $e');
       return DesertSpyResult.fail('$e');
@@ -470,7 +439,7 @@ class DesertAttackService {
       );
 
       TrafficLog.add('ST',
-          '[Desert-Attack] cra resp result=${resp.resultCode} payload=${resp.payload}');
+          '[Desert-Attack] cra resp result=${resp.resultCode}');
 
       if (resp.resultCode == 0) {
         int? mid;
@@ -494,8 +463,7 @@ class DesertAttackService {
       if (resp.resultCode == 100) {
         return DesertAttackResult.fail('CRA_100: جرب جيش أكبر');
       }
-      return DesertAttackResult.fail(
-          'CRA ${resp.resultCode}: ${resp.payload ?? ""}');
+      return DesertAttackResult.fail('CRA ${resp.resultCode}');
     } catch (e) {
       TrafficLog.add('ER', '[Desert-Attack] exception: $e');
       return DesertAttackResult.fail('$e');
@@ -528,16 +496,22 @@ class DesertAttackService {
     required DefenderSummary defenders,
     int maxTypes = 10,
   }) {
-    // تصنيف وحدات اللاعب
+    // melee وحدات: wodId أصغر (سيوف، رماح، فؤوس...) — 601-620
+    // ranged وحدات: wodId أكبر (أقواس، مناجيق...) — 621+
     final playerMelee = available
-        .where((u) => u.isCombat && u.wodId <= 615) // melee وحسب wodId
+        .where((u) => u.isCombat && u.wodId >= 601 && u.wodId <= 620)
         .toList();
     final playerRanged = available
-        .where((u) => u.isCombat && u.wodId > 615)
+        .where((u) => u.isCombat && u.wodId >= 621)
         .toList();
 
-    final meleeAvail = playerMelee.isNotEmpty ? playerMelee : playerRanged;
-    final rangedAvail = playerRanged.isNotEmpty ? playerRanged : playerMelee;
+    // fallback لو مش عارفين نصنف
+    final meleeAvail = playerMelee.isNotEmpty
+        ? playerMelee
+        : available.where((u) => u.isCombat).toList();
+    final rangedAvail = playerRanged.isNotEmpty
+        ? playerRanged
+        : available.where((u) => u.isCombat).toList();
 
     List<List<int>> pick(List<CastleUnit> pool, int maxSlots) {
       final result = <List<int>>[];
@@ -547,30 +521,28 @@ class DesertAttackService {
       return result;
     }
 
-    // كل جناح: لو الدفاع ranged → نبعت melee، لو melee → نبعت ranged
-    final leftPool = defenders.leftRanged > defenders.leftMelee
-        ? meleeAvail
-        : rangedAvail;
+    // القاعدة:
+    // دفاع ranged → هجوم melee (يوصل بسرعة ويضرب)
+    // دفاع melee → هجوم ranged (يضرب من بعيد بدون خسائر)
+    final leftPool =
+        defenders.leftRanged > defenders.leftMelee ? meleeAvail : rangedAvail;
     final middlePool = defenders.middleRanged > defenders.middleMelee
         ? meleeAvail
         : rangedAvail;
-    final rightPool = defenders.rightRanged > defenders.rightMelee
-        ? meleeAvail
-        : rangedAvail;
+    final rightPool =
+        defenders.rightRanged > defenders.rightMelee ? meleeAvail : rangedAvail;
 
     final left = pick(leftPool, 2);
     final middle = pick(middlePool, 6);
     final right = pick(rightPool, 2);
 
-    // حد 10 أنواع إجمالي
     final all = [...left, ...middle, ...right];
     if (all.length > maxTypes) {
-      // قلل من M لو زاد العدد
       final excess = all.length - maxTypes;
       final newMiddle = middle.take((6 - excess).clamp(0, 6)).toList();
       return UnitSuggestion(
         left: left, middle: newMiddle, right: right,
-        reason: 'توزيع ذكي بناءً على الدفاعات (تم تقليص M)',
+        reason: 'توزيع ذكي (تم تقليص M للحد الأقصى)',
       );
     }
 
@@ -596,7 +568,6 @@ class DesertAttackService {
   }
 
   int? _extractMovementMid(Map<String, dynamic> data) {
-    // csm له A.M.MID، cra له A.M.MID أو MID مباشر
     final a = data['A'];
     if (a is Map) {
       final m = a['M'];
