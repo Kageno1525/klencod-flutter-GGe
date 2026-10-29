@@ -18,6 +18,7 @@ class DesertTower {
   final double distanceFromSource;
   final int sourceAreaId;
   final String sourceName;
+  final bool isAlive; // ✅ جديد: من gaa entry[4]
 
   DateTime? lastSpyAt;
   int? lastSpyMid;
@@ -28,11 +29,13 @@ class DesertTower {
     required this.x, required this.y, required this.kid,
     required this.distanceFromSource, required this.sourceAreaId,
     required this.sourceName,
+    this.isAlive = true,
     this.lastSpyAt, this.lastSpyMid,
     this.lastAttackAt, this.lastAttackMid,
   });
 
   DesertTower copyWith({
+    bool? isAlive,
     DateTime? lastSpyAt, int? lastSpyMid,
     DateTime? lastAttackAt, int? lastAttackMid,
   }) => DesertTower(
@@ -40,6 +43,7 @@ class DesertTower {
         distanceFromSource: distanceFromSource,
         sourceAreaId: sourceAreaId,
         sourceName: sourceName,
+        isAlive: isAlive ?? this.isAlive,
         lastSpyAt: lastSpyAt ?? this.lastSpyAt,
         lastSpyMid: lastSpyMid ?? this.lastSpyMid,
         lastAttackAt: lastAttackAt ?? this.lastAttackAt,
@@ -499,6 +503,8 @@ class DesertAttackService {
               if (_asInt(entry[0]) != 2) continue;
               final x = _asInt(entry[1]);
               final y = _asInt(entry[2]);
+              // ✅ isAlive = entry[4] == 1 (1=حي، 0=في cooldown)
+              final isAlive = entry.length > 4 && _asInt(entry[4]) == 1;
               final key = '$x,$y';
               if (seen.contains(key)) continue;
               seen.add(key);
@@ -509,6 +515,7 @@ class DesertAttackService {
                 distanceFromSource: sqrt(dx * dx + dy * dy),
                 sourceAreaId: source.areaId,
                 sourceName: source.displayName,
+                isAlive: isAlive,
               ));
             }
           }
@@ -522,8 +529,9 @@ class DesertAttackService {
         await Future.delayed(Duration(milliseconds: 800 + Random().nextInt(400)));
       }
     }
+    final aliveCount = found.where((t) => t.isAlive).length;
     TrafficLog.add('ST',
-        '[Desert] Scan done: ${found.length} towers (radius=$radiusTiles)');
+        '[Desert] Scan done: ${found.length} towers ($aliveCount alive) radius=$radiusTiles');
     return found;
   }
 
@@ -585,7 +593,6 @@ class DesertAttackService {
 
       final report = _parseBsd(resp.payload!, messageId, catalog, tower);
       if (report != null) {
-        // ✅ مفتاح الـ cache بالبرج (مش بالـ targetX/Y)
         _reportCache[tower.key] = report;
         TrafficLog.add('ST',
             '[Desert] ✓ report: ${report.summaryLine} '
@@ -601,6 +608,7 @@ class DesertAttackService {
   DesertSpyReport? getCachedReport(DesertTower tower) =>
       _reportCache[tower.key];
 
+  // ✅ حذفنا فحص DUM/OID — كل أبراج الصحراء NPC
   DesertSpyReport? _parseBsd(
     String payload,
     int messageId,
@@ -610,16 +618,9 @@ class DesertAttackService {
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
       final s = data['S'] as List?;
-      if (s == null || s.length < 3) return null;
-
-      // ✅ التحقق من OI.DUM/OID — لو البرج مدمر أو NPC، نرجع null
-      final oi = data['OI'] as Map?;
-      final dum = oi?['DUM'] == true;
-      final oid = _asInt(oi?['OID']);
-      if (dum || oid <= 0) {
+      if (s == null || s.length < 3) {
         TrafficLog.add('ER',
-            '[Desert] bsd target is destroyed/NPC (OID=$oid DUM=$dum) '
-            'for ${tower.coordsLabel} — skip');
+            '[Desert] bsd missing S array for ${tower.coordsLabel}');
         return null;
       }
 
@@ -659,7 +660,6 @@ class DesertAttackService {
         }
       }
 
-      // ✅ الإحداثيات من SO.AI (البرج) أو من tower
       final so = data['SO'] as Map?;
       final ai = (data['AI'] as Map?) ?? (so?['AI'] as Map?);
       int tx = _asInt(ai?['X']);
@@ -879,7 +879,7 @@ class DesertAttackService {
       if (totalDefForWing <= 0) return [];
 
       final wingShare = totalDefForWing / totalDef;
-      
+
       int target;
       if (totalAvail >= totalDef * 1.5) {
         target = (totalDefForWing * 1.5).round();

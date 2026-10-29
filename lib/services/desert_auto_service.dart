@@ -26,6 +26,8 @@ class DesertAutoService {
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 100;
+  // ✅ كولداون قصير للبرج اللي فشل (15 دقيقة)
+  static const int kFailedCooldownMin = 15;
 
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<AutoStatusEntry> _history = [];
@@ -183,7 +185,7 @@ class DesertAutoService {
     TrafficLog.add('ST', '[Desert-Auto] $s');
   }
 
-  bool _shouldSkipTower(DesertTower t, {int minutes = 240}) {
+  bool _shouldSkipTower(DesertTower t, {int minutes = kFailedCooldownMin}) {
     final at = _failedTowers[t.key];
     if (at == null) return false;
     if (DateTime.now().difference(at).inMinutes >= minutes) {
@@ -195,10 +197,11 @@ class DesertAutoService {
   }
 
   void _markTowerFailed(DesertTower t) {
-    _failedTowers[t.key] = DateTime.now().add(const Duration(hours: 4));
+    _failedTowers[t.key] =
+        DateTime.now().add(Duration(minutes: kFailedCooldownMin));
     _saveFailedTowers();
     TrafficLog.add('ST',
-        '[Desert-Auto] ⏸️ marked ${t.coordsLabel} failed (4 hours)');
+        '[Desert-Auto] ⏸️ marked ${t.coordsLabel} failed ($kFailedCooldownMin min)');
   }
 
   Future<void> _tick() async {
@@ -351,7 +354,8 @@ class DesertAutoService {
       _towers = await _svc!.scanArea(source: desert, radiusTiles: radius);
       towersScanned = _towers.length;
       await p.setString(_kLastScan, DateTime.now().toIso8601String());
-      _setStatus('✓ Found ${_towers.length} towers @ $radius tile');
+      final aliveCount = _towers.where((t) => t.isAlive).length;
+      _setStatus('✓ Found ${_towers.length} towers ($aliveCount alive) @ $radius');
     } catch (e) {
       _setStatus('❌ Scan error: $e');
     }
@@ -407,19 +411,23 @@ class DesertAutoService {
           return;
         }
 
-        final candidates = _towers
+        // ✅ فلتر حي فقط + كولداون + failed
+        final aliveCandidates = _towers
+            .where((t) => t.isAlive)
             .where((t) => !_svc!.isTowerInCooldown(t))
             .where((t) => !_shouldSkipTower(t))
             .toList()
           ..sort((a, b) =>
               a.distanceFromSource.compareTo(b.distanceFromSource));
 
-        if (candidates.isEmpty) {
-          _setStatus('⏳ No candidate towers (all cooldown/failed)');
+        if (aliveCandidates.isEmpty) {
+          final totalAlive = _towers.where((t) => t.isAlive).length;
+          _setStatus(
+              '⏳ No attackable towers (alive=$totalAlive, all cooldown/failed)');
           return;
         }
 
-        final tower = candidates.first;
+        final tower = aliveCandidates.first;
 
         _setStatus('🔍 Spying ${tower.coordsLabel}...');
         await _spyAndFetch(tower, desert, catalog);
@@ -427,9 +435,9 @@ class DesertAutoService {
 
         final report = _svc!.getCachedReport(tower);
         if (report == null || !report.matches(tower)) {
-          _setStatus('⏭️ Target ${tower.coordsLabel} destroyed/NPC — skip');
+          _setStatus('❌ Spy failed for ${tower.coordsLabel}');
           _markTowerFailed(tower);
-          continue;
+          return;
         }
 
         final viable = _svc!.analyzeAttack(
@@ -441,7 +449,7 @@ class DesertAutoService {
         if (!viable.likelyWin) {
           _setStatus('⏭️ Skip ${tower.coordsLabel}: ${viable.hint}');
           _markTowerFailed(tower);
-          continue;
+          return;
         }
 
         final suggestion = _svc!.suggestCounter(
@@ -455,7 +463,7 @@ class DesertAutoService {
                 suggestion.right.isEmpty)) {
           _setStatus('⚠️ Empty suggestion for ${tower.coordsLabel}');
           _markTowerFailed(tower);
-          continue;
+          return;
         }
 
         Lord lord;
@@ -483,15 +491,14 @@ class DesertAutoService {
           TrafficLog.add('ST',
               '[Desert-Auto] ✅ HIT ${tower.coordsLabel} mid=${result.movementId} '
               '($attacksThisTick this tick, $attacksThisSession session)');
-          _setStatus(
-              '✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
+          _setStatus('✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
           continue;
         } else {
           TrafficLog.add('ER',
               '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel}: ${result.error}');
           _markTowerFailed(tower);
-          continue;
+          return;
         }
       }
     } catch (e) {
