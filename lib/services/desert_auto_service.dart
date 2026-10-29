@@ -26,8 +26,8 @@ class DesertAutoService {
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 100;
-  // ✅ كولداون قصير للبرج اللي فشل (15 دقيقة)
-  static const int kFailedCooldownMin = 15;
+  // ✅ 4 ساعات للفشل زي النجاح
+  static const int kFailedCooldownMin = 240;
 
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<AutoStatusEntry> _history = [];
@@ -354,8 +354,7 @@ class DesertAutoService {
       _towers = await _svc!.scanArea(source: desert, radiusTiles: radius);
       towersScanned = _towers.length;
       await p.setString(_kLastScan, DateTime.now().toIso8601String());
-      final aliveCount = _towers.where((t) => t.isAlive).length;
-      _setStatus('✓ Found ${_towers.length} towers ($aliveCount alive) @ $radius');
+      _setStatus('✓ Found ${_towers.length} towers @ $radius');
     } catch (e) {
       _setStatus('❌ Scan error: $e');
     }
@@ -379,8 +378,10 @@ class DesertAutoService {
       final catalog = await _client!.loadCatalog();
 
       int attacksThisTick = 0;
+      int spyAttempts = 0;
+      final int maxSpyAttempts = 10; // حد أقصى 10 أبراج في tick واحد
 
-      while (_running) {
+      while (_running && spyAttempts < maxSpyAttempts) {
         final freshUnits = await _client!.getCastleUnits(
             desert.kingdomId, desert.areaId, catalog);
         final sendable = freshUnits
@@ -411,25 +412,23 @@ class DesertAutoService {
           return;
         }
 
-        // ✅ فلتر حي فقط + كولداون + failed
-        final aliveCandidates = _towers
-            .where((t) => t.isAlive)
+        // ✅ نجرب كل الأبراج اللي مش cooldown/failed
+        final candidates = _towers
             .where((t) => !_svc!.isTowerInCooldown(t))
             .where((t) => !_shouldSkipTower(t))
             .toList()
           ..sort((a, b) =>
               a.distanceFromSource.compareTo(b.distanceFromSource));
 
-        if (aliveCandidates.isEmpty) {
-          final totalAlive = _towers.where((t) => t.isAlive).length;
-          _setStatus(
-              '⏳ No attackable towers (alive=$totalAlive, all cooldown/failed)');
+        if (candidates.isEmpty) {
+          _setStatus('⏳ No candidate towers (all cooldown/failed)');
           return;
         }
 
-        final tower = aliveCandidates.first;
+        final tower = candidates.first;
 
         _setStatus('🔍 Spying ${tower.coordsLabel}...');
+        spyAttempts++;
         await _spyAndFetch(tower, desert, catalog);
         if (!_running) return;
 
@@ -437,7 +436,15 @@ class DesertAutoService {
         if (report == null || !report.matches(tower)) {
           _setStatus('❌ Spy failed for ${tower.coordsLabel}');
           _markTowerFailed(tower);
-          return;
+          continue; // ✅ جرب البرج اللي بعده
+        }
+
+        // ✅✅ الحل الجذري: لو RS > 0 → البرج ميت → تخطاه 4 ساعات
+        if (report.isDead) {
+          _setStatus(
+              '💀 ${tower.coordsLabel} dead (respawn in ${report.rs}s)');
+          _markTowerFailed(tower);
+          continue; // ✅ جرب البرج اللي بعده
         }
 
         final viable = _svc!.analyzeAttack(
@@ -449,7 +456,7 @@ class DesertAutoService {
         if (!viable.likelyWin) {
           _setStatus('⏭️ Skip ${tower.coordsLabel}: ${viable.hint}');
           _markTowerFailed(tower);
-          return;
+          continue; // ✅ جرب البرج اللي بعده
         }
 
         final suggestion = _svc!.suggestCounter(
@@ -463,7 +470,7 @@ class DesertAutoService {
                 suggestion.right.isEmpty)) {
           _setStatus('⚠️ Empty suggestion for ${tower.coordsLabel}');
           _markTowerFailed(tower);
-          return;
+          continue; // ✅ جرب البرج اللي بعده
         }
 
         Lord lord;
@@ -492,14 +499,18 @@ class DesertAutoService {
               '[Desert-Auto] ✅ HIT ${tower.coordsLabel} mid=${result.movementId} '
               '($attacksThisTick this tick, $attacksThisSession session)');
           _setStatus('✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
-          continue;
+          continue; // ✅ جرب البرج اللي بعده
         } else {
           TrafficLog.add('ER',
               '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel}: ${result.error}');
           _markTowerFailed(tower);
-          return;
+          continue; // ✅ جرب البرج اللي بعده
         }
+      }
+
+      if (spyAttempts >= maxSpyAttempts) {
+        _setStatus('🔁 Tried $spyAttempts towers, will continue next tick');
       }
     } catch (e) {
       _setStatus('❌ Attack loop error: $e');
@@ -547,7 +558,8 @@ class DesertAutoService {
     if (report == null) {
       _setStatus('❌ bsd parse failed');
     } else {
-      _setStatus('✓ Report: ${report.totalEnemyUnits} units');
+      _setStatus(
+          '✓ Report: ${report.totalEnemyUnits} units, RS=${report.rs}');
     }
   }
 }

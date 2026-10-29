@@ -18,7 +18,6 @@ class DesertTower {
   final double distanceFromSource;
   final int sourceAreaId;
   final String sourceName;
-  final bool isAlive; // ✅ جديد: من gaa entry[4]
 
   DateTime? lastSpyAt;
   int? lastSpyMid;
@@ -29,13 +28,11 @@ class DesertTower {
     required this.x, required this.y, required this.kid,
     required this.distanceFromSource, required this.sourceAreaId,
     required this.sourceName,
-    this.isAlive = true,
     this.lastSpyAt, this.lastSpyMid,
     this.lastAttackAt, this.lastAttackMid,
   });
 
   DesertTower copyWith({
-    bool? isAlive,
     DateTime? lastSpyAt, int? lastSpyMid,
     DateTime? lastAttackAt, int? lastAttackMid,
   }) => DesertTower(
@@ -43,7 +40,6 @@ class DesertTower {
         distanceFromSource: distanceFromSource,
         sourceAreaId: sourceAreaId,
         sourceName: sourceName,
-        isAlive: isAlive ?? this.isAlive,
         lastSpyAt: lastSpyAt ?? this.lastSpyAt,
         lastSpyMid: lastSpyMid ?? this.lastSpyMid,
         lastAttackAt: lastAttackAt ?? this.lastAttackAt,
@@ -177,6 +173,7 @@ class DesertSpyReport {
   final int wallLevel;
   final int gateLevel;
   final int moatLevel;
+  final int rs; // ✅ RS = Respawn Seconds
   final DateTime fetchedAt;
 
   DesertSpyReport({
@@ -194,8 +191,12 @@ class DesertSpyReport {
     required this.wallLevel,
     required this.gateLevel,
     required this.moatLevel,
+    required this.rs,
     required this.fetchedAt,
   });
+
+  // ✅ RS > 0 (وكمان < 100000) = البرج ميت، هيقوم بعد RS ثانية
+  bool get isDead => rs > 0 && rs < 100000;
 
   int get totalEnemyUnits => left.total + middle.total + right.total;
   int get totalEnemyMelee => left.melee + middle.melee + right.melee;
@@ -503,8 +504,6 @@ class DesertAttackService {
               if (_asInt(entry[0]) != 2) continue;
               final x = _asInt(entry[1]);
               final y = _asInt(entry[2]);
-              // ✅ isAlive = entry[4] == 1 (1=حي، 0=في cooldown)
-              final isAlive = entry.length > 4 && _asInt(entry[4]) == 1;
               final key = '$x,$y';
               if (seen.contains(key)) continue;
               seen.add(key);
@@ -515,7 +514,6 @@ class DesertAttackService {
                 distanceFromSource: sqrt(dx * dx + dy * dy),
                 sourceAreaId: source.areaId,
                 sourceName: source.displayName,
-                isAlive: isAlive,
               ));
             }
           }
@@ -529,9 +527,8 @@ class DesertAttackService {
         await Future.delayed(Duration(milliseconds: 800 + Random().nextInt(400)));
       }
     }
-    final aliveCount = found.where((t) => t.isAlive).length;
     TrafficLog.add('ST',
-        '[Desert] Scan done: ${found.length} towers ($aliveCount alive) radius=$radiusTiles');
+        '[Desert] Scan done: ${found.length} towers radius=$radiusTiles');
     return found;
   }
 
@@ -596,7 +593,8 @@ class DesertAttackService {
         _reportCache[tower.key] = report;
         TrafficLog.add('ST',
             '[Desert] ✓ report: ${report.summaryLine} '
-            'AS=${report.defensiveStrength} units=${report.totalEnemyUnits}');
+            'AS=${report.defensiveStrength} units=${report.totalEnemyUnits} '
+            'RS=${report.rs} ${report.isDead ? "💀" : "✅"}');
       }
       return report;
     } catch (e) {
@@ -608,7 +606,6 @@ class DesertAttackService {
   DesertSpyReport? getCachedReport(DesertTower tower) =>
       _reportCache[tower.key];
 
-  // ✅ حذفنا فحص DUM/OID — كل أبراج الصحراء NPC
   DesertSpyReport? _parseBsd(
     String payload,
     int messageId,
@@ -681,6 +678,7 @@ class DesertAttackService {
         scoutCount: _asInt(data['SC']),
         scoutReportValue: _asInt(data['SR']),
         wallLevel: wall, gateLevel: gate, moatLevel: moat,
+        rs: _asInt(data['RS']), // ✅ RS
         fetchedAt: DateTime.now(),
       );
     } catch (e) {
