@@ -17,51 +17,154 @@ import 'services/transfer_service.dart';
 class TransferResult {
   final bool success;
   final String? error;
-  final int? movementId; // ✅ MID بعد نجاح cds — مطلوب للـ recall
+  final int? movementId;
   TransferResult._(this.success, this.error, [this.movementId]);
   factory TransferResult.ok([int? movementId]) =>
       TransferResult._(true, null, movementId);
   factory TransferResult.fail(String err) => TransferResult._(false, err);
 }
 
+// ═══════════════════════════════════════════════════════════
+//  LOG SYSTEM (with categories)
+// ═══════════════════════════════════════════════════════════
+enum LogCategory {
+  all, login, smuggle, attack, desert, defense, spy, gam, general, errors;
+
+  String get label {
+    switch (this) {
+      case LogCategory.all: return 'الكل';
+      case LogCategory.login: return 'Login';
+      case LogCategory.smuggle: return 'Smuggle';
+      case LogCategory.attack: return 'Attack';
+      case LogCategory.desert: return 'Desert';
+      case LogCategory.defense: return 'Defense';
+      case LogCategory.spy: return 'Spy';
+      case LogCategory.gam: return 'GAM';
+      case LogCategory.general: return 'General';
+      case LogCategory.errors: return 'Errors';
+    }
+  }
+}
+
+class LogEntry {
+  final DateTime at;
+  final String dir;
+  final String text;
+  final LogCategory category;
+
+  LogEntry({
+    required this.at, required this.dir,
+    required this.text, required this.category,
+  });
+
+  String get timestamp =>
+      '${at.hour.toString().padLeft(2, '0')}:'
+      '${at.minute.toString().padLeft(2, '0')}:'
+      '${at.second.toString().padLeft(2, '0')}.'
+      '${at.millisecond.toString().padLeft(3, '0')}';
+
+  String get line => '[$timestamp] [$dir] $text';
+}
+
 class TrafficLog {
   TrafficLog._();
-  static final List<String> entries = [];
-  static final StreamController<String> _ctrl = StreamController.broadcast();
-  static Stream<String> get stream => _ctrl.stream;
+  static final List<LogEntry> _entries = [];
+  static final StreamController<LogEntry> _ctrl = StreamController.broadcast();
   static const int maxEntries = 3000;
+
+  // Legacy API (متوافق مع الكود القديم)
+  static List<String> get entries => _entries.map((e) => e.line).toList();
+  static Stream<String> get stream => _ctrl.stream.map((e) => e.line);
+
+  // New API
+  static List<LogEntry> get logEntries => List.unmodifiable(_entries);
+  static Stream<LogEntry> get entryStream => _ctrl.stream;
 
   static void add(String dir, String text) {
     if (text.isEmpty) return;
-    final ts = DateTime.now();
-    final t = '${ts.hour.toString().padLeft(2, '0')}:'
-        '${ts.minute.toString().padLeft(2, '0')}:'
-        '${ts.second.toString().padLeft(2, '0')}.'
-        '${ts.millisecond.toString().padLeft(3, '0')}';
-    entries.add('[$t] [$dir] $text');
-    if (entries.length > maxEntries) {
-      entries.removeRange(0, entries.length - maxEntries);
+    final entry = LogEntry(
+      at: DateTime.now(),
+      dir: dir,
+      text: text,
+      category: _detectCategory(dir, text),
+    );
+    _entries.add(entry);
+    if (_entries.length > maxEntries) {
+      _entries.removeRange(0, _entries.length - maxEntries);
     }
-    if (!_ctrl.isClosed) _ctrl.add(entries.last);
+    if (!_ctrl.isClosed) _ctrl.add(entry);
   }
 
   static void clear() {
-    entries.clear();
-    if (!_ctrl.isClosed) _ctrl.add('─── LOG CLEARED ───');
+    _entries.clear();
+    if (!_ctrl.isClosed) {
+      _ctrl.add(LogEntry(
+        at: DateTime.now(), dir: 'ST', text: '─── LOG CLEARED ───',
+        category: LogCategory.general,
+      ));
+    }
+  }
+
+  static void clearCategory(LogCategory cat) {
+    _entries.removeWhere((e) => e.category == cat);
+    if (!_ctrl.isClosed) {
+      _ctrl.add(LogEntry(
+        at: DateTime.now(), dir: 'ST', text: '─── ${cat.label} CLEARED ───',
+        category: LogCategory.general,
+      ));
+    }
   }
 
   static String dump() {
     final buf = StringBuffer();
     buf.writeln('═══ GGE Traffic Log ═══');
     buf.writeln('Generated: ${DateTime.now().toIso8601String()}');
-    buf.writeln('Total entries: ${entries.length}');
+    buf.writeln('Total entries: ${_entries.length}');
     buf.writeln('═══════════════════════');
     buf.writeln();
-    for (final e in entries) buf.writeln(e);
+    for (final e in _entries) buf.writeln(e.line);
     return buf.toString();
+  }
+
+  static LogCategory _detectCategory(String dir, String text) {
+    if (dir == 'ER') return LogCategory.errors;
+    final l = text.toLowerCase();
+
+    if (l.contains('verchk') || l.contains('apiok') || l.contains('rlu') ||
+        l.contains('joinok') || l.contains('lli') || l.contains('gbd') ||
+        l.contains('login') || l.contains('token') || l.contains('websocket') ||
+        l.contains('auto-reconnect') || l.contains('reconnect') ||
+        l.contains('init sequence') || l.contains('connected') ||
+        l.contains('opening') || l.contains('handshake')) {
+      return LogCategory.login;
+    }
+    if (l.contains('[desert') || l.contains('desert-auto') ||
+        l.contains('desert-attack')) {
+      return LogCategory.desert;
+    }
+    if (l.contains('[smuggle]') || l.contains('%cds%') || l.contains('cds ')) {
+      return LogCategory.smuggle;
+    }
+    if (l.contains('[attack') || l.contains('%cra%') || l.contains('cra ')) {
+      return LogCategory.attack;
+    }
+    if (l.contains('[defense') || l.contains('[auto') ||
+        l.contains('evac') || l.contains('recall')) {
+      return LogCategory.defense;
+    }
+    if (l.contains('%csm%') || l.contains('%bsd%') || l.contains('%mmr%') ||
+        l.contains('%sne%') || l.contains('spy')) {
+      return LogCategory.spy;
+    }
+    if (l.contains('%gam%') || l.contains('%mrm%') ||
+        l.contains('incoming attack') || l.contains('attack from')) {
+      return LogCategory.gam;
+    }
+    return LogCategory.general;
   }
 }
 
+// ═══════════════════════════════════════════════════════════
 class GgeClient {
   static GgeClient? _instance;
   factory GgeClient() => _instance ??= GgeClient._internal();
@@ -103,11 +206,9 @@ class GgeClient {
   int? _cachedPlayerId;
   final Map<int, AttackAlert> _latestAlertByMid = {};
 
-  // ✅ الوحدات المفتوحة (union من كل القلاع — للاستخدام العام)
   final Set<int> _unlockedUnitIds = {};
   Set<int> get unlockedUnitIds => _unlockedUnitIds;
 
-  // ✅ الوحدات المفتوحة لكل قلعة على حدة (AID → Set of wodIds)
   final Map<int, Set<int>> _unlockedByAreaId = {};
   Set<int> getUnlockedForArea(int areaId) =>
       _unlockedByAreaId[areaId] ?? const <int>{};
@@ -119,7 +220,6 @@ class GgeClient {
   Map<int, CastleStats>? get cachedStatsByArea => _cachedStatsByArea;
   set cachedStatsByArea(Map<int, CastleStats>? v) => _cachedStatsByArea = v;
 
-  // ✅ كولباك عشان نعرف لو الحساب اتفتح في مكان تاني
   void Function()? onSessionConflict;
 
   final List<String> debugLog = [];
@@ -234,7 +334,7 @@ class GgeClient {
                 }
               }
 
-              // ✅ L = وحدات Elite/Legendary (المهم!)
+              // ✅ L = وحدات Elite/Legendary
               final unlockedL = u['L'] as List?;
               if (unlockedL != null) {
                 for (final id in unlockedL) {
@@ -488,9 +588,6 @@ class GgeClient {
         }
       }
 
-      // ✅ FIX: احتفظ بـ TT/PT من أول gam — عشان العداد ميقفزش
-      //    لما السيرفر يبعت gam تاني بـ PT متقدم، الـ arrivalAt هيتحسب صح
-      //    ومش هيبان "وصل" قبل الوقت الحقيقي.
       final alert = AttackAlert(
         movementId: mid,
         attackerId: sourcePid,
@@ -879,10 +976,6 @@ class GgeClient {
     _status('Init sequence done ✓');
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  HERO RECONNECT LOGIC (No Spam / Network Waiter)
-  // ═══════════════════════════════════════════════════════
-
   Future<bool> _hasInternet() async {
     try {
       final result = await InternetAddress.lookup('google.com')
@@ -946,10 +1039,6 @@ class GgeClient {
     _appForeground = state == AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed) {
       if (!isLoggedIn) return;
-      final now = DateTime.now();
-      final since = _lastRxTime == null
-          ? const Duration(days: 1)
-          : now.difference(_lastRxTime!);
       if (!_connected && !_networkWaitActive) {
         _status('App resumed — checking connection...');
         _scheduleReconnect();

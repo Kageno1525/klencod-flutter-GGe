@@ -16,7 +16,8 @@ import 'package:gge/services/notifications_service.dart';
 import 'package:gge/services/background_service.dart';
 import 'package:gge/screens/auto_defense_screen.dart';
 import 'package:gge/screens/attack_screen.dart';
-import 'package:gge/screens/desert_attack_screen.dart'; // ✅ NEW
+import 'package:gge/screens/desert_attack_screen.dart';
+import 'package:gge/screens/logs_screen.dart'; // ✅ NEW
 
 class MainScreen extends StatefulWidget {
   final GgeClient client;
@@ -271,7 +272,6 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  // ✅ 10 tiles (زودنا برج الصحراء)
   Widget _gridSection(BuildContext context) {
     return GridView.count(
       shrinkWrap: true,
@@ -281,7 +281,6 @@ class _MainScreenState extends State<MainScreen> {
       crossAxisSpacing: 14,
       childAspectRatio: 1.2,
       children: [
-        // 1) Transfer
         FadeSlideIn(
           delay: const Duration(milliseconds: 150),
           child: EnterTile(
@@ -295,7 +294,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 2) Training
         FadeSlideIn(
           delay: const Duration(milliseconds: 200),
           child: EnterTile(
@@ -309,7 +307,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 3) Smuggle
         FadeSlideIn(
           delay: const Duration(milliseconds: 250),
           child: EnterTile(
@@ -323,7 +320,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 4) Commanders
         FadeSlideIn(
           delay: const Duration(milliseconds: 300),
           child: EnterTile(
@@ -337,7 +333,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 5) Stats
         FadeSlideIn(
           delay: const Duration(milliseconds: 350),
           child: EnterTile(
@@ -351,7 +346,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 6) Notifications
         FadeSlideIn(
           delay: const Duration(milliseconds: 400),
           child: EnterTile(
@@ -365,7 +359,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 7) Auto Defense
         FadeSlideIn(
           delay: const Duration(milliseconds: 450),
           child: EnterTile(
@@ -383,7 +376,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 8) Attack NPC (Storm Islands)
         FadeSlideIn(
           delay: const Duration(milliseconds: 500),
           child: EnterTile(
@@ -401,7 +393,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 9) ✅ برج الصحراء (جديد)
         FadeSlideIn(
           delay: const Duration(milliseconds: 550),
           child: EnterTile(
@@ -416,6 +407,23 @@ class _MainScreenState extends State<MainScreen> {
               context,
               MaterialPageRoute(
                   builder: (_) => DesertAttackScreen(client: widget.client)),
+            ),
+          ),
+        ),
+        // ✅ Logs (جديد)
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 600),
+          child: EnterTile(
+            icon: Icons.terminal_rounded,
+            title: 'Logs',
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF37474F), Color(0xFF546E7A)],
+            ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const LogsScreen()),
             ),
           ),
         ),

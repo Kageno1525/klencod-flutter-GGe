@@ -170,7 +170,6 @@ class DesertAutoService {
       final desertUnits = await _client!.getCastleUnits(
           desert.kingdomId, desert.areaId, catalog);
 
-      // ✅ شيلنا فلتر unlocked — كل وحدة offensive قابلة للإرسال
       final offCount = desertUnits
           .where((u) => u.isCombat && !u.isDefensive && u.amount > 0)
           .fold<int>(0, (s, u) => s + u.amount);
@@ -267,7 +266,6 @@ class DesertAutoService {
       final units = await _client!.getCastleUnits(
           desert.kingdomId, desert.areaId, catalog);
 
-      // ✅ شيلنا فلتر unlocked — أي وحدة قتالية موجودة في AC
       final sendable = units
           .where((u) => u.isCombat && u.amount > 0)
           .toList();
@@ -297,15 +295,22 @@ class DesertAutoService {
       for (final tower in candidates) {
         if (!_running) break;
 
+        // ── 1. Spy + fetch report إن لزم ──
         var report = _svc!.getCachedReport(tower);
         if (report == null ||
             DateTime.now().difference(report.fetchedAt).inMinutes > 10) {
           _setStatus('🔍 Spying ${tower.coordsLabel}...');
           await _spyAndFetch(tower, desert, catalog);
+          if (!_running) return;
           report = _svc!.getCachedReport(tower);
-          if (report == null || !report.matches(tower)) continue;
+          if (report == null || !report.matches(tower)) {
+            TrafficLog.add('ER',
+                '[Desert-Auto] ⚠️ report invalid for ${tower.coordsLabel} — skip');
+            continue;
+          }
         }
 
+        // ── 2. تحقق من الجدوى ──
         final totalAvail =
             sendable.fold<int>(0, (s, u) => s + u.amount);
         final viable = _svc!.analyzeAttack(
@@ -319,17 +324,41 @@ class DesertAutoService {
           continue;
         }
 
+        // ── 3. اقترح وحدات ──
         final suggestion = _svc!.suggestCounter(
           available: sendable,
           defenders: report.toDefenderSummary(),
         );
 
+        // ✅ تحقق: لو التوزيع فاضي → ما نرسلش
+        if (suggestion.totalUnits <= 0) {
+          TrafficLog.add('ER',
+              '[Desert-Auto] ⚠️ empty suggestion for ${tower.coordsLabel}: ${suggestion.reason}');
+          _setStatus('⚠️ Empty suggestion (check defenders)');
+          continue;
+        }
+
+        // ✅ تحقق: لو الأجنحة كلها فاضية (مش ممكن)، استخدم fallback
+        if (suggestion.left.isEmpty &&
+            suggestion.middle.isEmpty &&
+            suggestion.right.isEmpty) {
+          TrafficLog.add('ER',
+              '[Desert-Auto] ⚠️ all wings empty for ${tower.coordsLabel}');
+          continue;
+        }
+
+        // ── 4. اختر lord ──
         Lord lord;
         try {
           lord = freeLords.firstWhere((c) => c.lord.id != 0).lord;
         } catch (_) {
           lord = freeLords.first.lord;
         }
+
+        TrafficLog.add('ST',
+            '[Desert-Auto] ⚔️ attacking ${tower.coordsLabel} '
+            'L=${suggestion.left.length} M=${suggestion.middle.length} R=${suggestion.right.length} '
+            'total=${suggestion.totalUnits} LID=${lord.id}');
 
         _setStatus(
             '⚔️ Attacking ${tower.coordsLabel} (${suggestion.totalUnits})...');
@@ -344,11 +373,16 @@ class DesertAutoService {
         );
 
         if (result.success) {
+          TrafficLog.add('ST',
+              '[Desert-Auto] ✅ HIT ${tower.coordsLabel} mid=${result.movementId}');
           _setStatus('✅ Hit ${tower.coordsLabel}!');
           return;
         } else {
-          _setStatus('❌ Attack failed: ${result.error}');
-          return;
+          // ❌ بدل ما نوقف — نجرب البرج اللي بعده
+          TrafficLog.add('ER',
+              '[Desert-Auto] ❌ attack ${tower.coordsLabel} failed: ${result.error}');
+          _setStatus('❌ ${tower.coordsLabel}: ${result.error}');
+          // continue → جرّب البرج التالي
         }
       }
     } catch (e) {

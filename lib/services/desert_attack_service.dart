@@ -10,7 +10,7 @@ const int kDesertRadiusMax = 100;
 const int kDesertRadiusStep = 5;
 const int kDesertChunkSize = 13;
 const int kDefaultTowerCooldownMinutes = 15;
-const int kAttackPowerPerUnit = 10; // تقدير: كل وحدة ≈ 10 قوة
+const int kAttackPowerPerUnit = 10;
 
 // ═══════════════════════════════════════════════════════════
 class DesertTower {
@@ -165,7 +165,7 @@ class DesertSpyReport {
   final DefenderWing left;
   final DefenderWing middle;
   final DefenderWing right;
-  final int defensiveStrength; // bsd.AS
+  final int defensiveStrength;
   final int availableAttacks;
   final int goldCampValue;
   final int scoutCount;
@@ -210,8 +210,7 @@ class DesertSpyReport {
       'M: ${middle.melee}M/${middle.ranged}R · '
       'R: ${right.melee}M/${right.ranged}R';
 
-  int get wallBonusPercent =>
-      wallLevel * 2 + gateLevel + moatLevel; // تقدير
+  int get wallBonusPercent => wallLevel * 2 + gateLevel + moatLevel;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -304,14 +303,9 @@ class DesertAttackService {
   int? latestSpyMessageId;
   DateTime? latestSpyMessageIdAt;
 
-  // Cache: tower.key → spy report (in-memory)
   final Map<String, DesertSpyReport> _reportCache = {};
-
-  // Cache: tower.key → cooldown end (persisted)
   final Map<String, DateTime> _cooldowns = {};
   static const _kCooldowns = 'desert_cooldowns_v1';
-
-  DesertAttackService._() : conn = GgeClient();
 
   void captureSneReport(int messageId) {
     latestSpyMessageId = messageId;
@@ -320,9 +314,6 @@ class DesertAttackService {
         '[Desert] 📩 captured spy report msgId=$messageId (ready to fetch)');
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Cooldown Management
-  // ═══════════════════════════════════════════════════════
   Future<void> loadCooldowns() async {
     final p = await SharedPreferences.getInstance();
     final raw = p.getString(_kCooldowns);
@@ -377,15 +368,11 @@ class DesertAttackService {
         '[Desert] ⏳ tower ${tower.coordsLabel} in cooldown for $minutes min');
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Power Analysis
-  // ═══════════════════════════════════════════════════════
   int _unitStrength(int wodId) {
-    // تقدير قوة الوحدة الواحدة
-    if (wodId >= 611 && wodId <= 620) return 20; // متقدمة melee
-    if (wodId >= 631 && wodId <= 640) return 16; // متقدمة ranged
-    if (wodId >= 601 && wodId <= 610) return 12; // أساسية melee
-    if (wodId >= 621 && wodId <= 630) return 10; // أساسية ranged
+    if (wodId >= 611 && wodId <= 620) return 20;
+    if (wodId >= 631 && wodId <= 640) return 16;
+    if (wodId >= 601 && wodId <= 610) return 12;
+    if (wodId >= 621 && wodId <= 630) return 10;
     return kAttackPowerPerUnit;
   }
 
@@ -399,12 +386,10 @@ class DesertAttackService {
         0, (s, e) => s + _unitStrength(e[0]) * e[1]);
     final enemyStrength = report.defensiveStrength;
 
-    // Base counts
     final unitRatio = enemyUnits > 0 ? myUnitCount / enemyUnits : 999.0;
     final strengthRatio =
         enemyStrength > 0 ? myStrength / enemyStrength : 999.0;
 
-    // للفوز: نحتاج 1.5x على الأقل (أو 2x لضمان)
     final likelyWin = unitRatio >= 1.5 && strengthRatio >= 1.0;
     final guaranteed = unitRatio >= 2.0 && strengthRatio >= 1.5;
 
@@ -437,7 +422,6 @@ class DesertAttackService {
     );
   }
 
-  // ═══════════════════════════════════════════════════════
   Future<void> _ensureKingdom(int kid) async {
     if (_currentKid == kid &&
         _lastJcaAt != null &&
@@ -642,7 +626,6 @@ class DesertAttackService {
         return DefenderWing(melee: melee, ranged: ranged, units: units);
       }
 
-      // Parse fortifications from E array
       int wall = 0, gate = 0, moat = 0;
       final e = data['E'] as List?;
       if (e != null) {
@@ -805,64 +788,160 @@ class DesertAttackService {
     }
   }
 
+  // ✅ suggestCounter محسّنة: توزيع ذكي بدون تكرار + كاونتر + fallback آمن
   UnitSuggestion suggestCounter({
     required List<CastleUnit> available,
     required DefenderSummary defenders,
     int maxTypes = 10,
   }) {
-    final playerMelee = available
-        .where((u) => u.isCombat && u.wodId >= 601 && u.wodId <= 620)
+    final combat = available
+        .where((u) => u.isCombat && u.amount > 0)
         .toList();
-    final playerRanged = available
-        .where((u) => u.isCombat && u.wodId >= 621)
-        .toList();
-    final meleeAvail = playerMelee.isNotEmpty
-        ? playerMelee
-        : available.where((u) => u.isCombat).toList();
-    final rangedAvail = playerRanged.isNotEmpty
-        ? playerRanged
-        : available.where((u) => u.isCombat).toList();
 
-    List<List<int>> pick(List<CastleUnit> pool, int maxSlots) {
-      final r = <List<int>>[];
-      for (final u in pool.take(maxSlots)) {
-        if (u.amount > 0) r.add([u.wodId, u.amount]);
-      }
-      return r;
-    }
-
-    final leftPool =
-        defenders.leftRanged > defenders.leftMelee ? meleeAvail : rangedAvail;
-    final middlePool = defenders.middleRanged > defenders.middleMelee
-        ? meleeAvail
-        : rangedAvail;
-    final rightPool =
-        defenders.rightRanged > defenders.rightMelee ? meleeAvail : rangedAvail;
-
-    final left = pick(leftPool, 2);
-    final middle = pick(middlePool, 6);
-    final right = pick(rightPool, 2);
-
-    final all = [...left, ...middle, ...right];
-    if (all.length > maxTypes) {
-      final excess = all.length - maxTypes;
-      final newMiddle = middle.take((6 - excess).clamp(0, 6)).toList();
+    if (combat.isEmpty) {
       return UnitSuggestion(
-        left: left, middle: newMiddle, right: right,
-        reason: 'توزيع ذكي (M=${newMiddle.length})',
+        left: [], middle: [], right: [],
+        reason: 'لا توجد وحدات قتالية',
       );
     }
+
+    bool isMelee(CastleUnit u) {
+      final r = u.info?.role;
+      if (r == 'melee') return true;
+      if (r == 'ranged') return false;
+      return u.wodId >= 601 && u.wodId <= 620;
+    }
+
+    final melee = combat.where(isMelee).toList()
+      ..sort((a, b) => b.amount.compareTo(a.amount));
+    final ranged = combat.where((u) => !isMelee(u)).toList()
+      ..sort((a, b) => b.amount.compareTo(a.amount));
+
+    final remaining = <int, int>{};
+    for (final u in combat) {
+      remaining[u.wodId] = u.amount;
+    }
+
+    List<List<int>> allocateWing({
+      required int defense,
+      required List<CastleUnit> preferred,
+      required List<CastleUnit> fallback,
+      required int maxSlots,
+      int safetyPct = 150,
+    }) {
+      final out = <List<int>>[];
+      if (defense <= 0) return out;
+      final target = (defense * safetyPct) ~/ 100;
+      int collected = 0;
+      final seen = <int>{};
+
+      for (final pool in [preferred, fallback]) {
+        for (final u in pool) {
+          if (seen.contains(u.wodId)) continue;
+          seen.add(u.wodId);
+          if (out.length >= maxSlots) break;
+          final rem = remaining[u.wodId] ?? 0;
+          if (rem <= 0) continue;
+          final need = target - collected;
+          if (need <= 0) break;
+          final take = need < rem ? need : rem;
+          if (take <= 0) continue;
+          out.add([u.wodId, take]);
+          remaining[u.wodId] = rem - take;
+          collected += take;
+        }
+        if (collected >= target || out.length >= maxSlots) break;
+      }
+      return out;
+    }
+
+    final leftDef = defenders.leftMelee + defenders.leftRanged;
+    final middleDef = defenders.middleMelee + defenders.middleRanged;
+    final rightDef = defenders.rightMelee + defenders.rightRanged;
+
+    List<CastleUnit> prefer(int m, int r) => r > m ? melee : ranged;
+    List<CastleUnit> fallback(int m, int r) => r > m ? ranged : melee;
+
+    final left = allocateWing(
+      defense: leftDef,
+      preferred: prefer(defenders.leftMelee, defenders.leftRanged),
+      fallback: fallback(defenders.leftMelee, defenders.leftRanged),
+      maxSlots: 2,
+    );
+    final middle = allocateWing(
+      defense: middleDef,
+      preferred: prefer(defenders.middleMelee, defenders.middleRanged),
+      fallback: fallback(defenders.middleMelee, defenders.middleRanged),
+      maxSlots: 5,
+    );
+    final right = allocateWing(
+      defense: rightDef,
+      preferred: prefer(defenders.rightMelee, defenders.rightRanged),
+      fallback: fallback(defenders.rightMelee, defenders.rightRanged),
+      maxSlots: 2,
+    );
+
+    List<List<int>> clean(List<List<int>> list) =>
+        list.where((e) => e.length >= 2 && e[0] > 0 && e[1] > 0).toList();
+
+    var leftOut = clean(left);
+    var middleOut = clean(middle);
+    var rightOut = clean(right);
+
+    // fallback: لو كل الأجنحة فاضية (الدفاعات = 0) → وزّع بالتساوي
+    if (leftOut.isEmpty && middleOut.isEmpty && rightOut.isEmpty) {
+      final all = [...combat]..sort((a, b) => b.amount.compareTo(a.amount));
+      final types = all.take(maxTypes).toList();
+      if (types.isEmpty) {
+        return UnitSuggestion(
+          left: [], middle: [], right: [],
+          reason: 'مفيش وحدات',
+        );
+      }
+      final perWing = (types.length / 3).ceil();
+      for (int i = 0; i < types.length; i++) {
+        final u = types[i];
+        final entry = [u.wodId, remaining[u.wodId] ?? u.amount];
+        if (i < perWing) {
+          leftOut.add(entry);
+        } else if (i < perWing * 2) {
+          middleOut.add(entry);
+        } else {
+          rightOut.add(entry);
+        }
+      }
+    }
+
+    int typeCount() {
+      final s = <int>{};
+      for (final e in [...leftOut, ...middleOut, ...rightOut]) s.add(e[0]);
+      return s.length;
+    }
+    while (typeCount() > maxTypes && middleOut.isNotEmpty) middleOut.removeLast();
+    while (typeCount() > maxTypes && rightOut.isNotEmpty) rightOut.removeLast();
+    while (typeCount() > maxTypes && leftOut.isNotEmpty) leftOut.removeLast();
+
+    final lTotal = leftOut.fold<int>(0, (s, e) => s + e[1]);
+    final mTotal = middleOut.fold<int>(0, (s, e) => s + e[1]);
+    final rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
+    final total = lTotal + mTotal + rTotal;
+
     return UnitSuggestion(
-      left: left, middle: middle, right: right,
-      reason: 'توزيع ذكي',
+      left: leftOut, middle: middleOut, right: rightOut,
+      reason: total > 0
+          ? 'ذكي: $total وحدة (L:$lTotal · M:$mTotal · R:$rTotal)'
+          : '⚠️ الدفاعات صفر — ادخل أرقام الدفاعات من التقرير',
     );
   }
 
   List<List<int>> _fillUnits(List<List<int>> units, int count) {
+    final valid = units
+        .where((u) => u.length >= 2 && u[0] > 0 && u[1] > 0)
+        .toList();
     final r = <List<int>>[];
     for (int i = 0; i < count; i++) {
-      if (i < units.length && units[i].length >= 2 && units[i][1] > 0) {
-        r.add([units[i][0], units[i][1]]);
+      if (i < valid.length) {
+        r.add([valid[i][0], valid[i][1]]);
       } else {
         r.add([-1, 0]);
       }
