@@ -41,14 +41,16 @@ class _AttackScreenState extends State<AttackScreen> {
     _settings = await AttackFilterSettings.load();
     try {
       final castles = await widget.client.getCastles();
-      final preferred = castles.where((c) =>
-          c.areaType == 12 || c.areaType == 1).toList();
+      final preferred = castles
+          .where((c) => c.areaType == 12 || c.areaType == 1)
+          .toList();
       if (!mounted) return;
       setState(() {
         _castles = preferred.isNotEmpty ? preferred : castles;
         if (_castles.isNotEmpty) {
           try {
-            _source = _castles.firstWhere((c) => c.areaId == _settings.sourceAreaId);
+            _source = _castles
+                .firstWhere((c) => c.areaId == _settings.sourceAreaId);
           } catch (_) {
             try {
               _source = _castles.firstWhere((c) => c.kingdomId == 4);
@@ -70,8 +72,9 @@ class _AttackScreenState extends State<AttackScreen> {
     _refreshTimer?.cancel();
     _refreshTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
       if (!mounted || _scanning || _enriching) return;
-      // refresh stale only
-      final stale = _targets.where((t) => t.isEnriched && t.isStaleEnrichment).toList();
+      final stale = _targets
+          .where((t) => t.isEnriched && t.isStaleEnrichment)
+          .toList();
       if (stale.isEmpty) return;
       _enrichBatch(stale.take(10).toList());
     });
@@ -103,11 +106,13 @@ class _AttackScreenState extends State<AttackScreen> {
         radiusTiles: _settings.radiusTiles,
         onProgress: (d, t) {
           if (!mounted) return;
-          setState(() { _scanDone = d; _scanTotal = t; });
+          setState(() {
+            _scanDone = d;
+            _scanTotal = t;
+          });
         },
       );
 
-      // Sort: level 6 first (they have GC)
       found.sort((a, b) {
         final lv = b.rawLevel.compareTo(a.rawLevel);
         if (lv != 0) return lv;
@@ -148,19 +153,21 @@ class _AttackScreenState extends State<AttackScreen> {
           if (idx >= 0) _targets[idx] = enriched;
         });
       } catch (_) {}
-      await Future.delayed(Duration(milliseconds: 800 + (DateTime.now().millisecond % 400)));
+      await Future.delayed(
+          Duration(milliseconds: 800 + (DateTime.now().millisecond % 400)));
     }
 
     if (mounted) setState(() => _enriching = false);
   }
 
-  // ✅ فلترة بـ UI level
   List<NpcTarget> get _filtered {
     var list = _targets
         .where((t) => _settings.visibleUiLevels.contains(t.uiLevel))
         .toList();
     if (_settings.minGC > 0) {
-      list = list.where((t) => (t.goldCampValue ?? 0) >= _settings.minGC).toList();
+      list = list
+          .where((t) => (t.goldCampValue ?? 0) >= _settings.minGC)
+          .toList();
     }
     if (_settings.onlyLegendary) {
       list = list.where((t) => t.isLegendary).toList();
@@ -184,7 +191,8 @@ class _AttackScreenState extends State<AttackScreen> {
         });
         break;
       case 'distance':
-        list.sort((a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
+        list.sort(
+            (a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
         break;
       case 'as':
         list.sort((a, b) {
@@ -216,11 +224,12 @@ class _AttackScreenState extends State<AttackScreen> {
 
     if (result == true && mounted) {
       setState(() {
-        final idx = _targets.indexWhere(
-            (x) => x.areaId == target.areaId && x.x == target.x && x.y == target.y);
+        final idx = _targets.indexWhere((x) =>
+            x.areaId == target.areaId && x.x == target.x && x.y == target.y);
         if (idx >= 0 && _targets[idx].attacksRemaining != null) {
           _targets[idx] = _targets[idx].copyWith(
-            attacksRemaining: (_targets[idx].attacksRemaining! - 1).clamp(0, 9999),
+            attacksRemaining:
+                (_targets[idx].attacksRemaining! - 1).clamp(0, 9999),
           );
         }
       });
@@ -228,8 +237,10 @@ class _AttackScreenState extends State<AttackScreen> {
         final fresh = await _svc.enrich(target);
         if (mounted) {
           setState(() {
-            final idx = _targets.indexWhere(
-                (x) => x.areaId == target.areaId && x.x == target.x && x.y == target.y);
+            final idx = _targets.indexWhere((x) =>
+                x.areaId == target.areaId &&
+                x.x == target.x &&
+                x.y == target.y);
             if (idx >= 0) _targets[idx] = fresh;
           });
         }
@@ -241,7 +252,8 @@ class _AttackScreenState extends State<AttackScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
+        content:
+            Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
       ));
@@ -259,7 +271,10 @@ class _AttackScreenState extends State<AttackScreen> {
               children: [
                 _header(context),
                 if (_loading)
-                  const Expanded(child: Center(child: CircularProgressIndicator(color: AppTheme.purple)))
+                  const Expanded(
+                      child: Center(
+                          child: CircularProgressIndicator(
+                              color: AppTheme.purple)))
                 else ...[
                   _sourcePicker(context),
                   _filterBar(context),
@@ -281,7 +296,9 @@ class _AttackScreenState extends State<AttackScreen> {
             ),
           ),
           Positioned(
-            left: 16, right: 16, bottom: 16,
+            left: 16,
+            right: 16,
+            bottom: 16,
             child: GradientButton(
               label: _scanning
                   ? 'جارٍ المسح ($_scanDone/$_scanTotal)'
@@ -302,27 +319,36 @@ class _AttackScreenState extends State<AttackScreen> {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
       child: Row(
         children: [
-          AppIconBtn(icon: Icons.arrow_back_rounded,
-              onTap: () => Navigator.pop(context), size: 42),
+          AppIconBtn(
+              icon: Icons.arrow_back_rounded,
+              onTap: () => Navigator.pop(context),
+              size: 42),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('هجوم على NPC', style: TextStyle(
-                    fontSize: 20, fontWeight: FontWeight.w800,
-                    color: AppTheme.textColor(context), letterSpacing: -0.3,
-                    decoration: TextDecoration.none)),
+                Text('هجوم على NPC',
+                    style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textColor(context),
+                        letterSpacing: -0.3,
+                        decoration: TextDecoration.none)),
                 Text('${_targets.length} هدف · ${_filtered.length} ظاهر',
-                    style: TextStyle(fontSize: 11,
+                    style: TextStyle(
+                        fontSize: 11,
                         color: AppTheme.subTextColor(context),
                         decoration: TextDecoration.none)),
               ],
             ),
           ),
           if (_enriching)
-            const SizedBox(width: 20, height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.teal)),
+            const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppTheme.teal)),
         ],
       ),
     );
@@ -336,24 +362,37 @@ class _AttackScreenState extends State<AttackScreen> {
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
-            Container(width: 36, height: 36,
-                decoration: BoxDecoration(color: AppTheme.teal.withOpacity(0.15),
+            Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                    color: AppTheme.teal.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.castle_rounded, color: AppTheme.teal, size: 18)),
+                child: const Icon(Icons.castle_rounded,
+                    color: AppTheme.teal, size: 18)),
             const SizedBox(width: 10),
             Expanded(
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<OwnedCastle>(
-                  value: _source, isExpanded: true, isDense: true,
+                  value: _source,
+                  isExpanded: true,
+                  isDense: true,
                   dropdownColor: Theme.of(context).colorScheme.surface,
                   borderRadius: BorderRadius.circular(12),
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
                       color: AppTheme.textColor(context)),
-                  items: _castles.map((c) => DropdownMenuItem(
-                    value: c,
-                    child: Text(c.fullLabel, overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: AppTheme.textColor(context), fontSize: 12)),
-                  )).toList(),
+                  items: _castles
+                      .map((c) => DropdownMenuItem(
+                            value: c,
+                            child: Text(c.fullLabel,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    color: AppTheme.textColor(context),
+                                    fontSize: 12)),
+                          ))
+                      .toList(),
                   onChanged: (v) {
                     if (v == null) return;
                     setState(() {
@@ -378,23 +417,26 @@ class _AttackScreenState extends State<AttackScreen> {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            _filterChip(context, icon: Icons.tune_rounded, label: 'فلترة',
+            _filterChip(context,
+                icon: Icons.tune_rounded,
+                label: 'فلترة',
                 onTap: _openFilterSheet),
             const SizedBox(width: 8),
             _sortChip(context),
             const SizedBox(width: 8),
             _distanceChip(context),
             const SizedBox(width: 8),
-            if (_settings.onlyLegendary)
-              _activeChip(context, 'GC 75 فقط'),
+            if (_settings.onlyLegendary) _activeChip(context, 'GC 75 فقط'),
           ],
         ),
       ),
     );
   }
 
-  Widget _filterChip(BuildContext context, {required IconData icon,
-      required String label, required VoidCallback onTap}) {
+  Widget _filterChip(BuildContext context,
+      {required IconData icon,
+      required String label,
+      required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -407,27 +449,43 @@ class _AttackScreenState extends State<AttackScreen> {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(icon, color: AppTheme.purple, size: 14),
           const SizedBox(width: 6),
-          Text(label, style: const TextStyle(color: AppTheme.purple, fontSize: 11,
-              fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+          Text(label,
+              style: const TextStyle(
+                  color: AppTheme.purple,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none)),
         ]),
       ),
     );
   }
 
   Widget _sortChip(BuildContext context) {
-    final labels = {'gc': 'Gold Camp', 'level': 'المستوى', 'distance': 'المسافة', 'as': 'هجمات متبقية'};
+    final labels = {
+      'gc': 'Gold Camp',
+      'level': 'المستوى',
+      'distance': 'المسافة',
+      'as': 'هجمات متبقية'
+    };
     return PopupMenuButton<String>(
       onSelected: (v) {
-        setState(() { _settings.sortBy = v; _settings.save(); });
+        setState(() {
+          _settings.sortBy = v;
+          _settings.save();
+        });
       },
-      itemBuilder: (_) => labels.entries.map((e) => PopupMenuItem(
-          value: e.key,
-          child: Row(children: [
-            if (_settings.sortBy == e.key)
-              const Icon(Icons.check, size: 14, color: AppTheme.green),
-            const SizedBox(width: 6),
-            Text(e.value, style: TextStyle(color: AppTheme.textColor(context))),
-          ]))).toList(),
+      itemBuilder: (_) => labels.entries
+          .map((e) => PopupMenuItem(
+                value: e.key,
+                child: Row(children: [
+                  if (_settings.sortBy == e.key)
+                    const Icon(Icons.check, size: 14, color: AppTheme.green),
+                  const SizedBox(width: 6),
+                  Text(e.value,
+                      style: TextStyle(color: AppTheme.textColor(context))),
+                ]),
+              ))
+          .toList(),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
@@ -438,9 +496,12 @@ class _AttackScreenState extends State<AttackScreen> {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.sort_rounded, color: AppTheme.teal, size: 14),
           const SizedBox(width: 6),
-          Text(labels[_settings.sortBy] ?? '', style: const TextStyle(
-              color: AppTheme.teal, fontSize: 11, fontWeight: FontWeight.bold,
-              decoration: TextDecoration.none)),
+          Text(labels[_settings.sortBy] ?? '',
+              style: const TextStyle(
+                  color: AppTheme.teal,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none)),
         ]),
       ),
     );
@@ -459,9 +520,12 @@ class _AttackScreenState extends State<AttackScreen> {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.place_rounded, color: AppTheme.orange, size: 14),
           const SizedBox(width: 6),
-          Text('${_settings.radiusTiles} tile', style: const TextStyle(
-              color: AppTheme.orange, fontSize: 11, fontWeight: FontWeight.bold,
-              decoration: TextDecoration.none)),
+          Text('${_settings.radiusTiles} tile',
+              style: const TextStyle(
+                  color: AppTheme.orange,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none)),
         ]),
       ),
     );
@@ -471,11 +535,16 @@ class _AttackScreenState extends State<AttackScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [Color(0xFFD4AF37), Color(0xFFFFD700)]),
+        gradient: const LinearGradient(
+            colors: [Color(0xFFD4AF37), Color(0xFFFFD700)]),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Text(label, style: const TextStyle(color: Colors.black, fontSize: 11,
-          fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+      child: Text(label,
+          style: const TextStyle(
+              color: Colors.black,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              decoration: TextDecoration.none)),
     );
   }
 
@@ -501,21 +570,28 @@ class _AttackScreenState extends State<AttackScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(padding: const EdgeInsets.all(20),
+            Container(
+                padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                     color: AppTheme.teal.withOpacity(0.12),
                     shape: BoxShape.circle,
                     border: Border.all(color: AppTheme.teal.withOpacity(0.3))),
-                child: Icon(Icons.radar_rounded, size: 48,
-                    color: AppTheme.teal.withOpacity(0.7))),
+                child: Icon(Icons.radar_rounded,
+                    size: 48, color: AppTheme.teal.withOpacity(0.7))),
             const SizedBox(height: 16),
-            Text('مفيش أهداف لسه', style: TextStyle(color: AppTheme.textColor(context),
-                fontSize: 14, fontWeight: FontWeight.bold,
-                decoration: TextDecoration.none)),
+            Text('مفيش أهداف لسه',
+                style: TextStyle(
+                    color: AppTheme.textColor(context),
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.none)),
             const SizedBox(height: 4),
-            Text('دوس "مسح المنطقة" عشان تبدأ', textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.subTextColor(context),
-                    fontSize: 11, decoration: TextDecoration.none)),
+            Text('دوس "مسح المنطقة" عشان تبدأ',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: AppTheme.subTextColor(context),
+                    fontSize: 11,
+                    decoration: TextDecoration.none)),
           ],
         ),
       ),
@@ -539,32 +615,45 @@ class _AttackScreenState extends State<AttackScreen> {
           decoration: BoxDecoration(
             gradient: legendary
                 ? const LinearGradient(
-                    begin: Alignment.topLeft, end: Alignment.bottomRight,
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                     colors: [Color(0x44D4AF37), Color(0x11FFD700)])
                 : null,
-            color: legendary ? null
-                : (AppTheme.isDark(context) ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.03)),
+            color: legendary
+                ? null
+                : (AppTheme.isDark(context)
+                    ? Colors.white.withOpacity(0.04)
+                    : Colors.black.withOpacity(0.03)),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: borderColor, width: legendary ? 1.6 : 1.2),
+            border: Border.all(
+                color: borderColor, width: legendary ? 1.6 : 1.2),
             boxShadow: legendary
-                ? [BoxShadow(color: const Color(0xFFD4AF37).withOpacity(0.3),
-                    blurRadius: 18, offset: const Offset(0, 6))]
+                ? [
+                    BoxShadow(
+                        color: const Color(0xFFD4AF37).withOpacity(0.3),
+                        blurRadius: 18,
+                        offset: const Offset(0, 6))
+                  ]
                 : null,
           ),
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
               Container(
-                width: 46, height: 46,
+                width: 46,
+                height: 46,
                 decoration: BoxDecoration(
                   gradient: legendary
-                      ? const LinearGradient(colors: [Color(0xFFD4AF37), Color(0xFFFFD700)])
+                      ? const LinearGradient(
+                          colors: [Color(0xFFD4AF37), Color(0xFFFFD700)])
                       : null,
                   color: legendary ? null : AppTheme.teal.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
-                  legendary ? Icons.emoji_events_rounded : Icons.local_fire_department_rounded,
+                  legendary
+                      ? Icons.emoji_events_rounded
+                      : Icons.local_fire_department_rounded,
                   color: legendary ? Colors.black : AppTheme.teal,
                   size: 22,
                 ),
@@ -576,13 +665,14 @@ class _AttackScreenState extends State<AttackScreen> {
                   children: [
                     Row(
                       children: [
-                        Text('(${t.x},${t.y})', style: TextStyle(
-                            color: AppTheme.textColor(context),
-                            fontWeight: FontWeight.bold, fontSize: 13,
-                            decoration: TextDecoration.none)),
+                        Text('(${t.x},${t.y})',
+                            style: TextStyle(
+                                color: AppTheme.textColor(context),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                                decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
-                        _levelBadge(t.uiLevel),
-                        // ✅ GC badge — only if has GC (>0)
+                        _levelBadge(context, t.uiLevel), // ✅ context
                         if (t.isEnriched && hasGold) ...[
                           const SizedBox(width: 6),
                           _gcBadge(t.goldCampValue!, legendary),
@@ -592,34 +682,47 @@ class _AttackScreenState extends State<AttackScreen> {
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Icon(Icons.straighten_rounded, size: 11,
+                        Icon(Icons.straighten_rounded,
+                            size: 11,
                             color: AppTheme.subTextColor(context)),
                         const SizedBox(width: 3),
-                        Text('${t.distanceFromSource.toStringAsFixed(0)} tile',
-                            style: TextStyle(color: AppTheme.subTextColor(context),
-                                fontSize: 10.5, decoration: TextDecoration.none)),
+                        Text(
+                            '${t.distanceFromSource.toStringAsFixed(0)} tile',
+                            style: TextStyle(
+                                color: AppTheme.subTextColor(context),
+                                fontSize: 10.5,
+                                decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
                         if (t.isEnriched && t.attacksRemaining != null) ...[
-                          const Icon(Icons.gavel_rounded, size: 11, color: AppTheme.red),
+                          const Icon(Icons.gavel_rounded,
+                              size: 11, color: AppTheme.red),
                           const SizedBox(width: 3),
                           Text('${t.attacksRemaining} هجمة',
-                              style: const TextStyle(color: AppTheme.red,
-                                  fontSize: 10.5, fontWeight: FontWeight.bold,
+                              style: const TextStyle(
+                                  color: AppTheme.red,
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.bold,
                                   decoration: TextDecoration.none)),
                         ] else if (!t.isEnriched) ...[
-                          const Icon(Icons.hourglass_empty_rounded, size: 11,
-                              color: AppTheme.subTextColor),
+                          Icon(Icons.hourglass_empty_rounded,
+                              size: 11,
+                              color: AppTheme.subTextColor(context)),
                           const SizedBox(width: 3),
-                          Text('جارٍ الجلب...', style: TextStyle(
-                              color: AppTheme.subTextColor(context).withOpacity(0.7),
-                              fontSize: 10.5, decoration: TextDecoration.none)),
+                          Text('جارٍ الجلب...',
+                              style: TextStyle(
+                                  color: AppTheme.subTextColor(context)
+                                      .withOpacity(0.7),
+                                  fontSize: 10.5,
+                                  decoration: TextDecoration.none)),
                         ],
                       ],
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded, color: AppTheme.subTextColor),
+              // ✅ شيل const + ضيف context
+              Icon(Icons.chevron_right_rounded,
+                  color: AppTheme.subTextColor(context)),
             ],
           ),
         ),
@@ -627,7 +730,8 @@ class _AttackScreenState extends State<AttackScreen> {
     );
   }
 
-  Widget _levelBadge(int lvl) {
+  // ✅ الدالة بقت بتاخد context
+  Widget _levelBadge(BuildContext context, int lvl) {
     final color = lvl >= 80
         ? const Color(0xFFD4AF37)
         : lvl >= 70
@@ -636,7 +740,8 @@ class _AttackScreenState extends State<AttackScreen> {
                 ? AppTheme.blue
                 : lvl >= 50
                     ? AppTheme.teal
-                    : AppTheme.subTextColor;
+                    : AppTheme.subTextColor(context);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
@@ -644,8 +749,12 @@ class _AttackScreenState extends State<AttackScreen> {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: color.withOpacity(0.4)),
       ),
-      child: Text('Lv $lvl', style: TextStyle(color: color, fontSize: 10,
-          fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+      child: Text('Lv $lvl',
+          style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              decoration: TextDecoration.none)),
     );
   }
 
@@ -661,8 +770,12 @@ class _AttackScreenState extends State<AttackScreen> {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(Icons.star_rounded, color: color, size: 10),
         const SizedBox(width: 2),
-        Text('GC $gc', style: TextStyle(color: color, fontSize: 10,
-            fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+        Text('GC $gc',
+            style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                decoration: TextDecoration.none)),
       ]),
     );
   }
@@ -674,7 +787,10 @@ class _AttackScreenState extends State<AttackScreen> {
       backgroundColor: Colors.transparent,
       builder: (_) => _FilterSheet(
         settings: _settings,
-        onChanged: () { setState(() {}); _settings.save(); },
+        onChanged: () {
+          setState(() {});
+          _settings.save();
+        },
       ),
     );
   }
@@ -686,24 +802,39 @@ class _AttackScreenState extends State<AttackScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) => AlertDialog(
           backgroundColor: Theme.of(ctx).colorScheme.surface,
-          title: const Text('نطاق المسح', style: TextStyle(decoration: TextDecoration.none)),
+          title: const Text('نطاق المسح',
+              style: TextStyle(decoration: TextDecoration.none)),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('${temp.toInt()} tile', style: const TextStyle(fontSize: 22,
-                fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
-            Slider(value: temp, min: 20, max: 200, divisions: 18,
-                activeColor: AppTheme.orange,
-                onChanged: (v) => setSt(() => temp = v)),
+            Text('${temp.toInt()} tile',
+                style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.none)),
+            Slider(
+              value: temp,
+              min: 20,
+              max: 200,
+              divisions: 18,
+              activeColor: AppTheme.orange,
+              onChanged: (v) => setSt(() => temp = v),
+            ),
             Text('اكبر نطاق = طلبات أكتر = خطر بان أعلى',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10.5,
+                style: TextStyle(
+                    fontSize: 10.5,
                     color: AppTheme.subTextColor(ctx),
                     decoration: TextDecoration.none)),
           ]),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('إلغاء')),
             ElevatedButton(
               onPressed: () {
-                setState(() { _settings.radiusTiles = temp.toInt(); _settings.save(); });
+                setState(() {
+                  _settings.radiusTiles = temp.toInt();
+                  _settings.save();
+                });
                 Navigator.pop(ctx);
               },
               child: const Text('موافق'),
@@ -716,7 +847,7 @@ class _AttackScreenState extends State<AttackScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Filter Sheet — UI levels 40-80
+//  Filter Sheet
 // ═══════════════════════════════════════════════════════════
 class _FilterSheet extends StatefulWidget {
   final AttackFilterSettings settings;
@@ -734,7 +865,8 @@ class _FilterSheetState extends State<_FilterSheet> {
     const levels = [40, 50, 60, 70, 80];
 
     return Container(
-      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
+      constraints:
+          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
       decoration: const BoxDecoration(
         color: Color(0xFF0B0B14),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -744,8 +876,12 @@ class _FilterSheetState extends State<_FilterSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(width: 44, height: 5, margin: const EdgeInsets.only(top: 10),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.2),
+            Container(
+                width: 44,
+                height: 5,
+                margin: const EdgeInsets.only(top: 10),
+                decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(3))),
             const SizedBox(height: 12),
             Padding(
@@ -753,78 +889,115 @@ class _FilterSheetState extends State<_FilterSheet> {
               child: Row(children: [
                 const Icon(Icons.tune_rounded, color: AppTheme.teal, size: 20),
                 const SizedBox(width: 8),
-                const Text('فلترة', style: TextStyle(color: Colors.white,
-                    fontSize: 16, fontWeight: FontWeight.bold,
-                    decoration: TextDecoration.none)),
+                const Text('فلترة',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.none)),
                 const Spacer(),
-                TextButton(onPressed: () => Navigator.pop(context),
-                    child: const Text('تم', style: TextStyle(color: AppTheme.teal))),
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('تم',
+                        style: TextStyle(color: AppTheme.teal))),
               ]),
             ),
             const Divider(),
             Flexible(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text('المستويات', style: TextStyle(color: Colors.white70,
-                      fontWeight: FontWeight.bold, fontSize: 13,
-                      decoration: TextDecoration.none)),
-                  const SizedBox(height: 8),
-                  Wrap(spacing: 8, runSpacing: 8, children: levels.map((lvl) {
-                    final active = s.visibleUiLevels.contains(lvl);
-                    final color = lvl == 80
-                        ? const Color(0xFFD4AF37)
-                        : lvl == 70
-                            ? AppTheme.orange
-                            : AppTheme.teal;
-                    return GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          if (active) s.visibleUiLevels.remove(lvl);
-                          else s.visibleUiLevels.add(lvl);
-                        });
-                        widget.onChanged();
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: active ? color.withOpacity(0.25) : Colors.white.withOpacity(0.05),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: active ? color : Colors.white24),
-                        ),
-                        child: Text('Lv $lvl', style: TextStyle(
-                            color: active ? color : Colors.white70,
-                            fontWeight: FontWeight.bold, fontSize: 12,
-                            decoration: TextDecoration.none)),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('المستويات',
+                          style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              decoration: TextDecoration.none)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: levels.map((lvl) {
+                            final active = s.visibleUiLevels.contains(lvl);
+                            final color = lvl == 80
+                                ? const Color(0xFFD4AF37)
+                                : lvl == 70
+                                    ? AppTheme.orange
+                                    : AppTheme.teal;
+                            return GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  if (active) {
+                                    s.visibleUiLevels.remove(lvl);
+                                  } else {
+                                    s.visibleUiLevels.add(lvl);
+                                  }
+                                });
+                                widget.onChanged();
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: active
+                                      ? color.withOpacity(0.25)
+                                      : Colors.white.withOpacity(0.05),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                      color:
+                                          active ? color : Colors.white24),
+                                ),
+                                child: Text('Lv $lvl',
+                                    style: TextStyle(
+                                        color: active
+                                            ? color
+                                            : Colors.white70,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12,
+                                        decoration: TextDecoration.none)),
+                              ),
+                            );
+                          }).toList()),
+                      const SizedBox(height: 20),
+                      const Text('GC الأدنى',
+                          style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              decoration: TextDecoration.none)),
+                      const SizedBox(height: 8),
+                      Row(children: [
+                        _gcChip(s, 0, 'الكل'),
+                        const SizedBox(width: 8),
+                        _gcChip(s, 60, 'GC 60+'),
+                        const SizedBox(width: 8),
+                        _gcChip(s, 75, 'GC 75 (ذهبي)'),
+                      ]),
+                      const SizedBox(height: 20),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('GC 75 فقط',
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                decoration: TextDecoration.none)),
+                        subtitle: const Text(
+                            'يظهر بس اللي عندهم GC=75 (لفل 80)',
+                            style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 11,
+                                decoration: TextDecoration.none)),
+                        value: s.onlyLegendary,
+                        activeColor: const Color(0xFFD4AF37),
+                        onChanged: (v) {
+                          setState(() => s.onlyLegendary = v);
+                          widget.onChanged();
+                        },
                       ),
-                    );
-                  }).toList()),
-                  const SizedBox(height: 20),
-                  const Text('GC الأدنى', style: TextStyle(color: Colors.white70,
-                      fontWeight: FontWeight.bold, fontSize: 13,
-                      decoration: TextDecoration.none)),
-                  const SizedBox(height: 8),
-                  Row(children: [
-                    _gcChip(s, 0, 'الكل'),
-                    const SizedBox(width: 8),
-                    _gcChip(s, 60, 'GC 60+'),
-                    const SizedBox(width: 8),
-                    _gcChip(s, 75, 'GC 75 (ذهبي)'),
-                  ]),
-                  const SizedBox(height: 20),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('GC 75 فقط', style: TextStyle(color: Colors.white,
-                        fontSize: 13, fontWeight: FontWeight.bold,
-                        decoration: TextDecoration.none)),
-                    subtitle: const Text('يظهر بس اللي عندهم GC=75 (لفل 80)',
-                        style: TextStyle(color: Colors.white54, fontSize: 11,
-                            decoration: TextDecoration.none)),
-                    value: s.onlyLegendary,
-                    activeColor: const Color(0xFFD4AF37),
-                    onChanged: (v) { setState(() => s.onlyLegendary = v); widget.onChanged(); },
-                  ),
-                ]),
+                    ]),
               ),
             ),
           ],
@@ -837,18 +1010,25 @@ class _FilterSheetState extends State<_FilterSheet> {
     final active = s.minGC == val;
     final color = val == 75 ? const Color(0xFFD4AF37) : AppTheme.orange;
     return GestureDetector(
-      onTap: () { setState(() => s.minGC = val); widget.onChanged(); },
+      onTap: () {
+        setState(() => s.minGC = val);
+        widget.onChanged();
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: active ? color.withOpacity(0.25) : Colors.white.withOpacity(0.05),
+          color: active
+              ? color.withOpacity(0.25)
+              : Colors.white.withOpacity(0.05),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: active ? color : Colors.white24),
         ),
-        child: Text(label, style: TextStyle(
-            color: active ? color : Colors.white70,
-            fontWeight: FontWeight.bold, fontSize: 11,
-            decoration: TextDecoration.none)),
+        child: Text(label,
+            style: TextStyle(
+                color: active ? color : Colors.white70,
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+                decoration: TextDecoration.none)),
       ),
     );
   }
@@ -861,7 +1041,8 @@ class _AttackSheet extends StatefulWidget {
   final GgeClient client;
   final OwnedCastle source;
   final NpcTarget target;
-  const _AttackSheet({required this.client, required this.source, required this.target});
+  const _AttackSheet(
+      {required this.client, required this.source, required this.target});
 
   @override
   State<_AttackSheet> createState() => _AttackSheetState();
@@ -891,9 +1072,8 @@ class _AttackSheetState extends State<_AttackSheet> {
       final units = await widget.client.getCastleUnits(
           widget.source.kingdomId, widget.source.areaId, catalog);
       final unlocked = widget.client.getUnlockedForArea(widget.source.areaId);
-      final sendable = units
-          .where((u) => unlocked.contains(u.wodId) && u.amount > 0)
-          .toList();
+      final sendable =
+          units.where((u) => unlocked.contains(u.wodId) && u.amount > 0).toList();
       final cmds = await widget.client.getCommanders();
 
       if (!mounted) return;
@@ -920,24 +1100,30 @@ class _AttackSheetState extends State<_AttackSheet> {
 
   @override
   void dispose() {
-    for (final c in _amtCtrl.values) { c.dispose(); }
+    for (final c in _amtCtrl.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
   int get _selectedTypes => _units.where((u) {
-    final a = int.tryParse(_amtCtrl[u.wodId]?.text ?? '0') ?? 0;
-    return a > 0;
-  }).length;
+        final a = int.tryParse(_amtCtrl[u.wodId]?.text ?? '0') ?? 0;
+        return a > 0;
+      }).length;
 
   int get _totalUnits => _units.fold<int>(0, (s, u) {
-    return s + (int.tryParse(_amtCtrl[u.wodId]?.text ?? '0') ?? 0);
-  });
+        return s + (int.tryParse(_amtCtrl[u.wodId]?.text ?? '0') ?? 0);
+      });
 
   void _selectAll() {
-    final offensive = _units.where((u) => u.isCombat && !u.isDefensive).toList();
-    final defensive = _units.where((u) => u.isCombat && u.isDefensive).toList();
+    final offensive =
+        _units.where((u) => u.isCombat && !u.isDefensive).toList();
+    final defensive =
+        _units.where((u) => u.isCombat && u.isDefensive).toList();
     final ordered = [...offensive, ...defensive];
-    for (final c in _amtCtrl.values) { c.text = '0'; }
+    for (final c in _amtCtrl.values) {
+      c.text = '0';
+    }
     for (final u in ordered.take(_maxTypes)) {
       _amtCtrl[u.wodId]?.text = u.amount.toString();
     }
@@ -945,7 +1131,9 @@ class _AttackSheetState extends State<_AttackSheet> {
   }
 
   void _clearAll() {
-    for (final c in _amtCtrl.values) { c.text = '0'; }
+    for (final c in _amtCtrl.values) {
+      c.text = '0';
+    }
     setState(() {});
   }
 
@@ -982,10 +1170,15 @@ class _AttackSheetState extends State<_AttackSheet> {
       Navigator.pop(context, true);
     } else {
       String msg = result.error ?? 'فشل';
-      if (msg.contains('UNIT_NOT_SENDABLE_91')) msg = 'وحدة مش قابلة للإرسال';
-      else if (msg.contains('LORD_BUSY_218')) msg = 'القائد مشغول';
-      else if (msg.contains('LORD_UNAVAILABLE')) msg = 'القائد غير متاح';
-      else if (msg.contains('MAX_MOVEMENTS_181')) msg = 'وصلت للحد الأقصى للحركات';
+      if (msg.contains('UNIT_NOT_SENDABLE_91')) {
+        msg = 'وحدة مش قابلة للإرسال';
+      } else if (msg.contains('LORD_BUSY_218')) {
+        msg = 'القائد مشغول';
+      } else if (msg.contains('LORD_UNAVAILABLE')) {
+        msg = 'القائد غير متاح';
+      } else if (msg.contains('MAX_MOVEMENTS_181')) {
+        msg = 'وصلت للحد الأقصى للحركات';
+      }
       _snack(msg, color: AppTheme.red);
     }
   }
@@ -994,8 +1187,10 @@ class _AttackSheetState extends State<_AttackSheet> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
-        backgroundColor: color, behavior: SnackBarBehavior.floating,
+        content:
+            Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
       ));
   }
 
@@ -1013,45 +1208,63 @@ class _AttackSheetState extends State<_AttackSheet> {
         ),
         child: Column(
           children: [
-            Container(width: 44, height: 5, margin: const EdgeInsets.only(top: 10),
-                decoration: BoxDecoration(color: Colors.white.withOpacity(0.2),
+            Container(
+                width: 44,
+                height: 5,
+                margin: const EdgeInsets.only(top: 10),
+                decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(3))),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: Row(children: [
-                Container(width: 40, height: 40,
+                Container(
+                    width: 40,
+                    height: 40,
                     decoration: BoxDecoration(
                       gradient: t.isLegendary
-                          ? const LinearGradient(colors: [Color(0xFFD4AF37), Color(0xFFFFD700)])
+                          ? const LinearGradient(
+                              colors: [Color(0xFFD4AF37), Color(0xFFFFD700)])
                           : AppTheme.dangerGradient,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Icon(Icons.gavel_rounded, color: Colors.white, size: 20)),
+                    child: const Icon(Icons.gavel_rounded,
+                        color: Colors.white, size: 20)),
                 const SizedBox(width: 10),
-                Expanded(child: Column(
+                Expanded(
+                    child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text('(${t.x},${t.y}) · Lv ${t.uiLevel}',
-                        style: const TextStyle(color: Colors.white, fontSize: 15,
-                            fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none)),
                     if (t.isEnriched && t.hasGold)
                       Text('GC ${t.goldCampValue} · ${t.attacksRemaining ?? 0} هجمة',
-                          style: const TextStyle(color: Colors.white70, fontSize: 11,
+                          style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
                               decoration: TextDecoration.none))
                     else if (t.isEnriched)
                       Text('${t.attacksRemaining ?? 0} هجمة',
-                          style: const TextStyle(color: Colors.white70, fontSize: 11,
+                          style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
                               decoration: TextDecoration.none)),
                   ],
                 )),
-                IconButton(icon: const Icon(Icons.close, color: Colors.white70),
+                IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70),
                     onPressed: () => Navigator.pop(context)),
               ]),
             ),
             const Divider(),
             Expanded(
               child: _loading
-                  ? const Center(child: CircularProgressIndicator(color: AppTheme.purple))
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppTheme.purple))
                   : ListView(
                       controller: scrollCtrl,
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
@@ -1060,26 +1273,41 @@ class _AttackSheetState extends State<_AttackSheet> {
                         const SizedBox(height: 8),
                         DropdownButtonHideUnderline(
                           child: DropdownButton<Lord>(
-                            value: _selectedLord, isExpanded: true,
-                            dropdownColor: Theme.of(context).colorScheme.surface,
-                            items: _commanders.where((c) => !c.isBusy)
+                            value: _selectedLord,
+                            isExpanded: true,
+                            dropdownColor:
+                                Theme.of(context).colorScheme.surface,
+                            items: _commanders
+                                .where((c) => !c.isBusy)
                                 .map((c) => DropdownMenuItem(
-                                  value: c.lord,
-                                  child: Text(
-                                      c.lord.id == 0 ? 'اللورد الرئيسي' : c.lord.displayName,
-                                      style: const TextStyle(decoration: TextDecoration.none)),
-                                )).toList(),
-                            onChanged: (v) => setState(() => _selectedLord = v),
+                                      value: c.lord,
+                                      child: Text(
+                                          c.lord.id == 0
+                                              ? 'اللورد الرئيسي'
+                                              : c.lord.displayName,
+                                          style: const TextStyle(
+                                              decoration:
+                                                  TextDecoration.none)),
+                                    ))
+                                .toList(),
+                            onChanged: (v) =>
+                                setState(() => _selectedLord = v),
                           ),
                         ),
                         const SizedBox(height: 16),
                         Row(children: [
-                          _sectionLabel('الوحدات ($_selectedTypes/$_maxTypes · $_totalUnits)'),
+                          _sectionLabel(
+                              'الوحدات ($_selectedTypes/$_maxTypes · $_totalUnits)'),
                           const Spacer(),
-                          TextButton(onPressed: _selectAll,
-                              child: const Text('تحديد الكل', style: TextStyle(fontSize: 11))),
-                          TextButton(onPressed: _clearAll,
-                              child: const Text('مسح', style: TextStyle(fontSize: 11, color: AppTheme.red))),
+                          TextButton(
+                              onPressed: _selectAll,
+                              child: const Text('تحديد الكل',
+                                  style: TextStyle(fontSize: 11))),
+                          TextButton(
+                              onPressed: _clearAll,
+                              child: const Text('مسح',
+                                  style: TextStyle(
+                                      fontSize: 11, color: AppTheme.red))),
                         ]),
                         const SizedBox(height: 4),
                         ..._units.map((u) => _unitRow(u)),
@@ -1091,20 +1319,27 @@ class _AttackSheetState extends State<_AttackSheet> {
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: SizedBox(
-                  width: double.infinity, height: 52,
+                  width: double.infinity,
+                  height: 52,
                   child: ElevatedButton.icon(
                     onPressed: _sending || _loading ? null : _send,
                     icon: _sending
-                        ? const SizedBox(width: 18, height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
                         : const Icon(Icons.gavel_rounded),
                     label: Text(_sending ? 'جارٍ الإرسال...' : 'هجوم ($_totalUnits)',
-                        style: const TextStyle(fontWeight: FontWeight.bold,
-                            fontSize: 15, decoration: TextDecoration.none)),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            decoration: TextDecoration.none)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.red,
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
                     ),
                   ),
                 ),
@@ -1116,8 +1351,12 @@ class _AttackSheetState extends State<_AttackSheet> {
     );
   }
 
-  Widget _sectionLabel(String s) => Text(s, style: const TextStyle(color: Colors.white70,
-      fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none));
+  Widget _sectionLabel(String s) => Text(s,
+      style: const TextStyle(
+          color: Colors.white70,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          decoration: TextDecoration.none));
 
   Widget _unitRow(CastleUnit u) {
     return Container(
@@ -1131,37 +1370,57 @@ class _AttackSheetState extends State<_AttackSheet> {
       child: Row(children: [
         Icon(u.icon, color: u.roleColor, size: 18),
         const SizedBox(width: 8),
-        Expanded(child: Column(
+        Expanded(
+            child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(S.unitName(u.displayName), style: const TextStyle(color: Colors.white,
-                fontSize: 12, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
-            Text('متاح: ${u.amount}', style: const TextStyle(color: Colors.white54,
-                fontSize: 10, decoration: TextDecoration.none)),
+            Text(S.unitName(u.displayName),
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.none)),
+            Text('متاح: ${u.amount}',
+                style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 10,
+                    decoration: TextDecoration.none)),
           ],
         )),
-        SizedBox(width: 70, height: 34, child: TextField(
-          controller: _amtCtrl[u.wodId],
-          keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.white, fontSize: 12,
-              fontWeight: FontWeight.bold, decoration: TextDecoration.none),
-          decoration: InputDecoration(
-            contentPadding: const EdgeInsets.symmetric(vertical: 4),
-            hintText: '0',
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(6),
-              borderSide: const BorderSide(color: Colors.white12),
-            ),
-          ),
-          onChanged: (_) => setState(() {}),
-        )),
+        SizedBox(
+            width: 70,
+            height: 34,
+            child: TextField(
+              controller: _amtCtrl[u.wodId],
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none),
+              decoration: InputDecoration(
+                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                hintText: '0',
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: const BorderSide(color: Colors.white12),
+                ),
+              ),
+              onChanged: (_) => setState(() {}),
+            )),
         const SizedBox(width: 4),
         GestureDetector(
-          onTap: () { _amtCtrl[u.wodId]?.text = u.amount.toString(); setState(() {}); },
-          child: Container(width: 30, height: 30,
-              decoration: BoxDecoration(color: AppTheme.teal.withOpacity(0.2),
+          onTap: () {
+            _amtCtrl[u.wodId]?.text = u.amount.toString();
+            setState(() {});
+          },
+          child: Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                  color: AppTheme.teal.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(6)),
               child: const Icon(Icons.keyboard_double_arrow_up_rounded,
                   color: AppTheme.teal, size: 14)),
