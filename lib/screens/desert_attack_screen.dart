@@ -9,6 +9,7 @@ import 'package:gge/services/desert_attack_service.dart';
 import 'package:gge/services/desert_auto_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const Color kDesertSand = Color(0xFFE8A317);
 const Color kDesertDark = Color(0xFF8B5A2B);
@@ -44,6 +45,20 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
   Set<int> _selectedTransferIds = {};
   bool _loadingAutoData = false;
 
+  // ✅ Background attack limits (new)
+  int _maxAttacksDay = 0;
+  int _maxAttacksSession = 0;
+  int _breakEvery = 0;
+  int _breakMinutes = 15;
+  int _attacksToday = 0;
+  int _attacksThisSession = 0;
+
+  // Background service status
+  String _bgStatus = '—';
+  String _bgExtra = '';
+
+  Timer? _bgStatusTimer;
+
   @override
   void initState() {
     super.initState();
@@ -53,6 +68,26 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     _tabCtrl.addListener(() => setState(() {}));
     _init();
     _xtSub = widget.client.xtStream.listen(_onXt);
+    _startBgStatusPolling();
+  }
+
+  void _startBgStatusPolling() {
+    _bgStatusTimer?.cancel();
+    _bgStatusTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
+      if (!mounted) return;
+      try {
+        final status = await BackgroundService.readStatus();
+        if (!mounted) return;
+        final newStatus = status['status']?.toString() ?? '—';
+        final newExtra = status['extra']?.toString() ?? '';
+        if (newStatus != _bgStatus || newExtra != _bgExtra) {
+          setState(() {
+            _bgStatus = newStatus;
+            _bgExtra = newExtra;
+          });
+        }
+      } catch (_) {}
+    });
   }
 
   void _onXt(XtMessage msg) {
@@ -73,6 +108,16 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
 
   Future<void> _init() async {
     _settings = await DesertAttackSettings.load();
+
+    // Load background limits
+    final p = await SharedPreferences.getInstance();
+    _maxAttacksDay = p.getInt('desert_bg_max_attacks_day') ?? 0;
+    _maxAttacksSession = p.getInt('desert_bg_max_attacks_session') ?? 0;
+    _breakEvery = p.getInt('desert_bg_break_every') ?? 0;
+    _breakMinutes = p.getInt('desert_bg_break_minutes') ?? 15;
+    _attacksToday = p.getInt('desert_bg_attacks_today') ?? 0;
+    _attacksThisSession = 0; // session counter يبدأ من 0 في كل فتح
+
     try {
       final castles = await widget.client.getCastles();
       final preferred = castles
@@ -104,6 +149,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
   @override
   void dispose() {
     _xtSub?.cancel();
+    _bgStatusTimer?.cancel();
     _tabCtrl.dispose();
     super.dispose();
   }
@@ -136,7 +182,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
         },
       );
       if (!mounted) return;
-      // ✅ نرتب الأقرب أولاً
       found.sort((a, b) =>
           a.distanceFromSource.compareTo(b.distanceFromSource));
       setState(() {
@@ -181,6 +226,16 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
       List<CastleUnit> mainUnits = [];
       if (main != null) {
         final catalog = await widget.client.loadCatalog();
+        // ✅ Sync catalog to SharedPreferences for background service
+        try {
+          final catMap = <String, Map<String, dynamic>>{};
+          for (final e in catalog.entries) {
+            catMap[e.key.toString()] = {'displayName': e.value.displayName};
+          }
+          final p = await SharedPreferences.getInstance();
+          await p.setString('desert_bg_catalog_json', jsonEncode(catMap));
+        } catch (_) {}
+
         mainUnits = await widget.client.getCastleUnits(
             main.kingdomId, main.areaId, catalog);
       }
@@ -474,7 +529,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Auto Tab (الإعدادات + الستاتس الكبيرة)
+  //  Auto Tab
   // ═══════════════════════════════════════════════════════
   Widget _autoTab() {
     final svc = DesertAutoService.instance;
@@ -484,6 +539,8 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
         _sourcePicker(context),
         const SizedBox(height: 10),
         _bigStatusCard(context, svc),
+        const SizedBox(height: 10),
+        _bgServiceCard(context, svc),
         const SizedBox(height: 10),
         _autoControlsCard(context, svc),
         const SizedBox(height: 10),
@@ -539,7 +596,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Auto Attack',
+                      const Text('Auto Attack (Foreground)',
                           style: TextStyle(
                               color: Colors.white,
                               fontSize: 16,
@@ -629,6 +686,165 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
               fontSize: 10,
               decoration: TextDecoration.none)),
     ]);
+  }
+
+  // ✅ NEW: Background service card
+  Widget _bgServiceCard(BuildContext context, DesertAutoService svc) {
+    final running = BackgroundService.isRunning;
+    final statusColor = _bgStatusColor(_bgStatus);
+
+    return AppTheme.glassCard(
+      context: context,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: kDesertGold.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.nightlight_round,
+                  color: kDesertGold, size: 18),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('الخلفية (Background)',
+                      style: TextStyle(
+                          color: AppTheme.textColor(context),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                          decoration: TextDecoration.none)),
+                  Text(running ? 'يعمل في الخلفية' : 'متوقف',
+                      style: TextStyle(
+                          color: running ? Colors.green : AppTheme.subTextColor(context),
+                          fontSize: 11,
+                          decoration: TextDecoration.none)),
+                ],
+              ),
+            ),
+            Switch(
+              value: running,
+              activeColor: kDesertGold,
+              onChanged: (v) async {
+                if (v) {
+                  final ok = await BackgroundService.start();
+                  if (mounted) {
+                    _snack(ok ? '✅ الخلفية شغالة' : '❌ فشل التشغيل',
+                        color: ok ? AppTheme.green : AppTheme.red);
+                    setState(() {});
+                  }
+                } else {
+                  await BackgroundService.stop();
+                  if (mounted) setState(() {});
+                }
+              },
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: statusColor.withOpacity(0.3)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(Icons.circle, color: statusColor, size: 8),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(_bgStatus,
+                        style: TextStyle(
+                            color: statusColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none)),
+                  ),
+                ]),
+                if (_bgExtra.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 14),
+                    child: Text(_bgExtra,
+                        style: TextStyle(
+                            color: AppTheme.subTextColor(context),
+                            fontSize: 10,
+                            decoration: TextDecoration.none)),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: _counterChip(
+                context,
+                label: 'اليومي',
+                value: '$_attacksToday${_maxAttacksDay > 0 ? "/$_maxAttacksDay" : ""}',
+                color: kDesertSand,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _counterChip(
+                context,
+                label: 'الجلسة',
+                value: '$_attacksThisSession${_maxAttacksSession > 0 ? "/$_maxAttacksSession" : ""}',
+                color: kDesertGold,
+              ),
+            ),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  Color _bgStatusColor(String s) {
+    if (s.contains('LIMIT') || s.contains('REACHED')) return Colors.red;
+    if (s.contains('BREAK')) return Colors.orange;
+    if (s.contains('ATTACK')) return Colors.green;
+    if (s.contains('ONLINE')) return Colors.green;
+    if (s.contains('LOGIN_FAILED') || s.contains('DESTROYED')) return Colors.red;
+    if (s.contains('SCAN')) return kDesertGold;
+    if (s.contains('SPY')) return Colors.orange;
+    return Colors.grey;
+  }
+
+  Widget _counterChip(BuildContext context,
+      {required String label, required String value, required Color color}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Column(
+        children: [
+          Text(label,
+              style: TextStyle(
+                  color: AppTheme.subTextColor(context),
+                  fontSize: 9,
+                  decoration: TextDecoration.none)),
+          const SizedBox(height: 2),
+          Text(value,
+              style: TextStyle(
+                  color: color,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none)),
+        ],
+      ),
+    );
   }
 
   Widget _autoControlsCard(BuildContext context, DesertAutoService svc) {
@@ -820,8 +1036,164 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
                   style: TextStyle(color: kDesertSand)),
             ),
           ]),
+          const SizedBox(height: 12),
+          Divider(color: AppTheme.subTextColor(context).withOpacity(0.15)),
+          const SizedBox(height: 8),
+          Row(children: [
+            const Icon(Icons.speed_rounded, color: kDesertGold, size: 18),
+            const SizedBox(width: 8),
+            Text('حدود الهجمات (خلفية)',
+                style: TextStyle(
+                    color: AppTheme.textColor(context),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    decoration: TextDecoration.none)),
+          ]),
+          const SizedBox(height: 4),
+          Text('0 = بدون حد · العداد يُصفّر تلقائياً كل يوم',
+              style: TextStyle(
+                  fontSize: 10,
+                  color: AppTheme.subTextColor(context),
+                  decoration: TextDecoration.none)),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: _numberField(
+                context,
+                label: 'حد يومي',
+                hint: '0 = ∞',
+                value: _maxAttacksDay,
+                onChanged: (v) async {
+                  setState(() => _maxAttacksDay = v);
+                  final p = await SharedPreferences.getInstance();
+                  await p.setInt('desert_bg_max_attacks_day', v);
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _numberField(
+                context,
+                label: 'حد جلسة',
+                hint: '0 = ∞',
+                value: _maxAttacksSession,
+                onChanged: (v) async {
+                  setState(() => _maxAttacksSession = v);
+                  final p = await SharedPreferences.getInstance();
+                  await p.setInt('desert_bg_max_attacks_session', v);
+                },
+              ),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: _numberField(
+                context,
+                label: 'راحة كل N هجمة',
+                hint: '0 = لا',
+                value: _breakEvery,
+                onChanged: (v) async {
+                  setState(() => _breakEvery = v);
+                  final p = await SharedPreferences.getInstance();
+                  await p.setInt('desert_bg_break_every', v);
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _numberField(
+                context,
+                label: 'مدة الراحة (دقيقة)',
+                hint: '15',
+                value: _breakMinutes,
+                onChanged: (v) async {
+                  setState(() => _breakMinutes = v);
+                  final p = await SharedPreferences.getInstance();
+                  await p.setInt('desert_bg_break_minutes', v);
+                },
+              ),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: Text(
+                  'العداد الحالي: $_attacksToday${_maxAttacksDay > 0 ? "/$_maxAttacksDay" : ""} يومي · $_attacksThisSession${_maxAttacksSession > 0 ? "/$_maxAttacksSession" : ""} جلسة',
+                  style: TextStyle(
+                      fontSize: 10,
+                      color: AppTheme.subTextColor(context),
+                      decoration: TextDecoration.none)),
+            ),
+            TextButton.icon(
+              onPressed: _resetCounters,
+              icon: const Icon(Icons.refresh_rounded,
+                  size: 14, color: AppTheme.orange),
+              label: const Text('تصفير',
+                  style: TextStyle(fontSize: 11, color: AppTheme.orange)),
+              style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8)),
+            ),
+          ]),
         ],
       ),
+    );
+  }
+
+  Future<void> _resetCounters() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setInt('desert_bg_attacks_today', 0);
+    final d = DateTime.now();
+    final today = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    await p.setString('desert_bg_attacks_date', today);
+    if (mounted) {
+      setState(() {
+        _attacksToday = 0;
+        _attacksThisSession = 0;
+      });
+      _snack('تم تصفير العدادات', color: AppTheme.green);
+    }
+  }
+
+  Widget _numberField(
+    BuildContext context, {
+    required String label,
+    required String hint,
+    required int value,
+    required ValueChanged<int> onChanged,
+  }) {
+    return TextField(
+      controller: TextEditingController(text: value.toString())
+        ..selection = TextSelection.collapsed(offset: value.toString().length),
+      keyboardType: TextInputType.number,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      style: TextStyle(
+          color: AppTheme.textColor(context),
+          fontSize: 13,
+          fontWeight: FontWeight.bold),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        labelStyle: TextStyle(
+            color: AppTheme.subTextColor(context), fontSize: 10),
+        hintStyle: TextStyle(
+            color: AppTheme.subTextColor(context).withOpacity(0.5),
+            fontSize: 10),
+        isDense: true,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide:
+                BorderSide(color: kDesertGold.withOpacity(0.3))),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: kDesertGold)),
+      ),
+      onChanged: (s) {
+        final v = int.tryParse(s) ?? 0;
+        onChanged(v.clamp(0, 9999));
+      },
     );
   }
 
