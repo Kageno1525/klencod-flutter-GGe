@@ -255,15 +255,13 @@ class UnitSuggestion {
 }
 
 // ═══════════════════════════════════════════════════════════
-// ✅ الإعدادات — الافتراضي 5 بدل 50
-// ═══════════════════════════════════════════════════════════
 class DesertAttackSettings {
   int radiusTiles;
   String sortBy;
   int sourceAreaId;
 
   DesertAttackSettings({
-    this.radiusTiles = 5,   // ✅ افتراضي 5 بدل 50
+    this.radiusTiles = 5,
     this.sortBy = 'distance',
     this.sourceAreaId = 0,
   });
@@ -274,7 +272,7 @@ class DesertAttackSettings {
 
   static Future<DesertAttackSettings> load() async {
     final p = await SharedPreferences.getInstance();
-    int radius = p.getInt(_kRadius) ?? 5;   // ✅ 5 بدل 50
+    int radius = p.getInt(_kRadius) ?? 5;
     if (radius < kDesertRadiusMin) radius = kDesertRadiusMin;
     if (radius > kDesertRadiusMax) radius = kDesertRadiusMax;
     return DesertAttackSettings(
@@ -732,6 +730,7 @@ class DesertAttackService {
 
     await _ensureKingdom(tower.kid);
     try {
+      // ✅ wave واحدة فقط (A فيها عنصر واحد)
       final payload = {
         'SX': source.x, 'SY': source.y,
         'TX': tower.x, 'TY': tower.y,
@@ -743,7 +742,7 @@ class DesertAttackService {
                 'U': _fillUnits(leftUnits, 2)},
           'R': {'T': List.generate(2, (_) => [-1, 0]),
                 'U': _fillUnits(rightUnits, 2)},
-          'M': {'T': List.generate(6, (_) => [-1, 0]),
+          'M': {'T': List.generate(3, (_) => [-1, 0]),
                 'U': _fillUnits(middleUnits, 6)},
         }],
         'BKS': [], 'AST': [-1, -1, -1],

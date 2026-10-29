@@ -6,6 +6,12 @@ import '../gge_client.dart';
 import '../models.dart';
 import 'desert_attack_service.dart';
 
+class AutoStatusEntry {
+  final DateTime at;
+  final String message;
+  AutoStatusEntry(this.at, this.message);
+}
+
 class DesertAutoService {
   static final DesertAutoService instance = DesertAutoService._();
   DesertAutoService._();
@@ -13,11 +19,17 @@ class DesertAutoService {
   static const _kEnabled = 'desert_auto_enabled';
   static const _kSourceAreaId = 'desert_auto_source';
   static const _kMinOffensive = 'desert_auto_min_off';
-  static const _kSafetyRatio = 'desert_auto_safety';
   static const _kLastScan = 'desert_auto_last_scan';
   static const _kLastReplenish = 'desert_auto_last_repl';
+  static const _kCommanderIds = 'desert_auto_commander_ids';
+  static const _kTransferUnitIds = 'desert_auto_transfer_unit_ids';
 
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
+  final List<AutoStatusEntry> _history = [];
+  List<AutoStatusEntry> get statusHistory => List.unmodifiable(_history);
+
+  int attacksThisSession = 0;
+  int towersScanned = 0;
 
   Timer? _timer;
   StreamSubscription? _xtSub;
@@ -26,7 +38,11 @@ class DesertAutoService {
   DesertAttackService? _svc;
   GgeClient? _client;
   List<DesertTower> _towers = [];
+  List<DesertTower> get towers => List.unmodifiable(_towers);
 
+  // ═══════════════════════════════════════════════════════
+  //  Settings
+  // ═══════════════════════════════════════════════════════
   Future<bool> isEnabled() async {
     final p = await SharedPreferences.getInstance();
     return p.getBool(_kEnabled) ?? false;
@@ -43,14 +59,48 @@ class DesertAutoService {
     await p.setInt(_kSourceAreaId, areaId);
   }
 
+  // ✅ commander IDs filter (فاضي = الكل)
+  Future<List<int>> getCommanderIds() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getStringList(_kCommanderIds) ?? [];
+    return raw.map((s) => int.tryParse(s) ?? 0).where((i) => i >= 0).toList();
+  }
+
+  Future<void> setCommanderIds(List<int> ids) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setStringList(
+        _kCommanderIds, ids.map((e) => e.toString()).toList());
+    TrafficLog.add('ST', '[Desert-Auto] commander filter: $ids');
+  }
+
+  // ✅ transfer units filter (فاضي = كل الـ offensive)
+  Future<List<int>> getTransferUnitIds() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getStringList(_kTransferUnitIds) ?? [];
+    return raw.map((s) => int.tryParse(s) ?? 0).where((i) => i > 0).toList();
+  }
+
+  Future<void> setTransferUnitIds(List<int> ids) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setStringList(
+        _kTransferUnitIds, ids.map((e) => e.toString()).toList());
+    TrafficLog.add('ST', '[Desert-Auto] transfer filter: $ids');
+  }
+
   bool get isRunning => _running;
 
+  // ═══════════════════════════════════════════════════════
+  //  Lifecycle
+  // ═══════════════════════════════════════════════════════
   Future<void> start(GgeClient client, {int? sourceAreaId}) async {
     if (_running) return;
 
     _client = client;
     _svc = DesertAttackService(client);
     await _svc!.loadCooldowns();
+
+    attacksThisSession = 0;
+    towersScanned = 0;
 
     _xtSub?.cancel();
     _xtSub = client.xtStream.listen((msg) {
@@ -97,9 +147,14 @@ class DesertAutoService {
 
   void _setStatus(String s) {
     statusNotifier.value = s;
+    _history.add(AutoStatusEntry(DateTime.now(), s));
+    if (_history.length > 200) _history.removeAt(0);
     TrafficLog.add('ST', '[Desert-Auto] $s');
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  Main tick
+  // ═══════════════════════════════════════════════════════
   Future<void> _tick() async {
     if (!_running || _processing) return;
     if (!await isEnabled()) {
@@ -123,8 +178,6 @@ class DesertAutoService {
         final current = statusNotifier.value;
         if (current == initialStatus) {
           _setStatus('💤 Idle  ·  ⏱ 30s');
-        } else if (!current.contains('❌')) {
-          _setStatus('$current  ·  ⏱ 30s');
         }
       }
     } catch (e) {
@@ -134,6 +187,9 @@ class DesertAutoService {
     }
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  Replenish (main → desert)
+  // ═══════════════════════════════════════════════════════
   Future<void> _maybeReplenish() async {
     if (_client == null) return;
     final p = await SharedPreferences.getInstance();
@@ -180,12 +236,20 @@ class DesertAutoService {
 
       final mainUnits = await _client!.getCastleUnits(
           main.kingdomId, main.areaId, catalog);
-      final offensiveMain = mainUnits
+
+      // ✅ نطبّق فلتر الوحدات المحفوظ
+      final selectedIds = await getTransferUnitIds();
+      var offensiveMain = mainUnits
           .where((u) => u.isCombat && !u.isDefensive && u.amount > 0)
           .toList();
+      if (selectedIds.isNotEmpty) {
+        offensiveMain = offensiveMain
+            .where((u) => selectedIds.contains(u.wodId))
+            .toList();
+      }
 
       if (offensiveMain.isEmpty) {
-        _setStatus('❌ Main has no offensive units');
+        _setStatus('❌ Main has no selected offensive units');
         return;
       }
 
@@ -213,6 +277,9 @@ class DesertAutoService {
     }
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  Rescan
+  // ═══════════════════════════════════════════════════════
   Future<void> _maybeRescan() async {
     if (_client == null || _svc == null) return;
     final p = await SharedPreferences.getInstance();
@@ -238,12 +305,12 @@ class DesertAutoService {
       }
       if (desert == null) return;
 
-      // ✅ نقرأ النطاق من الإعدادات المحفوظة (الافتراضي 5)
       final settings = await DesertAttackSettings.load();
       final radius = settings.radiusTiles;
 
       _setStatus('🔍 Scanning towers ($radius tile)...');
       _towers = await _svc!.scanArea(source: desert, radiusTiles: radius);
+      towersScanned = _towers.length;
       await p.setString(_kLastScan, DateTime.now().toIso8601String());
       _setStatus('✓ Found ${_towers.length} towers @ $radius tile');
     } catch (e) {
@@ -251,6 +318,9 @@ class DesertAutoService {
     }
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  Attack loop (يبدأ من الأقرب، ويفضل يهجم لحد ما الموارد تخلص)
+  // ═══════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
 
@@ -267,38 +337,55 @@ class DesertAutoService {
       if (desert == null) return;
 
       final catalog = await _client!.loadCatalog();
-      final units = await _client!.getCastleUnits(
-          desert.kingdomId, desert.areaId, catalog);
 
-      final sendable = units
-          .where((u) => u.isCombat && u.amount > 0)
-          .toList();
-
-      if (sendable.isEmpty) {
-        _setStatus('⏳ No combat units in desert');
-        return;
-      }
-
-      final cmds = await _client!.getCommanders();
-      final freeLords = cmds.where((c) => !c.isBusy).toList();
-      if (freeLords.isEmpty) {
-        _setStatus('⏳ All lords busy');
-        return;
-      }
-
-      final candidates = _towers
+      // ✅ الأقرب أولاً
+      final allCandidates = _towers
           .where((t) => !_svc!.isTowerInCooldown(t))
-          .take(3)
-          .toList();
+          .toList()
+        ..sort((a, b) =>
+            a.distanceFromSource.compareTo(b.distanceFromSource));
 
-      if (candidates.isEmpty) {
+      if (allCandidates.isEmpty) {
         _setStatus('⏳ All towers in cooldown');
         return;
       }
 
-      for (final tower in candidates) {
+      // ✅ قائمة القواد المسموح بها
+      final selectedCommanderIds = await getCommanderIds();
+
+      int attacksThisTick = 0;
+
+      for (final tower in allCandidates) {
         if (!_running) break;
 
+        // ── نفحص الوحدات كل لفة ──
+        final freshUnits = await _client!.getCastleUnits(
+            desert.kingdomId, desert.areaId, catalog);
+        final sendable = freshUnits
+            .where((u) => u.isCombat && u.amount > 0)
+            .toList();
+
+        if (sendable.isEmpty) {
+          _setStatus('⏳ Units exhausted (${attacksThisTick} attacks this tick)');
+          break;
+        }
+
+        // ── نفحص القواد كل لفة ──
+        final cmds = await _client!.getCommanders();
+        var freeLords = cmds.where((c) => !c.isBusy).toList();
+        if (selectedCommanderIds.isNotEmpty) {
+          freeLords = freeLords
+              .where((c) => selectedCommanderIds.contains(c.lord.id))
+              .toList();
+        }
+        if (freeLords.isEmpty) {
+          _setStatus(selectedCommanderIds.isEmpty
+              ? '⏳ All lords busy'
+              : '⏳ All selected lords busy');
+          break;
+        }
+
+        // ── Spy + report ──
         var report = _svc!.getCachedReport(tower);
         if (report == null ||
             DateTime.now().difference(report.fetchedAt).inMinutes > 10) {
@@ -313,6 +400,7 @@ class DesertAutoService {
           }
         }
 
+        // ── Viability ──
         final totalAvail =
             sendable.fold<int>(0, (s, u) => s + u.amount);
         final viable = _svc!.analyzeAttack(
@@ -326,6 +414,7 @@ class DesertAutoService {
           continue;
         }
 
+        // ── Suggest ──
         final suggestion = _svc!.suggestCounter(
           available: sendable,
           defenders: report.toDefenderSummary(),
@@ -333,19 +422,17 @@ class DesertAutoService {
 
         if (suggestion.totalUnits <= 0) {
           TrafficLog.add('ER',
-              '[Desert-Auto] ⚠️ empty suggestion for ${tower.coordsLabel}: ${suggestion.reason}');
-          _setStatus('⚠️ Empty suggestion (check defenders)');
+              '[Desert-Auto] ⚠️ empty suggestion for ${tower.coordsLabel}');
           continue;
         }
 
         if (suggestion.left.isEmpty &&
             suggestion.middle.isEmpty &&
             suggestion.right.isEmpty) {
-          TrafficLog.add('ER',
-              '[Desert-Auto] ⚠️ all wings empty for ${tower.coordsLabel}');
           continue;
         }
 
+        // ── Lord ──
         Lord lord;
         try {
           lord = freeLords.firstWhere((c) => c.lord.id != 0).lord;
@@ -371,15 +458,23 @@ class DesertAutoService {
         );
 
         if (result.success) {
+          attacksThisTick++;
+          attacksThisSession++;
           TrafficLog.add('ST',
-              '[Desert-Auto] ✅ HIT ${tower.coordsLabel} mid=${result.movementId}');
-          _setStatus('✅ Hit ${tower.coordsLabel}!');
-          return;
+              '[Desert-Auto] ✅ HIT ${tower.coordsLabel} mid=${result.movementId} '
+              '($attacksThisTick this tick, $attacksThisSession session)');
+          _setStatus('✅ Hit ${tower.coordsLabel}! ($attacksThisTick)');
+          // ✅ نكمل للبرج التالي — مش بنرجع
         } else {
           TrafficLog.add('ER',
-              '[Desert-Auto] ❌ attack ${tower.coordsLabel} failed: ${result.error}');
+              '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel}: ${result.error}');
+          // ✅ نجرب البرج اللي بعده
         }
+      }
+
+      if (attacksThisTick > 0) {
+        _setStatus('🏁 Tick done — $attacksThisTick hits ($attacksThisSession total)');
       }
     } catch (e) {
       _setStatus('❌ Attack loop error: $e');

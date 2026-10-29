@@ -22,10 +22,13 @@ class DesertAttackScreen extends StatefulWidget {
   State<DesertAttackScreen> createState() => _DesertAttackScreenState();
 }
 
-class _DesertAttackScreenState extends State<DesertAttackScreen> {
+class _DesertAttackScreenState extends State<DesertAttackScreen>
+    with TickerProviderStateMixin {
   late final DesertAttackService _svc;
   late DesertAttackSettings _settings;
   StreamSubscription? _xtSub;
+
+  late TabController _tabCtrl;
 
   List<OwnedCastle> _castles = [];
   OwnedCastle? _source;
@@ -33,21 +36,23 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
   bool _scanning = false;
   int _scanDone = 0, _scanTotal = 0;
   bool _loading = true;
-  bool _autoEnabled = false;
+
+  // Auto tab state
+  List<CommanderInfo> _allCommanders = [];
+  List<CastleUnit> _mainUnits = [];
+  Set<int> _selectedCommanderIds = {};
+  Set<int> _selectedTransferIds = {};
+  bool _loadingAutoData = false;
 
   @override
   void initState() {
     super.initState();
     _svc = DesertAttackService(widget.client);
     _svc.loadCooldowns();
+    _tabCtrl = TabController(length: 2, vsync: this);
+    _tabCtrl.addListener(() => setState(() {}));
     _init();
     _xtSub = widget.client.xtStream.listen(_onXt);
-    _checkAutoStatus();
-  }
-
-  Future<void> _checkAutoStatus() async {
-    final enabled = await DesertAutoService.instance.isEnabled();
-    if (mounted) setState(() => _autoEnabled = enabled);
   }
 
   void _onXt(XtMessage msg) {
@@ -99,9 +104,13 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
   @override
   void dispose() {
     _xtSub?.cancel();
+    _tabCtrl.dispose();
     super.dispose();
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  Manual scan
+  // ═══════════════════════════════════════════════════════
   Future<void> _scan() async {
     if (_source == null) {
       _snack('اختر قلعة مصدر أولاً', color: AppTheme.red);
@@ -127,6 +136,9 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
         },
       );
       if (!mounted) return;
+      // ✅ نرتب الأقرب أولاً
+      found.sort((a, b) =>
+          a.distanceFromSource.compareTo(b.distanceFromSource));
       setState(() {
         _towers = found;
         _scanning = false;
@@ -143,27 +155,119 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
     }
   }
 
-  List<DesertTower> get _filtered {
-    var list = _towers.toList();
-    switch (_settings.sortBy) {
-      case 'distance':
-        list.sort((a, b) =>
-            a.distanceFromSource.compareTo(b.distanceFromSource));
-        break;
-      case 'spy':
-        list.sort((a, b) {
-          if (a.lastSpyAt == null && b.lastSpyAt == null) {
-            return a.distanceFromSource.compareTo(b.distanceFromSource);
-          }
-          if (a.lastSpyAt == null) return 1;
-          if (b.lastSpyAt == null) return -1;
-          return b.lastSpyAt!.compareTo(a.lastSpyAt!);
-        });
-        break;
-    }
+  List<DesertTower> get _filteredTowers {
+    final list = _towers.toList()
+      ..sort((a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
     return list;
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  Auto: load commanders + main units
+  // ═══════════════════════════════════════════════════════
+  Future<void> _loadAutoData() async {
+    if (_loadingAutoData) return;
+    setState(() => _loadingAutoData = true);
+    try {
+      // القواد
+      final cmds = await widget.client.getCommanders();
+      // وحدات القلعة الرئيسية
+      OwnedCastle? main;
+      for (final c in _castles) {
+        if (c.areaType == 1) {
+          main = c;
+          break;
+        }
+      }
+      main ??= _castles.isNotEmpty ? _castles.first : null;
+
+      List<CastleUnit> mainUnits = [];
+      if (main != null) {
+        final catalog = await widget.client.loadCatalog();
+        mainUnits = await widget.client.getCastleUnits(
+            main.kingdomId, main.areaId, catalog);
+      }
+
+      // الإعدادات المحفوظة
+      final savedCmds = await DesertAutoService.instance.getCommanderIds();
+      final savedUnits = await DesertAutoService.instance.getTransferUnitIds();
+
+      if (!mounted) return;
+      setState(() {
+        _allCommanders = cmds;
+        _mainUnits = mainUnits
+            .where((u) => u.isCombat && !u.isDefensive && u.amount > 0)
+            .toList();
+        _selectedCommanderIds = savedCmds.toSet();
+        _selectedTransferIds = savedUnits.toSet();
+        _loadingAutoData = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loadingAutoData = false);
+        _snack('Load error: $e', color: AppTheme.red);
+      }
+    }
+  }
+
+  Future<void> _openCommandersPicker() async {
+    if (_allCommanders.isEmpty) await _loadAutoData();
+    if (!mounted) return;
+
+    final result = await showModalBottomSheet<Set<int>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _MultiSelectSheet(
+        title: 'اختر القواد',
+        items: _allCommanders
+            .map((c) => _SelectItem(
+                  id: c.lord.id,
+                  label: c.lord.id == 0
+                      ? 'اللورد الرئيسي'
+                      : c.lord.displayName,
+                  subtitle: c.isBusy ? 'مشغول' : 'متاح',
+                ))
+            .toList(),
+        selected: _selectedCommanderIds,
+        allowEmpty: true,
+        emptyMeansAll: true,
+      ),
+    );
+    if (result == null) return;
+    await DesertAutoService.instance.setCommanderIds(result.toList());
+    if (mounted) setState(() => _selectedCommanderIds = result);
+  }
+
+  Future<void> _openTransferUnitsPicker() async {
+    if (_mainUnits.isEmpty) await _loadAutoData();
+    if (!mounted) return;
+
+    final result = await showModalBottomSheet<Set<int>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _MultiSelectSheet(
+        title: 'وحدات النقل من القلعة الرئيسية',
+        items: _mainUnits
+            .map((u) => _SelectItem(
+                  id: u.wodId,
+                  label: u.displayName,
+                  subtitle: 'متاح: ${u.amount}',
+                ))
+            .toList(),
+        selected: _selectedTransferIds,
+        allowEmpty: true,
+        emptyMeansAll: true,
+      ),
+    );
+    if (result == null) return;
+    await DesertAutoService.instance.setTransferUnitIds(result.toList());
+    if (mounted) setState(() => _selectedTransferIds = result);
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Tower sheet
+  // ═══════════════════════════════════════════════════════
   Future<void> _openTowerSheet(DesertTower tower) async {
     if (_source == null) {
       _snack('اختر قلعة مصدر', color: AppTheme.red);
@@ -213,7 +317,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _filtered;
     return Scaffold(
       body: Stack(
         children: [
@@ -222,54 +325,44 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
             child: Column(
               children: [
                 _header(context),
+                _tabBar(context),
                 if (_loading)
                   const Expanded(
                     child: Center(
                       child: CircularProgressIndicator(color: kDesertSand),
                     ),
                   )
-                else ...[
-                  _sourcePicker(context),
-                  if (_autoEnabled) _autoStatusBar(),
-                  _filterBar(context),
-                  if (_scanning) _progressBar(context),
+                else
                   Expanded(
-                    child: filtered.isEmpty
-                        ? _emptyView(context)
-                        : ListView.builder(
-                            padding:
-                                const EdgeInsets.fromLTRB(16, 4, 16, 100),
-                            itemCount: filtered.length,
-                            itemBuilder: (_, i) => FadeSlideIn(
-                              delay: Duration(milliseconds: 30 + i * 30),
-                              child: _towerCard(context, filtered[i]),
-                            ),
-                          ),
+                    child: _tabCtrl.index == 0 ? _manualTab() : _autoTab(),
                   ),
-                ],
               ],
             ),
           ),
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 16,
-            child: GradientButton(
-              label: _scanning
-                  ? 'جارٍ المسح ($_scanDone/$_scanTotal)'
-                  : 'مسح الصحراء (${_settings.radiusTiles} tile)',
-              icon: Icons.landscape_rounded,
-              gradient:
-                  const LinearGradient(colors: [kDesertSand, kDesertDark]),
-              loading: _scanning,
-              onPressed: _scanning ? null : _scan,
+          if (_tabCtrl.index == 0 && _source != null)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: GradientButton(
+                label: _scanning
+                    ? 'جارٍ المسح ($_scanDone/$_scanTotal)'
+                    : 'مسح الصحراء (${_settings.radiusTiles} tile)',
+                icon: Icons.landscape_rounded,
+                gradient:
+                    const LinearGradient(colors: [kDesertSand, kDesertDark]),
+                loading: _scanning,
+                onPressed: _scanning ? null : _scan,
+              ),
             ),
-          ),
         ],
       ),
     );
   }
 
+  // ═══════════════════════════════════════════════════════
+  //  Header + tabs
+  // ═══════════════════════════════════════════════════════
   Widget _header(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
@@ -300,103 +393,518 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
               ],
             ),
           ),
-          _buildAutoToggle(),
         ],
       ),
     );
   }
 
-  Widget _buildAutoToggle() {
-    return GestureDetector(
-      onTap: () async {
-        final newState = !_autoEnabled;
-
-        if (newState && _source == null) {
-          _snack('اختر قلعة مصدر أولاً قبل تشغيل Auto',
-              color: AppTheme.red);
-          return;
-        }
-
-        await DesertAutoService.instance.setEnabled(newState);
-        if (newState) {
-          await DesertAutoService.instance.start(
-            widget.client,
-            sourceAreaId: _source?.areaId,
-          );
-        } else {
-          DesertAutoService.instance.stop();
-        }
-        if (mounted) setState(() => _autoEnabled = newState);
-      },
+  Widget _tabBar(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(
-          gradient: _autoEnabled
-              ? const LinearGradient(
-                  colors: [Color(0xFF16A34A), Color(0xFF15803D)])
-              : null,
-          color: _autoEnabled ? null : Colors.white.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-              color: _autoEnabled
-                  ? Colors.green.withOpacity(0.5)
-                  : Colors.white24),
+          color: Colors.white.withOpacity(0.06),
+          borderRadius: BorderRadius.circular(12),
         ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(_autoEnabled ? Icons.pause_circle : Icons.play_circle,
-              size: 16, color: _autoEnabled ? Colors.white : kDesertSand),
-          const SizedBox(width: 4),
-          Text(_autoEnabled ? 'Auto: ON' : 'Auto',
-              style: TextStyle(
-                  color: _autoEnabled ? Colors.white : kDesertSand,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.none)),
+        child: Row(children: [
+          _tabBtn(context, 'يدوي', 0, Icons.touch_app_rounded),
+          _tabBtn(context, 'تلقائي', 1, Icons.auto_awesome_rounded),
         ]),
       ),
     );
   }
 
-  Widget _autoStatusBar() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: ValueListenableBuilder<String>(
-        valueListenable: DesertAutoService.instance.statusNotifier,
-        builder: (_, status, __) => Container(
-          padding: const EdgeInsets.all(10),
+  Widget _tabBtn(BuildContext context, String label, int index, IconData icon) {
+    final sel = _tabCtrl.index == index;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => _tabCtrl.animateTo(index),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: Colors.green.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.green.withOpacity(0.3)),
+            gradient: sel
+                ? const LinearGradient(colors: [kDesertSand, kDesertDark])
+                : null,
+            color: sel ? null : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
           ),
-          child: Row(children: [
-            const Icon(Icons.bolt_rounded, color: Colors.green, size: 14),
-            const SizedBox(width: 6),
-            const Text('Auto:',
-                style: TextStyle(
-                    color: Colors.green,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    decoration: TextDecoration.none)),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Text(status,
-                  style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 10,
-                      decoration: TextDecoration.none),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon,
+                  size: 16,
+                  color: sel ? Colors.white : AppTheme.subTextColor(context)),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: TextStyle(
+                      color:
+                          sel ? Colors.white : AppTheme.subTextColor(context),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                      decoration: TextDecoration.none)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Manual Tab
+  // ═══════════════════════════════════════════════════════
+  Widget _manualTab() {
+    final filtered = _filteredTowers;
+    return Column(
+      children: [
+        _sourcePicker(context),
+        _filterBar(context),
+        if (_scanning) _progressBar(context),
+        Expanded(
+          child: filtered.isEmpty
+              ? _emptyView(context)
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
+                  itemCount: filtered.length,
+                  itemBuilder: (_, i) => FadeSlideIn(
+                    delay: Duration(milliseconds: 30 + i * 30),
+                    child: _towerCard(context, filtered[i]),
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Auto Tab (الإعدادات + الستاتس الكبيرة)
+  // ═══════════════════════════════════════════════════════
+  Widget _autoTab() {
+    final svc = DesertAutoService.instance;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        _sourcePicker(context),
+        const SizedBox(height: 10),
+        _bigStatusCard(context, svc),
+        const SizedBox(height: 10),
+        _autoControlsCard(context, svc),
+        const SizedBox(height: 10),
+        _autoSettingsCard(context),
+        const SizedBox(height: 10),
+        _autoFilterCard(context, svc),
+      ],
+    );
+  }
+
+  Widget _bigStatusCard(BuildContext context, DesertAutoService svc) {
+    return ValueListenableBuilder<String>(
+      valueListenable: svc.statusNotifier,
+      builder: (_, status, __) {
+        final running = svc.isRunning;
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: running
+                  ? [const Color(0xFF16A34A), const Color(0xFF15803D)]
+                  : [const Color(0xFF37474F), const Color(0xFF546E7A)],
             ),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: (running ? Colors.green : Colors.grey)
+                    .withOpacity(0.3),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                      running ? Icons.bolt_rounded : Icons.pause_rounded,
+                      color: Colors.white,
+                      size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Auto Attack',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              decoration: TextDecoration.none)),
+                      Text(
+                          running
+                              ? 'يعمل · ${svc.attacksThisSession} هجمة'
+                              : 'متوقف',
+                          style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                              decoration: TextDecoration.none)),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(running ? 'ON' : 'OFF',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.none)),
+                ),
+              ]),
+              const SizedBox(height: 14),
+              // الحالة الحالية بخط كبير
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('آخر status',
+                        style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none)),
+                    const SizedBox(height: 4),
+                    Text(status,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.none)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              // عدادات
+              Row(children: [
+                Expanded(
+                    child: _miniStat('أبراج', svc.towersScanned.toString())),
+                Expanded(
+                    child: _miniStat(
+                        'هجمات', svc.attacksThisSession.toString())),
+                Expanded(
+                    child: _miniStat('سجل', svc.statusHistory.length.toString())),
+              ]),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _miniStat(String label, String value) {
+    return Column(children: [
+      Text(value,
+          style: const TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              decoration: TextDecoration.none)),
+      Text(label,
+          style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 10,
+              decoration: TextDecoration.none)),
+    ]);
+  }
+
+  Widget _autoControlsCard(BuildContext context, DesertAutoService svc) {
+    return ValueListenableBuilder<String>(
+      valueListenable: svc.statusNotifier,
+      builder: (_, __, ___) {
+        final running = svc.isRunning;
+        return AppTheme.glassCard(
+          context: context,
+          padding: const EdgeInsets.all(14),
+          child: Column(children: [
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  if (_source == null) {
+                    _snack('اختر قلعة مصدر أولاً', color: AppTheme.red);
+                    return;
+                  }
+                  if (running) {
+                    svc.stop();
+                    await svc.setEnabled(false);
+                  } else {
+                    await svc.setEnabled(true);
+                    await svc.start(widget.client,
+                        sourceAreaId: _source!.areaId);
+                  }
+                  if (mounted) setState(() {});
+                },
+                icon: Icon(
+                    running ? Icons.stop_rounded : Icons.play_arrow_rounded),
+                label: Text(running ? 'إيقاف Auto' : 'تشغيل Auto',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        decoration: TextDecoration.none)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor:
+                      running ? AppTheme.red : const Color(0xFF16A34A),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              height: 40,
+              child: OutlinedButton.icon(
+                onPressed: () => _showStatusHistory(context, svc),
+                icon: const Icon(Icons.history_rounded, size: 16),
+                label: Text(
+                    'عرض كل الـ status (${svc.statusHistory.length})',
+                    style: const TextStyle(
+                        fontSize: 12, decoration: TextDecoration.none)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: kDesertSand,
+                  side: const BorderSide(color: kDesertSand),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+          ]),
+        );
+      },
+    );
+  }
+
+  void _showStatusHistory(BuildContext context, DesertAutoService svc) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        height: MediaQuery.of(context).size.height * 0.85,
+        decoration: const BoxDecoration(
+          color: Color(0xFF0B0B14),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(children: [
+            Container(
+                width: 44,
+                height: 5,
+                margin: const EdgeInsets.only(top: 10, bottom: 12),
+                decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(3))),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Row(children: [
+                Icon(Icons.history_rounded, color: kDesertSand, size: 20),
+                SizedBox(width: 8),
+                Text('Status History',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.none)),
+              ]),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(12),
+                    border:
+                        Border.all(color: Colors.white.withOpacity(0.08))),
+                child: svc.statusHistory.isEmpty
+                    ? const Center(
+                        child: Text('لا يوجد سجل بعد',
+                            style: TextStyle(
+                                color: Colors.grey,
+                                fontFamily: 'monospace',
+                                fontSize: 11,
+                                decoration: TextDecoration.none)))
+                    : ListView.builder(
+                        itemCount: svc.statusHistory.length,
+                        itemBuilder: (_, i) {
+                          final e = svc.statusHistory[i];
+                          final t =
+                              '${e.at.hour.toString().padLeft(2, '0')}:${e.at.minute.toString().padLeft(2, '0')}:${e.at.second.toString().padLeft(2, '0')}';
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Row(children: [
+                              Text(t,
+                                  style: const TextStyle(
+                                      color: Colors.white38,
+                                      fontFamily: 'monospace',
+                                      fontSize: 10,
+                                      decoration: TextDecoration.none)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                  child: Text(e.message,
+                                      style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 11,
+                                          decoration:
+                                              TextDecoration.none))),
+                            ]),
+                          );
+                        },
+                      ),
+              ),
+            ),
+            const SizedBox(height: 12),
           ]),
         ),
       ),
     );
   }
 
+  Widget _autoSettingsCard(BuildContext context) {
+    return AppTheme.glassCard(
+      context: context,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.settings_rounded, color: kDesertSand, size: 18),
+            const SizedBox(width: 8),
+            Text('إعدادات المسح',
+                style: TextStyle(
+                    color: AppTheme.textColor(context),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    decoration: TextDecoration.none)),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: Text('النطاق: ${_settings.radiusTiles} tile',
+                  style: TextStyle(
+                      color: AppTheme.textColor(context),
+                      fontSize: 13,
+                      decoration: TextDecoration.none)),
+            ),
+            TextButton(
+              onPressed: () => _openRadiusSheet(context),
+              child: const Text('تعديل',
+                  style: TextStyle(color: kDesertSand)),
+            ),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  Widget _autoFilterCard(BuildContext context, DesertAutoService svc) {
+    return AppTheme.glassCard(
+      context: context,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.tune_rounded, color: AppTheme.orange, size: 18),
+            const SizedBox(width: 8),
+            Text('فلاتر البوت',
+                style: TextStyle(
+                    color: AppTheme.textColor(context),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    decoration: TextDecoration.none)),
+          ]),
+          const SizedBox(height: 10),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.people_alt_rounded,
+                color: kDesertGold, size: 22),
+            title: const Text('القواد المسموحين',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.none)),
+            subtitle: Text(
+                _selectedCommanderIds.isEmpty
+                    ? 'الكل (بدون فلتر)'
+                    : '${_selectedCommanderIds.length} قائد مختار',
+                style: const TextStyle(
+                    fontSize: 11, decoration: TextDecoration.none)),
+            trailing: const Icon(Icons.edit_rounded,
+                color: kDesertGold, size: 18),
+            onTap: _openCommandersPicker,
+          ),
+          Divider(color: AppTheme.subTextColor(context).withOpacity(0.1)),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.local_shipping_rounded,
+                color: AppTheme.teal, size: 22),
+            title: const Text('وحدات النقل من الرئيسية',
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.none)),
+            subtitle: Text(
+                _selectedTransferIds.isEmpty
+                    ? 'الكل (كل الوحدات الهجومية)'
+                    : '${_selectedTransferIds.length} نوع مختار',
+                style: const TextStyle(
+                    fontSize: 11, decoration: TextDecoration.none)),
+            trailing: const Icon(Icons.edit_rounded,
+                color: AppTheme.teal, size: 18),
+            onTap: _openTransferUnitsPicker,
+          ),
+          const SizedBox(height: 4),
+          Text(
+              'الفلتر الفاضي = يسمح بالكل',
+              style: TextStyle(
+                  fontSize: 10,
+                  color: AppTheme.subTextColor(context),
+                  decoration: TextDecoration.none)),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Shared widgets
+  // ═══════════════════════════════════════════════════════
   Widget _sourcePicker(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      padding: const EdgeInsets.fromLTRB(0, 4, 0, 4),
       child: AppTheme.glassCard(
         context: context,
         padding: const EdgeInsets.all(12),
@@ -441,9 +949,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                       _settings.sourceAreaId = v.areaId;
                       _settings.save();
                     });
-                    if (_autoEnabled) {
-                      DesertAutoService.instance.setSource(v.areaId);
-                    }
+                    DesertAutoService.instance.setSource(v.areaId);
                   },
                 ),
               ),
@@ -455,17 +961,10 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
   }
 
   Widget _filterBar(BuildContext context) {
-    final labels = {'distance': 'المسافة', 'spy': 'آخر تجسس'};
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+      padding: const EdgeInsets.fromLTRB(0, 4, 0, 4),
       child: Row(
         children: [
-          _chip(context,
-              icon: Icons.sort_rounded,
-              label: 'ترتيب: ${labels[_settings.sortBy] ?? ""}',
-              color: kDesertSand,
-              onTap: () => _openSortMenu(context)),
-          const SizedBox(width: 8),
           _chip(context,
               icon: Icons.place_rounded,
               label: '${_settings.radiusTiles} tile',
@@ -696,63 +1195,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
     );
   }
 
-  void _openSortMenu(BuildContext context) async {
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        decoration: const BoxDecoration(
-          color: Color(0xFF0B0B14),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 44, height: 5,
-                margin: const EdgeInsets.only(top: 10, bottom: 12),
-                decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(3)),
-              ),
-              ListTile(
-                leading: const Icon(Icons.place_rounded, color: kDesertSand),
-                title: const Text('المسافة',
-                    style: TextStyle(
-                        color: Colors.white,
-                        decoration: TextDecoration.none)),
-                trailing: _settings.sortBy == 'distance'
-                    ? const Icon(Icons.check, color: AppTheme.green)
-                    : null,
-                onTap: () => Navigator.pop(context, 'distance'),
-              ),
-              ListTile(
-                leading:
-                    const Icon(Icons.visibility_rounded, color: kDesertSand),
-                title: const Text('آخر تجسس',
-                    style: TextStyle(
-                        color: Colors.white,
-                        decoration: TextDecoration.none)),
-                trailing: _settings.sortBy == 'spy'
-                    ? const Icon(Icons.check, color: AppTheme.green)
-                    : null,
-                onTap: () => Navigator.pop(context, 'spy'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (selected != null) {
-      setState(() {
-        _settings.sortBy = selected;
-        _settings.save();
-      });
-    }
-  }
-
   void _openRadiusSheet(BuildContext context) {
     double temp = _settings.radiusTiles.toDouble();
     showDialog(
@@ -817,7 +1259,173 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Attack Sheet
+//  Multi-select sheet
+// ═══════════════════════════════════════════════════════════
+class _SelectItem {
+  final int id;
+  final String label;
+  final String? subtitle;
+  _SelectItem({required this.id, required this.label, this.subtitle});
+}
+
+class _MultiSelectSheet extends StatefulWidget {
+  final String title;
+  final List<_SelectItem> items;
+  final Set<int> selected;
+  final bool allowEmpty;
+  final bool emptyMeansAll;
+
+  const _MultiSelectSheet({
+    required this.title,
+    required this.items,
+    required this.selected,
+    this.allowEmpty = true,
+    this.emptyMeansAll = false,
+  });
+
+  @override
+  State<_MultiSelectSheet> createState() => _MultiSelectSheetState();
+}
+
+class _MultiSelectSheetState extends State<_MultiSelectSheet> {
+  late Set<int> _sel;
+
+  @override
+  void initState() {
+    super.initState();
+    _sel = Set.from(widget.selected);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.8,
+      decoration: const BoxDecoration(
+        color: Color(0xFF0B0B14),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(children: [
+          Container(
+              width: 44,
+              height: 5,
+              margin: const EdgeInsets.only(top: 10, bottom: 12),
+              decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(3))),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(children: [
+              const Icon(Icons.checklist_rounded, color: kDesertSand, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: Text(widget.title,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.none))),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    if (_sel.length == widget.items.length) {
+                      _sel.clear();
+                    } else {
+                      _sel = widget.items.map((e) => e.id).toSet();
+                    }
+                  });
+                },
+                child: Text(_sel.length == widget.items.length
+                    ? 'إلغاء الكل'
+                    : 'تحديد الكل',
+                    style: const TextStyle(color: kDesertSand, fontSize: 11)),
+              ),
+            ]),
+          ),
+          if (widget.emptyMeansAll)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Text(
+                  _sel.isEmpty ? '⚠️ فاضي = السماح للكل' : '${_sel.length} مختار',
+                  style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 10,
+                      decoration: TextDecoration.none)),
+            ),
+          const Divider(color: Colors.white12),
+          Expanded(
+            child: ListView.builder(
+              itemCount: widget.items.length,
+              itemBuilder: (_, i) {
+                final it = widget.items[i];
+                final sel = _sel.contains(it.id);
+                return CheckboxListTile(
+                  value: sel,
+                  activeColor: kDesertSand,
+                  title: Text(it.label,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          decoration: TextDecoration.none)),
+                  subtitle: it.subtitle != null
+                      ? Text(it.subtitle!,
+                          style: const TextStyle(
+                              color: Colors.white54,
+                              fontSize: 10,
+                              decoration: TextDecoration.none))
+                      : null,
+                  onChanged: (v) {
+                    setState(() {
+                      if (v == true) {
+                        _sel.add(it.id);
+                      } else {
+                        _sel.remove(it.id);
+                      }
+                    });
+                  },
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12))),
+                  child: const Text('إلغاء'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context, _sel),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: kDesertSand,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12))),
+                  child: const Text('حفظ',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  Manual attack sheet (نفس القديم)
 // ═══════════════════════════════════════════════════════════
 class _DesertAttackSheet extends StatefulWidget {
   final GgeClient client;
@@ -901,10 +1509,9 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
       _catalog = await widget.client.loadCatalog();
       final units = await widget.client.getCastleUnits(
           widget.source.kingdomId, widget.source.areaId, _catalog);
-      // ✅ شيلنا فلتر unlocked
-final sendable = units
-    .where((u) => u.isCombat && u.amount > 0)
-    .toList();
+      final sendable = units
+          .where((u) => u.isCombat && u.amount > 0)
+          .toList();
       final cmds = await widget.client.getCommanders();
 
       final cached = await widget.svc.loadCachedDefenders(widget.tower);
@@ -1130,20 +1737,6 @@ final sendable = units
             _reportRow('الأمام', d.middleMelee, d.middleRanged),
             const SizedBox(height: 6),
             _reportRow('الجناح اليمين', d.rightMelee, d.rightRanged),
-            const SizedBox(height: 12),
-            Text(
-                'GC: ${report.goldCampValue}  ·  AS: ${report.availableAttacks}',
-                style: TextStyle(
-                    color: AppTheme.subTextColor(ctx),
-                    fontSize: 11,
-                    decoration: TextDecoration.none)),
-            const SizedBox(height: 8),
-            const Text('✅ اتملت الدفاعات تلقائياً',
-                style: TextStyle(
-                    color: Colors.green,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    decoration: TextDecoration.none)),
           ],
         ),
         actions: [
@@ -1212,8 +1805,7 @@ final sendable = units
       widget.onSpySent(res.movementId);
       if (!mounted) return;
       _snack(
-        'تم إرسال الجواسيس (MID=${res.movementId ?? "?"})\n'
-        'استنى 20-30 ثانية، بعدين دوس "جلب التقرير"',
+        'تم إرسال الجواسيس (MID=${res.movementId ?? "?"})',
         color: AppTheme.green,
       );
     } else {
@@ -1296,8 +1888,40 @@ final sendable = units
         ),
         child: Column(
           children: [
-            _handle(),
-            _headerWidget(t),
+            Container(
+              width: 44, height: 5,
+              margin: const EdgeInsets.only(top: 10),
+              decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(3)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Row(children: [
+                Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    gradient:
+                        const LinearGradient(colors: [kDesertSand, kDesertDark]),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.landscape_rounded,
+                      color: Colors.white, size: 20),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text('برج صحراء ${t.coordsLabel}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.none)),
+                ),
+                IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                    onPressed: () => Navigator.pop(context)),
+              ]),
+            ),
             const Divider(),
             Expanded(
               child: _loading
@@ -1321,48 +1945,40 @@ final sendable = units
                       ],
                     ),
             ),
-            _footer(),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton.icon(
+                    onPressed: _sending || _loading ? null : _attack,
+                    icon: _sending
+                        ? const SizedBox(
+                            width: 18, height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.gavel_rounded),
+                    label: Text(
+                        _sending ? 'جارٍ الإرسال...' : 'هجوم ($_grandTotal)',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            decoration: TextDecoration.none)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: kDesertSand,
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _handle() => Container(
-        width: 44, height: 5,
-        margin: const EdgeInsets.only(top: 10),
-        decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(3)),
-      );
-
-  Widget _headerWidget(DesertTower t) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-      child: Row(children: [
-        Container(
-          width: 40, height: 40,
-          decoration: BoxDecoration(
-            gradient:
-                const LinearGradient(colors: [kDesertSand, kDesertDark]),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: const Icon(Icons.landscape_rounded,
-              color: Colors.white, size: 20),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text('برج صحراء ${t.coordsLabel}',
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.none)),
-        ),
-        IconButton(
-            icon: const Icon(Icons.close, color: Colors.white70),
-            onPressed: () => Navigator.pop(context)),
-      ]),
     );
   }
 
@@ -1627,26 +2243,6 @@ final sendable = units
                   color: Colors.white70,
                   fontSize: 11,
                   decoration: TextDecoration.none)),
-          const SizedBox(height: 4),
-          Row(children: [
-            Text('وحداتك: ${v.myUnitCount}',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    decoration: TextDecoration.none)),
-            const SizedBox(width: 12),
-            Text('العدو: ${v.enemyUnitCount}',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    decoration: TextDecoration.none)),
-            const SizedBox(width: 12),
-            Text('قوة العدو: ${v.enemyStrength}',
-                style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 11,
-                    decoration: TextDecoration.none)),
-          ]),
         ],
       ),
     );
@@ -1894,38 +2490,4 @@ final sendable = units
           fontSize: 12,
           fontWeight: FontWeight.bold,
           decoration: TextDecoration.none));
-
-  Widget _footer() {
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: SizedBox(
-          width: double.infinity,
-          height: 52,
-          child: ElevatedButton.icon(
-            onPressed: _sending || _loading ? null : _attack,
-            icon: _sending
-                ? const SizedBox(
-                    width: 18, height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.gavel_rounded),
-            label: Text(
-                _sending ? 'جارٍ الإرسال...' : 'هجوم ($_grandTotal)',
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                    decoration: TextDecoration.none)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: kDesertSand,
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
