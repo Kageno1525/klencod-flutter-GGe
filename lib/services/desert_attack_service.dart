@@ -9,7 +9,7 @@ const int kDesertRadiusMin = 5;
 const int kDesertRadiusMax = 100;
 const int kDesertRadiusStep = 5;
 const int kDesertChunkSize = 13;
-const int kDefaultTowerCooldownMinutes = 15;
+const int kDefaultTowerCooldownMinutes = 240; // ✅ 4 ساعات
 const int kAttackPowerPerUnit = 10;
 
 // ═══════════════════════════════════════════════════════════
@@ -778,7 +778,7 @@ class DesertAttackService {
       if (resp.resultCode == 218) return DesertAttackResult.fail('LORD_BUSY_218');
       if (resp.resultCode == 181) return DesertAttackResult.fail('MAX_MOVEMENTS_181');
       if (resp.resultCode == 100) return DesertAttackResult.fail('CRA_100');
-      if (resp.resultCode == 313) return DesertAttackResult.fail('CRA_313 (Empty Wing/Target)');
+      if (resp.resultCode == 313) return DesertAttackResult.fail('CRA_313 (Already gone/Cooldown)');
       return DesertAttackResult.fail('CRA ${resp.resultCode}');
     } catch (e) {
       TrafficLog.add('ER', '[Desert-Attack] exception: $e');
@@ -834,29 +834,47 @@ class DesertAttackService {
     final meleeIds = melee.map((u) => u.wodId).toSet();
     bool isMeleeType(int wodId) => meleeIds.contains(wodId);
 
+    final leftDef = defenders.leftMelee + defenders.leftRanged;
+    final middleDef = defenders.middleMelee + defenders.middleRanged;
+    final rightDef = defenders.rightMelee + defenders.rightRanged;
+    final totalDef = leftDef + middleDef + rightDef;
+
+    if (totalDef == 0) {
+      return UnitSuggestion(
+        left: [], middle: [], right: [],
+        reason: '⚠️ الدفاعات صفر — تخطي',
+      );
+    }
+
+    final totalAvail = combat.fold<int>(0, (s, u) => s + u.amount);
+
     List<List<int>> allocateWing({
       required int defMelee,
       required int defRanged,
       required int maxSlots,
-      int safetyPct = 150,
     }) {
-      final totalDef = defMelee + defRanged;
-      if (totalDef <= 0) return []; // ✅ لو الجناح فاضي، متبعتش عليه جنود
-      
-      final target = (totalDef * safetyPct) ~/ 100;
+      final totalDefForWing = defMelee + defRanged;
+      if (totalDefForWing <= 0) return []; // ✅ جناح العدو فاضي، متبعتش جنود
 
-      double meleeRatio;
-      if (melee.isEmpty) {
-        meleeRatio = 0.0;
-      } else if (ranged.isEmpty) {
-        meleeRatio = 1.0;
-      } else if (defRanged > defMelee) {
-        meleeRatio = 0.70;
-      } else if (defMelee > defRanged) {
-        meleeRatio = 0.30;
+      // حساب نسبة هذا الجناح من إجمالي دفاعات العدو
+      final wingShare = totalDefForWing / totalDef;
+      
+      int target;
+      if (totalAvail >= totalDef * 1.5) {
+        // لو الجنود كفاية، بنبعت 1.5 ضعف دفاع الجناح
+        target = (totalDefForWing * 1.5).round();
       } else {
-        meleeRatio = 0.50;
+        // لو الجنود قليلة، بنوزعها بالنسب عشان منسيبش جناح فاضي
+        target = (totalAvail * wingShare).round();
       }
+      if (target == 0) target = 1;
+
+      // موازنة القوة (Counter) - لو العدو رماية نبعت مشاة والعكس
+      double meleeRatio = 0.5;
+      if (ranged.isEmpty) meleeRatio = 1.0;
+      else if (melee.isEmpty) meleeRatio = 0.0;
+      else if (defRanged > defMelee) meleeRatio = 0.7; // العدو رماية -> نبعت 70% مشاة
+      else if (defMelee > defRanged) meleeRatio = 0.3; // العدو مشاة -> نبعت 70% رماية
 
       int meleeTarget = (target * meleeRatio).round();
       int rangedTarget = target - meleeTarget;
@@ -870,8 +888,6 @@ class DesertAttackService {
         meleeSlots = maxSlots;
       } else if (rangedTarget > 0) {
         rangedSlots = maxSlots;
-      } else {
-        return [];
       }
 
       final out = <List<int>>[];
@@ -908,24 +924,34 @@ class DesertAttackService {
         rangedAlloc += take;
       }
 
+      // ✅ لو لسه فاضي (بسبب نقص الوحدات)، نحاول نحط أي حاجة متاحة
+      if (out.isEmpty) {
+        for (final u in melee) {
+          final rem = remaining[u.wodId] ?? 0;
+          if (rem > 0) {
+            out.add([u.wodId, 1]);
+            remaining[u.wodId] = rem - 1;
+            break;
+          }
+        }
+      }
+      if (out.isEmpty) {
+        for (final u in ranged) {
+          final rem = remaining[u.wodId] ?? 0;
+          if (rem > 0) {
+            out.add([u.wodId, 1]);
+            remaining[u.wodId] = rem - 1;
+            break;
+          }
+        }
+      }
+
       return out;
     }
 
-    final left = allocateWing(
-      defMelee: defenders.leftMelee,
-      defRanged: defenders.leftRanged,
-      maxSlots: 2,
-    );
-    final middle = allocateWing(
-      defMelee: defenders.middleMelee,
-      defRanged: defenders.middleRanged,
-      maxSlots: 5,
-    );
-    final right = allocateWing(
-      defMelee: defenders.rightMelee,
-      defRanged: defenders.rightRanged,
-      maxSlots: 2,
-    );
+    final left = allocateWing(defMelee: defenders.leftMelee, defRanged: defenders.leftRanged, maxSlots: 2);
+    final middle = allocateWing(defMelee: defenders.middleMelee, defRanged: defenders.middleRanged, maxSlots: 5);
+    final right = allocateWing(defMelee: defenders.rightMelee, defRanged: defenders.rightRanged, maxSlots: 2);
 
     List<List<int>> clean(List<List<int>> l) =>
         l.where((e) => e.length >= 2 && e[0] > 0 && e[1] > 0).toList();
@@ -934,11 +960,10 @@ class DesertAttackService {
     var middleOut = clean(middle);
     var rightOut = clean(right);
 
-    // ✅ شيلنا التوزيع العشوائي لما كل الأجنحة تكون فاضية عشان نمنع خطأ 313
     if (leftOut.isEmpty && middleOut.isEmpty && rightOut.isEmpty) {
       return UnitSuggestion(
         left: [], middle: [], right: [],
-        reason: '⚠️ الدفاعات صفر — تخطي',
+        reason: '⚠️ لم يتم توزيع أي وحدات',
       );
     }
 
