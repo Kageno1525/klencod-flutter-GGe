@@ -6,13 +6,21 @@ import '../gge_client.dart';
 import '../models.dart';
 
 // ═══════════════════════════════════════════════════════════
-//  Level mapping: rawLevel (2-6) → uiLevel (40-80)
+//  Level mapping: rawLevel → uiLevel
+//  rawLevel 0 → 20, 1 → 30, 2 → 40, 3 → 50, 4 → 60, 5 → 70, 6 → 80, 7 → 90, 8 → 100
+//  (نفس الصيغة rawLevel * 10 + 20 للتغطية الكاملة من 20 إلى 100)
 // ═══════════════════════════════════════════════════════════
 int rawToUiLevel(int rawLevel, {bool isResourceNode = false}) {
   if (isResourceNode) return rawLevel;
-  if (rawLevel >= 2 && rawLevel <= 6) return rawLevel * 10 + 20;
+  if (rawLevel >= 0 && rawLevel <= 10) return rawLevel * 10 + 20;
   return rawLevel;
 }
+
+// جميع المستويات المتاحة للفلترة (5 إلى 100 بخطوة 5)
+const List<int> kAllUiLevels = [
+  5, 10, 15, 20, 25, 30, 35, 40, 45, 50,
+  55, 60, 65, 70, 75, 80, 85, 90, 95, 100,
+];
 
 // ═══════════════════════════════════════════════════════════
 //  NpcTarget
@@ -26,9 +34,8 @@ class NpcTarget {
   final String sourceName;
   final double distanceFromSource;
 
-  // from ssi enrichment
-  int? goldCampValue; // GC — only appears on level 80 (raw 6)
-  int? attacksRemaining; // AS
+  int? goldCampValue;      // GC
+  int? attacksRemaining;   // AS (مش هجمات متبقية فعلاً — حقل تاني، مؤقتاً بنعرضه كـ AS)
   int? resourceAmount;
   DateTime? lastEnrichedAt;
 
@@ -72,7 +79,10 @@ class NpcTarget {
     return DateTime.now().difference(lastEnrichedAt!).inMinutes >= 5;
   }
 
-  bool get isLegendary => (goldCampValue ?? 0) >= 75;
+  // ✅ الذهبي = GC ≥ 75 و UI Level ≥ 80 (معاً فقط)
+  bool get isLegendary => (goldCampValue ?? 0) >= 75 && uiLevel >= 80;
+
+  // أي GC > 0 → لون برتقالي (مش ذهبي)
   bool get hasGold => (goldCampValue ?? 0) > 0;
 
   String get typeLabel => type == 24 ? 'Camp' : 'Resource';
@@ -114,9 +124,9 @@ class AttackFilterSettings {
     this.sortBy = 'gc',
     this.onlyLegendary = false,
     this.sourceAreaId = 0,
-  }) : visibleUiLevels = visibleUiLevels ?? {40, 50, 60, 70, 80};
+  }) : visibleUiLevels = visibleUiLevels ?? kAllUiLevels.toSet();
 
-  static const _kLevels = 'atk_levels_v2';
+  static const _kLevels = 'atk_levels_v3';
   static const _kMinGC = 'atk_min_gc';
   static const _kRadius = 'atk_radius';
   static const _kSort = 'atk_sort';
@@ -127,15 +137,26 @@ class AttackFilterSettings {
     final p = await SharedPreferences.getInstance();
     final lvlList = p.getStringList(_kLevels);
     Set<int>? uiLevels;
+
     if (lvlList != null && lvlList.isNotEmpty) {
       uiLevels = lvlList
           .map((s) => int.tryParse(s) ?? 0)
           .where((i) => i > 0)
           .toSet();
+
+      // Migration: لو القيم قديمة (2-6)، حوّلها لـ UI (40-80)
       if (uiLevels.every((v) => v >= 2 && v <= 6)) {
         uiLevels = uiLevels.map((v) => v * 10 + 20).toSet();
       }
+
+      // لو القيم = الافتراضي القديم {40,50,60,70,80} → استخدم الافتراضي الجديد الكامل
+      const oldDefault = {40, 50, 60, 70, 80};
+      if (uiLevels.length == oldDefault.length &&
+          uiLevels.containsAll(oldDefault)) {
+        uiLevels = kAllUiLevels.toSet();
+      }
     }
+
     return AttackFilterSettings(
       visibleUiLevels: uiLevels,
       minGC: p.getInt(_kMinGC) ?? 0,
@@ -249,19 +270,16 @@ class AttackService {
               if (entry is! List || entry.length < 9) continue;
               final type = _asInt(entry[0]);
 
-              // ✅ فقط NPC camps (type 24). type 25 = resource nodes (لليجمع مش للهجوم)
+              // NPC camps فقط (type 24). type 25 resource nodes ملهاش لازمة للهجوم.
               if (type != 24) continue;
 
               final x = _asInt(entry[1]);
               final y = _asInt(entry[2]);
               final areaId = _asInt(entry[3]);
-
-              // ✅ [24, X, Y, areaId, -403, buildingType, "", -1, rawLevel, bounty]
-              //    rawLevel في index[8]، مش index[5] (اللي هو buildingType)
               final rawLevel = _asInt(entry[8]);
 
-              // نطاق rawLevel الصحيح للـ NPC camps: 2-6
-              if (rawLevel < 2 || rawLevel > 6) continue;
+              // ✅ نقبل rawLevel من 0 إلى 10 (يغطي UI 20-120)
+              if (rawLevel < 0 || rawLevel > 10) continue;
 
               final key = '$x,$y,$areaId';
               if (seen.contains(key)) continue;
@@ -315,7 +333,6 @@ class AttackService {
       final gc = _asInt(data['GC']);
       final as = _asInt(data['AS']);
 
-      // bounty للـ NPC camps في index[9] (مش index[7])
       final gaa = data['gaa'] as Map?;
       final ai = gaa?['AI'] as List?;
       int? resourceAmt;
@@ -349,12 +366,12 @@ class AttackService {
     if (units.length > 10) return NpcAttackResult.fail('TOO_MANY_UNIT_TYPES');
 
     if (source.kingdomId != target.kid) {
-      return NpcAttackResult.fail('CROSS_KINGDOM: المصدر والهدف في مملكتين مختلفتين');
+      return NpcAttackResult.fail(
+          'CROSS_KINGDOM: المصدر والهدف في مملكتين مختلفتين');
     }
 
     await _ensureKingdom(target.kid);
 
-    // ✅ adi preview — نتحقق من resultCode
     try {
       final adiResp = await conn.sendXtAndWait(
         'adi',
@@ -382,18 +399,11 @@ class AttackService {
         kid: target.kid, lid: lordId, units: units,
       );
 
-      // ✅ debug logging للـ payload قبل الإرسال
-      final a = payload['A'] as List;
-      final a0 = a[0] as Map;
-      final m = a0['M'] as Map;
-      final l = a0['L'] as Map;
-      final r = a0['R'] as Map;
-      TrafficLog.add(
-          'ST',
-          '[CRA] slots: M.T=${(m['T'] as List).length} M.U=${(m['U'] as List).length} '
-          'L=${(l['U'] as List).length} R=${(r['U'] as List).length}');
+      final totalUnits = units.fold<int>(0, (s, e) => s + e[1]);
       TrafficLog.add('ST',
-          '[CRA] → (${target.x},${target.y}) Lv${target.uiLevel} units=${jsonEncode(units)} LID=$lordId');
+          '[CRA] → (${target.x},${target.y}) Lv${target.uiLevel} '
+          'types=${units.length} totalUnits=$totalUnits '
+          'units=${jsonEncode(units)} LID=$lordId');
 
       final resp = await conn.sendXtAndWait(
         'cra',
@@ -403,12 +413,21 @@ class AttackService {
         isAction: true,
       );
 
-      TrafficLog.add('ST', '[CRA-RESP] result=${resp.resultCode}');
+      TrafficLog.add('ST',
+          '[CRA-RESP] result=${resp.resultCode} payload=${resp.payload ?? "null"}');
 
       if (resp.resultCode == 0) {
         final mid = _extractMid(resp.payload);
-        final total = units.fold<int>(0, (s, e) => s + e[1]);
-        return NpcAttackResult.ok(mid ?? -1, target, total);
+        return NpcAttackResult.ok(mid ?? -1, target, totalUnits);
+      }
+
+      // ✅ كود 100 (مش موثق) — في اللوج رجع {"MS":32}
+      if (resp.resultCode == 100) {
+        final ms = _extractMs(resp.payload);
+        TrafficLog.add('ER',
+            '[CRA] result=100 MS=$ms — الاحتمال: جيشك أضعف من الحد الأدنى للمعسكر');
+        return NpcAttackResult.fail(
+            'CRA_100: ${ms != null ? "MS=$ms (جرب جيش أكبر)" : "unknown"}');
       }
 
       if (resp.resultCode == 91) return NpcAttackResult.fail('UNIT_NOT_SENDABLE_91');
@@ -419,7 +438,7 @@ class AttackService {
       }
 
       return NpcAttackResult.fail(
-          'CRA error ${resp.resultCode}: ${errorName(resp.resultCode)}');
+          'CRA error ${resp.resultCode}: ${resp.payload ?? errorName(resp.resultCode)}');
     } catch (e) {
       TrafficLog.add('ER', '[CRA] exception: $e');
       return NpcAttackResult.fail('$e');
@@ -442,7 +461,6 @@ class AttackService {
     final l = units.skip(6).take(2).toList();
     final r = units.skip(8).take(2).toList();
 
-    // ✅ T slots متساوية مع U slots في كل flank
     return {
       'SX': sx, 'SY': sy, 'TX': tx, 'TY': ty, 'KID': kid,
       'LID': lid, 'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
@@ -459,12 +477,24 @@ class AttackService {
     };
   }
 
+  int? _extractMs(String? payload) {
+    if (payload == null || payload.isEmpty) return null;
+    try {
+      final data = jsonDecode(payload) as Map<String, dynamic>;
+      final ms = data['MS'];
+      if (ms is int) return ms;
+      if (ms is num) return ms.toInt();
+    } catch (_) {}
+    return null;
+  }
+
   int? _extractMid(String? payload) {
     if (payload == null || payload.isEmpty) return null;
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
       final candidates = <dynamic>[
         data['MID'],
+        data['MS'],
         (data['A'] as Map?)?['M'] != null
             ? ((data['A'] as Map)['M'] as Map)['MID']
             : null,

@@ -8,6 +8,19 @@ import 'package:gge/services/attack_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
 
+// ═══════════════════════════════════════════════════════════
+//  Helper: لون الـ level badge
+// ═══════════════════════════════════════════════════════════
+Color _uiLevelColor(int lvl, BuildContext context) {
+  if (lvl >= 80) return const Color(0xFFD4AF37); // ذهبي
+  if (lvl >= 70) return AppTheme.orange;
+  if (lvl >= 60) return AppTheme.blue;
+  if (lvl >= 50) return AppTheme.teal;
+  if (lvl >= 40) return AppTheme.purple;
+  if (lvl >= 30) return AppTheme.green;
+  return AppTheme.subTextColor(context);
+}
+
 class AttackScreen extends StatefulWidget {
   final GgeClient client;
   const AttackScreen({super.key, required this.client});
@@ -49,8 +62,8 @@ class _AttackScreenState extends State<AttackScreen> {
         _castles = preferred.isNotEmpty ? preferred : castles;
         if (_castles.isNotEmpty) {
           try {
-            _source = _castles
-                .firstWhere((c) => c.areaId == _settings.sourceAreaId);
+            _source =
+                _castles.firstWhere((c) => c.areaId == _settings.sourceAreaId);
           } catch (_) {
             try {
               _source = _castles.firstWhere((c) => c.kingdomId == 4);
@@ -426,7 +439,7 @@ class _AttackScreenState extends State<AttackScreen> {
             const SizedBox(width: 8),
             _distanceChip(context),
             const SizedBox(width: 8),
-            if (_settings.onlyLegendary) _activeChip(context, 'GC 75 فقط'),
+            if (_settings.onlyLegendary) _activeChip(context, 'GC 75 + Lv 80'),
           ],
         ),
       ),
@@ -465,7 +478,7 @@ class _AttackScreenState extends State<AttackScreen> {
       'gc': 'Gold Camp',
       'level': 'المستوى',
       'distance': 'المسافة',
-      'as': 'هجمات متبقية'
+      'as': 'AS'
     };
     return PopupMenuButton<String>(
       onSelected: (v) {
@@ -694,12 +707,12 @@ class _AttackScreenState extends State<AttackScreen> {
                                 decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
                         if (t.isEnriched && t.attacksRemaining != null) ...[
-                          const Icon(Icons.gavel_rounded,
-                              size: 11, color: AppTheme.red),
+                          const Icon(Icons.info_outline_rounded,
+                              size: 11, color: AppTheme.orange),
                           const SizedBox(width: 3),
-                          Text('${t.attacksRemaining} هجمة',
+                          Text('AS: ${t.attacksRemaining}',
                               style: const TextStyle(
-                                  color: AppTheme.red,
+                                  color: AppTheme.orange,
                                   fontSize: 10.5,
                                   fontWeight: FontWeight.bold,
                                   decoration: TextDecoration.none)),
@@ -730,16 +743,7 @@ class _AttackScreenState extends State<AttackScreen> {
   }
 
   Widget _levelBadge(BuildContext context, int lvl) {
-    final color = lvl >= 80
-        ? const Color(0xFFD4AF37)
-        : lvl >= 70
-            ? AppTheme.orange
-            : lvl >= 60
-                ? AppTheme.blue
-                : lvl >= 50
-                    ? AppTheme.teal
-                    : AppTheme.subTextColor(context);
-
+    final color = _uiLevelColor(lvl, context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
@@ -860,11 +864,10 @@ class _FilterSheetState extends State<_FilterSheet> {
   @override
   Widget build(BuildContext context) {
     final s = widget.settings;
-    const levels = [40, 50, 60, 70, 80];
 
     return Container(
       constraints:
-          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
+          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
       decoration: const BoxDecoration(
         color: Color(0xFF0B0B14),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -907,23 +910,43 @@ class _FilterSheetState extends State<_FilterSheet> {
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('المستويات',
-                          style: TextStyle(
-                              color: Colors.white70,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                              decoration: TextDecoration.none)),
+                      Row(children: [
+                        const Text('المستويات (5 - 100)',
+                            style: TextStyle(
+                                color: Colors.white70,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                                decoration: TextDecoration.none)),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () {
+                            setState(() {
+                              final allSelected =
+                                  s.visibleUiLevels.length ==
+                                      kAllUiLevels.length;
+                              if (allSelected) {
+                                s.visibleUiLevels.clear();
+                              } else {
+                                s.visibleUiLevels = kAllUiLevels.toSet();
+                              }
+                            });
+                            widget.onChanged();
+                          },
+                          child: Text(
+                              s.visibleUiLevels.length == kAllUiLevels.length
+                                  ? 'مسح الكل'
+                                  : 'تحديد الكل',
+                              style: const TextStyle(
+                                  color: AppTheme.teal, fontSize: 11)),
+                        ),
+                      ]),
                       const SizedBox(height: 8),
                       Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: levels.map((lvl) {
+                          children: kAllUiLevels.map((lvl) {
                             final active = s.visibleUiLevels.contains(lvl);
-                            final color = lvl == 80
-                                ? const Color(0xFFD4AF37)
-                                : lvl == 70
-                                    ? AppTheme.orange
-                                    : AppTheme.teal;
+                            final color = _uiLevelColor(lvl, context);
                             return GestureDetector(
                               onTap: () {
                                 setState(() {
@@ -937,12 +960,12 @@ class _FilterSheetState extends State<_FilterSheet> {
                               },
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 14, vertical: 8),
+                                    horizontal: 12, vertical: 6),
                                 decoration: BoxDecoration(
                                   color: active
                                       ? color.withOpacity(0.25)
                                       : Colors.white.withOpacity(0.05),
-                                  borderRadius: BorderRadius.circular(10),
+                                  borderRadius: BorderRadius.circular(8),
                                   border: Border.all(
                                       color:
                                           active ? color : Colors.white24),
@@ -953,7 +976,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                                             ? color
                                             : Colors.white70,
                                         fontWeight: FontWeight.bold,
-                                        fontSize: 12,
+                                        fontSize: 11,
                                         decoration: TextDecoration.none)),
                               ),
                             );
@@ -971,19 +994,19 @@ class _FilterSheetState extends State<_FilterSheet> {
                         const SizedBox(width: 8),
                         _gcChip(s, 60, 'GC 60+'),
                         const SizedBox(width: 8),
-                        _gcChip(s, 75, 'GC 75 (ذهبي)'),
+                        _gcChip(s, 75, 'GC 75'),
                       ]),
                       const SizedBox(height: 20),
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
-                        title: const Text('GC 75 فقط',
+                        title: const Text('GC 75 + Lv 80 فقط (ذهبي)',
                             style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 13,
                                 fontWeight: FontWeight.bold,
                                 decoration: TextDecoration.none)),
                         subtitle: const Text(
-                            'يظهر بس اللي عندهم GC=75 (لفل 80)',
+                            'يظهر بس اللي عندهم GC≥75 ولفل 80 مع بعض',
                             style: TextStyle(
                                 color: Colors.white54,
                                 fontSize: 11,
@@ -1177,6 +1200,8 @@ class _AttackSheetState extends State<_AttackSheet> {
         msg = 'القائد غير متاح';
       } else if (msg.contains('MAX_MOVEMENTS_181')) {
         msg = 'وصلت للحد الأقصى للحركات';
+      } else if (msg.contains('CRA_100')) {
+        msg = 'المعسكر رفض الهجوم — جرب جيش أكبر (كود 100)';
       }
       _snack(msg, color: AppTheme.red);
     }
@@ -1241,13 +1266,13 @@ class _AttackSheetState extends State<_AttackSheet> {
                             fontWeight: FontWeight.bold,
                             decoration: TextDecoration.none)),
                     if (t.isEnriched && t.hasGold)
-                      Text('GC ${t.goldCampValue} · ${t.attacksRemaining ?? 0} هجمة',
+                      Text('GC ${t.goldCampValue} · AS: ${t.attacksRemaining ?? 0}',
                           style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 11,
                               decoration: TextDecoration.none))
                     else if (t.isEnriched)
-                      Text('${t.attacksRemaining ?? 0} هجمة',
+                      Text('AS: ${t.attacksRemaining ?? 0}',
                           style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 11,
