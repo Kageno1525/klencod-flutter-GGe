@@ -15,7 +15,8 @@ import 'package:gge/screens/notifications_screen.dart';
 import 'package:gge/services/notifications_service.dart';
 import 'package:gge/services/background_service.dart';
 import 'package:gge/screens/auto_defense_screen.dart';
-import 'package:gge/screens/attack_screen.dart'; // ✅ NEW
+import 'package:gge/screens/attack_screen.dart';
+import 'package:gge/screens/desert_attack_screen.dart'; // ✅ NEW
 
 class MainScreen extends StatefulWidget {
   final GgeClient client;
@@ -27,14 +28,12 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   String _username = '';
-  bool _isKicked = false; // ✅ عشان نمنع تكرار الرسالة
+  bool _isKicked = false;
 
   @override
   void initState() {
     super.initState();
     _loadUser();
-
-    // ✅ ربط حدث طرد الحساب
     widget.client.onSessionConflict = _handleSessionConflict;
   }
 
@@ -43,7 +42,6 @@ class _MainScreenState extends State<MainScreen> {
     if (mounted) setState(() => _username = u ?? '');
   }
 
-  // ✅ الدالة اللي بتتنفذ لو الحساب اتفتح في مكان تاني
   Future<void> _handleSessionConflict() async {
     if (_isKicked || !mounted) return;
     _isKicked = true;
@@ -273,7 +271,7 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  // ✅ 8 tiles (زودنا Auto Defense + Attack)
+  // ✅ 10 tiles (زودنا برج الصحراء)
   Widget _gridSection(BuildContext context) {
     return GridView.count(
       shrinkWrap: true,
@@ -367,7 +365,7 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 7) ✅ Auto Defense (جديد)
+        // 7) Auto Defense
         FadeSlideIn(
           delay: const Duration(milliseconds: 450),
           child: EnterTile(
@@ -385,7 +383,7 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 8) ✅ Attack NPC (جديد)
+        // 8) Attack NPC (Storm Islands)
         FadeSlideIn(
           delay: const Duration(milliseconds: 500),
           child: EnterTile(
@@ -400,6 +398,24 @@ class _MainScreenState extends State<MainScreen> {
               context,
               MaterialPageRoute(
                   builder: (_) => AttackScreen(client: widget.client)),
+            ),
+          ),
+        ),
+        // 9) ✅ برج الصحراء (جديد)
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 550),
+          child: EnterTile(
+            icon: Icons.landscape_rounded,
+            title: 'برج الصحراء',
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFFE8A317), Color(0xFF8B5A2B)],
+            ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => DesertAttackScreen(client: widget.client)),
             ),
           ),
         ),
