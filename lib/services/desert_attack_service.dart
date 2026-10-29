@@ -730,13 +730,13 @@ class DesertAttackService {
 
     await _ensureKingdom(tower.kid);
     try {
-      // ✅ wave واحدة + PTT:0 (بدون ريشة premium)
+      // ✅ تفعيل الريشة (PTT: 1) عشان الجيش يروح بسرعة زي التجسس
       final payload = {
         'SX': source.x, 'SY': source.y,
         'TX': tower.x, 'TY': tower.y,
         'KID': tower.kid, 'LID': lordId,
         'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
-        'LP': 0, 'FC': 0, 'PTT': 0, 'SD': 0, 'ICA': 0, 'CD': 99,
+        'LP': 0, 'FC': 0, 'PTT': 1, 'SD': 0, 'ICA': 0, 'CD': 99,
         'A': [{
           'L': {'T': List.generate(2, (_) => [-1, 0]),
                 'U': _fillUnits(leftUnits, 2)},
@@ -778,6 +778,7 @@ class DesertAttackService {
       if (resp.resultCode == 218) return DesertAttackResult.fail('LORD_BUSY_218');
       if (resp.resultCode == 181) return DesertAttackResult.fail('MAX_MOVEMENTS_181');
       if (resp.resultCode == 100) return DesertAttackResult.fail('CRA_100');
+      if (resp.resultCode == 313) return DesertAttackResult.fail('CRA_313 (Empty Wing/Target)');
       return DesertAttackResult.fail('CRA ${resp.resultCode}');
     } catch (e) {
       TrafficLog.add('ER', '[Desert-Attack] exception: $e');
@@ -797,9 +798,6 @@ class DesertAttackService {
     }
   }
 
-  // ══════════════════════════════════════════════════════════
-  // ✅ suggestCounter — توزيع مختلط melee + ranged
-  // ══════════════════════════════════════════════════════════
   UnitSuggestion suggestCounter({
     required List<CastleUnit> available,
     required DefenderSummary defenders,
@@ -833,7 +831,6 @@ class DesertAttackService {
       remaining[u.wodId] = u.amount;
     }
 
-    // ✅ نستخدم Set للتحقق السريع
     final meleeIds = melee.map((u) => u.wodId).toSet();
     bool isMeleeType(int wodId) => meleeIds.contains(wodId);
 
@@ -844,7 +841,8 @@ class DesertAttackService {
       int safetyPct = 150,
     }) {
       final totalDef = defMelee + defRanged;
-      if (totalDef <= 0) return [];
+      if (totalDef <= 0) return []; // ✅ لو الجناح فاضي، متبعتش عليه جنود
+      
       final target = (totalDef * safetyPct) ~/ 100;
 
       double meleeRatio;
@@ -936,27 +934,12 @@ class DesertAttackService {
     var middleOut = clean(middle);
     var rightOut = clean(right);
 
+    // ✅ شيلنا التوزيع العشوائي لما كل الأجنحة تكون فاضية عشان نمنع خطأ 313
     if (leftOut.isEmpty && middleOut.isEmpty && rightOut.isEmpty) {
-      final all = [...combat]..sort((a, b) => b.amount.compareTo(a.amount));
-      final types = all.take(maxTypes).toList();
-      if (types.isEmpty) {
-        return UnitSuggestion(
-          left: [], middle: [], right: [],
-          reason: 'مفيش وحدات',
-        );
-      }
-      final perWing = (types.length / 3).ceil();
-      for (int i = 0; i < types.length; i++) {
-        final u = types[i];
-        final entry = [u.wodId, remaining[u.wodId] ?? u.amount];
-        if (i < perWing) {
-          leftOut.add(entry);
-        } else if (i < perWing * 2) {
-          middleOut.add(entry);
-        } else {
-          rightOut.add(entry);
-        }
-      }
+      return UnitSuggestion(
+        left: [], middle: [], right: [],
+        reason: '⚠️ الدفاعات صفر — تخطي',
+      );
     }
 
     int typeCount() {
