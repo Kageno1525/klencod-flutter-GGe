@@ -177,8 +177,6 @@ class DefenderSummary {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  DesertSpyReport — التقرير الكامل من bsd
-// ═══════════════════════════════════════════════════════════
 class DesertSpyReport {
   final int messageId;
   final int targetX;
@@ -277,8 +275,6 @@ class DesertAttackSettings {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Service
-// ═══════════════════════════════════════════════════════════
 class DesertAttackService {
   final GgeClient conn;
   DesertAttackService(this.conn);
@@ -288,7 +284,6 @@ class DesertAttackService {
   DateTime? _lastScanAt;
   static const _scanCooldown = Duration(seconds: 30);
 
-  // ✅ آخر messageId استقبلناه من sne type 4
   int? latestSpyMessageId;
   DateTime? latestSpyMessageIdAt;
 
@@ -451,17 +446,14 @@ class DesertAttackService {
     }
   }
 
-  /// ✅ يجلب التقرير باستخدام mmr + bsd ويرجع بيانات كاملة
   Future<DesertSpyReport?> fetchSpyReport({
     required int messageId,
     required Map<int, UnitCatalogEntry> catalog,
   }) async {
     try {
-      // mmr — mark as read
       conn.sendXt('mmr', jsonEncode({'MID': messageId}));
       await Future.delayed(const Duration(milliseconds: 300));
 
-      // bsd — fetch report data
       final resp = await conn.sendXtAndWait(
         'bsd',
         jsonEncode({'MID': messageId}),
@@ -510,6 +502,8 @@ class DesertAttackService {
             final amount = _asInt(u[1]);
             if (wodId <= 0 || amount <= 0) continue;
             units.add([wodId, amount]);
+            
+            // ✅ التصنيف الذكي
             if (_isRangedWodId(wodId, catalog)) {
               ranged += amount;
             } else {
@@ -543,30 +537,43 @@ class DesertAttackService {
     }
   }
 
-  /// تصنيف wodId → ranged?
+  /// ✅ التصنيف الذكي: بيدور على الاسم أو الـ ID
   bool _isRangedWodId(int wodId, Map<int, UnitCatalogEntry> catalog) {
     final entry = catalog[wodId];
-    if (entry == null) {
-      // fallback: نرجع melee (أسلم)
-      return false;
+    if (entry != null) {
+      final n = entry.displayName.toLowerCase();
+      if (n.contains('bow') || 
+          n.contains('archer') || 
+          n.contains('crossbow') || 
+          n.contains('slinger') || 
+          n.contains('mangonel') || 
+          n.contains('trebuchet') || 
+          n.contains('ballista') || 
+          n.contains('catapult') ||
+          n.contains('ranged') ||
+          n.contains('قوس') || 
+          n.contains('نابل') || 
+          n.contains('رامي') || 
+          n.contains('منجنيق') || 
+          n.contains('عرادة') ||
+          n.contains('قاذف')) {
+        return true;
+      }
     }
-    final n = entry.displayName.toLowerCase();
-    if (n.contains('bow') ||
-        n.contains('archer') ||
-        n.contains('crossbow') ||
-        n.contains('slinger') ||
-        n.contains('mangonel') ||
-        n.contains('trebuchet') ||
-        n.contains('ballista') ||
-        n.contains('قوس') ||
-        n.contains('رامي') ||
-        n.contains('نشاب')) {
-      return true;
-    }
+
+    // ✅ لو مش موجود في الكتالوج، بنعتمد على IDs الوحدات المعروفة
+    const knownRanged = {
+      603, 604, 605, 606, 611, 612, 613, 614, 615, 616, 617, 618, 619,
+      620, 621, 622, 623, 624, 625, 626, 627, 628, 629, 630, 631, 632,
+      633, 634, 635, 636, 637, 638, 639,
+      675, 676, 677, 678, 679, 680 // وحدات الصحراء الرامية
+    };
+    
+    if (knownRanged.contains(wodId)) return true;
+
     return false;
   }
 
-  // حفظ/تحميل الدفاعات لكل برج
   static String _defKey(DesertTower t) => 'desert_def_${t.x}_${t.y}_${t.kid}';
 
   Future<DefenderSummary?> loadCachedDefenders(DesertTower tower) async {
@@ -693,6 +700,8 @@ class DesertAttackService {
       return r;
     }
 
+    // دفاع ranged → هجوم melee
+    // دفاع melee → هجوم ranged
     final leftPool =
         defenders.leftRanged > defenders.leftMelee ? meleeAvail : rangedAvail;
     final middlePool = defenders.middleRanged > defenders.middleMelee
