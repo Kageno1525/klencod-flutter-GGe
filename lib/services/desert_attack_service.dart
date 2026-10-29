@@ -798,7 +798,7 @@ class DesertAttackService {
   }
 
   // ══════════════════════════════════════════════════════════
-  // ✅ suggestCounter NEW: sends BOTH melee + ranged mix per wing
+  // ✅ suggestCounter — توزيع مختلط melee + ranged
   // ══════════════════════════════════════════════════════════
   UnitSuggestion suggestCounter({
     required List<CastleUnit> available,
@@ -816,16 +816,16 @@ class DesertAttackService {
       );
     }
 
-    bool isMelee(CastleUnit u) {
+    bool isMeleeUnit(CastleUnit u) {
       final r = u.info?.role;
       if (r == 'melee') return true;
       if (r == 'ranged') return false;
       return u.wodId >= 601 && u.wodId <= 620;
     }
 
-    final melee = combat.where(isMelee).toList()
+    final melee = combat.where(isMeleeUnit).toList()
       ..sort((a, b) => b.amount.compareTo(a.amount));
-    final ranged = combat.where((u) => !isMelee(u)).toList()
+    final ranged = combat.where((u) => !isMeleeUnit(u)).toList()
       ..sort((a, b) => b.amount.compareTo(a.amount));
 
     final remaining = <int, int>{};
@@ -833,7 +833,10 @@ class DesertAttackService {
       remaining[u.wodId] = u.amount;
     }
 
-    /// ✅ توزيع يخلط melee + ranged بنسبة 70/30 (أو 30/70)
+    // ✅ نستخدم Set للتحقق السريع
+    final meleeIds = melee.map((u) => u.wodId).toSet();
+    bool isMeleeType(int wodId) => meleeIds.contains(wodId);
+
     List<List<int>> allocateWing({
       required int defMelee,
       required int defRanged,
@@ -844,7 +847,6 @@ class DesertAttackService {
       if (totalDef <= 0) return [];
       final target = (totalDef * safetyPct) ~/ 100;
 
-      // Mix ratio
       double meleeRatio;
       if (melee.isEmpty) {
         meleeRatio = 0.0;
@@ -861,7 +863,6 @@ class DesertAttackService {
       int meleeTarget = (target * meleeRatio).round();
       int rangedTarget = target - meleeTarget;
 
-      // Reserve slots — نحجز slot لكل نوع
       int meleeSlots = 0;
       int rangedSlots = 0;
       if (meleeTarget > 0 && rangedTarget > 0) {
@@ -879,7 +880,6 @@ class DesertAttackService {
       int meleeAlloc = 0;
       int rangedAlloc = 0;
 
-      // Melee allocation
       for (final u in melee) {
         if (meleeAlloc >= meleeTarget) break;
         if (out.length >= meleeSlots + rangedSlots) break;
@@ -895,7 +895,6 @@ class DesertAttackService {
         meleeAlloc += take;
       }
 
-      // Ranged allocation
       for (final u in ranged) {
         if (rangedAlloc >= rangedTarget) break;
         if (out.length >= meleeSlots + rangedSlots) break;
@@ -912,14 +911,6 @@ class DesertAttackService {
       }
 
       return out;
-    }
-
-    // Helper داخلي: هل النوع melee؟
-    bool isMeleeType(int wodId) {
-      for (final u in melee) {
-        if (u.wodId == wodId) return true;
-      }
-      return false;
     }
 
     final left = allocateWing(
@@ -945,7 +936,6 @@ class DesertAttackService {
     var middleOut = clean(middle);
     var rightOut = clean(right);
 
-    // Fallback: لو كل الأجنحة فاضية (الدفاعات صفر) → وزّع بالتساوي
     if (leftOut.isEmpty && middleOut.isEmpty && rightOut.isEmpty) {
       final all = [...combat]..sort((a, b) => b.amount.compareTo(a.amount));
       final types = all.take(maxTypes).toList();
@@ -969,7 +959,6 @@ class DesertAttackService {
       }
     }
 
-    // Trim to maxTypes
     int typeCount() {
       final s = <int>{};
       for (final e in [...leftOut, ...middleOut, ...rightOut]) s.add(e[0]);
@@ -984,7 +973,6 @@ class DesertAttackService {
     final rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
     final total = lTotal + mTotal + rTotal;
 
-    // Count melee vs ranged in result
     int mCount = 0, rCount = 0;
     for (final e in [...leftOut, ...middleOut, ...rightOut]) {
       if (isMeleeType(e[0])) {
