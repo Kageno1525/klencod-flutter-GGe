@@ -39,7 +39,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
   void initState() {
     super.initState();
     _svc = DesertAttackService(widget.client);
-    _svc.loadCooldowns(); // تحميل أوقات التعافي
+    _svc.loadCooldowns();
     _init();
     _xtSub = widget.client.xtStream.listen(_onXt);
     _checkAutoStatus();
@@ -194,7 +194,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
       ),
     );
     if (result == true && mounted) {
-      setState(() {}); // تحديث عشان الـ cooldown يبان
+      setState(() {});
     }
   }
 
@@ -230,6 +230,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                   )
                 else ...[
                   _sourcePicker(context),
+                  if (_autoEnabled) _autoStatusBar(),
                   _filterBar(context),
                   if (_scanning) _progressBar(context),
                   Expanded(
@@ -309,9 +310,19 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
     return GestureDetector(
       onTap: () async {
         final newState = !_autoEnabled;
+
+        if (newState && _source == null) {
+          _snack('اختر قلعة مصدر أولاً قبل تشغيل Auto',
+              color: AppTheme.red);
+          return;
+        }
+
         await DesertAutoService.instance.setEnabled(newState);
         if (newState) {
-          await DesertAutoService.instance.start(widget.client);
+          await DesertAutoService.instance.start(
+            widget.client,
+            sourceAreaId: _source?.areaId,
+          );
         } else {
           DesertAutoService.instance.stop();
         }
@@ -342,6 +353,43 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                   fontWeight: FontWeight.bold,
                   decoration: TextDecoration.none)),
         ]),
+      ),
+    );
+  }
+
+  Widget _autoStatusBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: ValueListenableBuilder<String>(
+        valueListenable: DesertAutoService.instance.statusNotifier,
+        builder: (_, status, __) => Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.green.withOpacity(0.3)),
+          ),
+          child: Row(children: [
+            const Icon(Icons.bolt_rounded, color: Colors.green, size: 14),
+            const SizedBox(width: 6),
+            const Text('Auto:',
+                style: TextStyle(
+                    color: Colors.green,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.none)),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(status,
+                  style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 10,
+                      decoration: TextDecoration.none),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis),
+            ),
+          ]),
+        ),
       ),
     );
   }
@@ -393,6 +441,9 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                       _settings.sourceAreaId = v.areaId;
                       _settings.save();
                     });
+                    if (_autoEnabled) {
+                      DesertAutoService.instance.setSource(v.areaId);
+                    }
                   },
                 ),
               ),
@@ -866,7 +917,6 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         _rrCtrl.text = cached.rightRanged.toString();
       }
 
-      // جلب التقرير لو موجود في الكاش
       _lastReport = widget.svc.getCachedReport(widget.tower);
 
       if (!mounted) return;
@@ -974,7 +1024,6 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     }
     if (_autoAttackInProgress) return;
 
-    // تحقق من القوة قبل الإرسال
     if (_lastReport != null) {
       final totalAvail = _units.fold<int>(0, (s, u) => s + u.amount);
       final v = widget.svc.analyzeAttack(
@@ -987,11 +1036,17 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
           context: context,
           builder: (ctx) => AlertDialog(
             backgroundColor: Theme.of(ctx).colorScheme.surface,
-            title: const Text('تحذير', style: TextStyle(decoration: TextDecoration.none)),
-            content: Text('${v.message}\n${v.hint}\n\nعايز تكمل؟', style: const TextStyle(decoration: TextDecoration.none)),
+            title: const Text('تحذير',
+                style: TextStyle(decoration: TextDecoration.none)),
+            content: Text('${v.message}\n${v.hint}\n\nعايز تكمل؟',
+                style: const TextStyle(decoration: TextDecoration.none)),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('إلغاء')),
-              ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('هجوم')),
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('إلغاء')),
+              ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('هجوم')),
             ],
           ),
         );
@@ -1510,16 +1565,20 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
 
   Widget _powerAnalysisCard() {
     if (_lastReport == null) return const SizedBox.shrink();
-    
-    // نحسب بناءً على المجموع اللي اخترته
     final totalSelected = _grandTotal;
     if (totalSelected == 0) return const SizedBox.shrink();
 
     final unitsSelected = _units
-        .where((u) => (_leftAmt[u.wodId] ?? 0) + (_middleAmt[u.wodId] ?? 0) + (_rightAmt[u.wodId] ?? 0) > 0)
+        .where((u) =>
+            (_leftAmt[u.wodId] ?? 0) +
+                (_middleAmt[u.wodId] ?? 0) +
+                (_rightAmt[u.wodId] ?? 0) >
+            0)
         .map((u) => [
               u.wodId,
-              (_leftAmt[u.wodId] ?? 0) + (_middleAmt[u.wodId] ?? 0) + (_rightAmt[u.wodId] ?? 0),
+              (_leftAmt[u.wodId] ?? 0) +
+                  (_middleAmt[u.wodId] ?? 0) +
+                  (_rightAmt[u.wodId] ?? 0),
             ])
         .toList();
 
@@ -1546,33 +1605,46 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Icon(v.guaranteed
-                ? Icons.check_circle
-                : v.likelyWin
-                    ? Icons.warning
-                    : Icons.cancel, color: color, size: 18),
+            Icon(
+                v.guaranteed
+                    ? Icons.check_circle
+                    : v.likelyWin
+                        ? Icons.warning
+                        : Icons.cancel,
+                color: color,
+                size: 18),
             const SizedBox(width: 6),
-            Text(v.message, style: TextStyle(
-                color: color, fontSize: 13,
-                fontWeight: FontWeight.bold,
-                decoration: TextDecoration.none)),
+            Text(v.message,
+                style: TextStyle(
+                    color: color,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.none)),
           ]),
           const SizedBox(height: 6),
-          Text(v.hint, style: const TextStyle(
-              color: Colors.white70, fontSize: 11,
-              decoration: TextDecoration.none)),
+          Text(v.hint,
+              style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  decoration: TextDecoration.none)),
           const SizedBox(height: 4),
           Row(children: [
             Text('وحداتك: ${v.myUnitCount}',
-                style: const TextStyle(color: Colors.white, fontSize: 11,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
                     decoration: TextDecoration.none)),
             const SizedBox(width: 12),
             Text('العدو: ${v.enemyUnitCount}',
-                style: const TextStyle(color: Colors.white, fontSize: 11,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
                     decoration: TextDecoration.none)),
             const SizedBox(width: 12),
             Text('قوة العدو: ${v.enemyStrength}',
-                style: const TextStyle(color: Colors.white70, fontSize: 11,
+                style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11,
                     decoration: TextDecoration.none)),
           ]),
         ],
