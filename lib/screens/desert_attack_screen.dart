@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gge/gge_client.dart';
@@ -10,6 +11,7 @@ import 'package:gge/widgets/animated_widgets.dart';
 
 const Color kDesertSand = Color(0xFFE8A317);
 const Color kDesertDark = Color(0xFF8B5A2B);
+const Color kDesertGold = Color(0xFFD4AF37);
 
 class DesertAttackScreen extends StatefulWidget {
   final GgeClient client;
@@ -22,6 +24,7 @@ class DesertAttackScreen extends StatefulWidget {
 class _DesertAttackScreenState extends State<DesertAttackScreen> {
   late final DesertAttackService _svc;
   late DesertAttackSettings _settings;
+  StreamSubscription? _xtSub;
 
   List<OwnedCastle> _castles = [];
   OwnedCastle? _source;
@@ -35,6 +38,30 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
     super.initState();
     _svc = DesertAttackService(widget.client);
     _init();
+    _xtSub = widget.client.xtStream.listen(_onXt);
+  }
+
+  void _onXt(XtMessage msg) {
+    if (msg.command != 'sne' || msg.payload == null) return;
+    try {
+      final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
+      final msgs = data['MSG'] as List?;
+      if (msgs == null) return;
+      for (final m in msgs) {
+        if (m is! List || m.length < 2) continue;
+        final msgId = m[0] as int?;
+        final type = m[1] as int?;
+        if (msgId == null || type != 4) continue;
+        _svc.captureSneReport(msgId);
+        // نحدث الشاشة لو حصل spy جديد
+        if (mounted) {
+          setState(() {
+            // نحدّث البرج اللي عملنا عليه spy
+            // (بنستخدم آخر tower عملنا عليه spy، ونسجله كـ "آخر تجسس")
+          });
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _init() async {
@@ -67,20 +94,24 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
     }
   }
 
+  @override
+  void dispose() {
+    _xtSub?.cancel();
+    super.dispose();
+  }
+
   Future<void> _scan() async {
     if (_source == null) {
       _snack('اختر قلعة مصدر أولاً', color: AppTheme.red);
       return;
     }
     if (_scanning) return;
-
     setState(() {
       _scanning = true;
       _towers = [];
       _scanDone = 0;
       _scanTotal = 0;
     });
-
     try {
       final found = await _svc.scanArea(
         source: _source!,
@@ -101,8 +132,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
       if (found.isEmpty) {
         _snack('مفيش أبراج صحراء في النطاق ده', color: AppTheme.orange);
       } else {
-        _snack('تم العثور على ${found.length} برج',
-            color: AppTheme.green);
+        _snack('تم العثور على ${found.length} برج', color: AppTheme.green);
       }
     } catch (e) {
       if (!mounted) return;
@@ -115,11 +145,10 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
     var list = _towers.toList();
     switch (_settings.sortBy) {
       case 'distance':
-        list.sort(
-            (a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
+        list.sort((a, b) =>
+            a.distanceFromSource.compareTo(b.distanceFromSource));
         break;
       case 'spy':
-        // اللي اتجسس عليهم مؤخراً الأول
         list.sort((a, b) {
           if (a.lastSpyAt == null && b.lastSpyAt == null) {
             return a.distanceFromSource.compareTo(b.distanceFromSource);
@@ -148,11 +177,10 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
         tower: tower,
         svc: _svc,
         onSpySent: (mid) {
-          // تحديث الكارت بعد التجسس
           if (!mounted) return;
           setState(() {
-            final idx =
-                _towers.indexWhere((x) => x.x == tower.x && x.y == tower.y);
+            final idx = _towers.indexWhere(
+                (x) => x.x == tower.x && x.y == tower.y);
             if (idx >= 0) {
               _towers[idx] = _towers[idx].copyWith(
                 lastSpyAt: DateTime.now(),
@@ -164,10 +192,9 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
       ),
     );
     if (result == true && mounted) {
-      // هجوم اتبعت — نحدّث الكارت
       setState(() {
-        final idx =
-            _towers.indexWhere((x) => x.x == tower.x && x.y == tower.y);
+        final idx = _towers.indexWhere(
+            (x) => x.x == tower.x && x.y == tower.y);
         if (idx >= 0) {
           _towers[idx] = _towers[idx].copyWith(
             lastAttackAt: DateTime.now(),
@@ -184,7 +211,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
       ..showSnackBar(SnackBar(
         content: Text(msg,
             style: const TextStyle(decoration: TextDecoration.none),
-            maxLines: 3),
+            maxLines: 5),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 4),
@@ -488,7 +515,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                                 fontSize: 15,
                                 decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
-                        if (spied && t.isSpyRecent)
+                        if (spied)
                           Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 8, vertical: 3),
@@ -512,20 +539,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
                                         decoration: TextDecoration.none)),
                               ],
                             ),
-                          )
-                        else if (spied)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text('تجسس قديم',
-                                style: TextStyle(
-                                    color: Colors.grey,
-                                    fontSize: 9,
-                                    decoration: TextDecoration.none)),
                           ),
                       ],
                     ),
@@ -676,8 +689,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
   }
 }
 
-const Color kDesertGold = Color(0xFFD4AF37);
-
 // ═══════════════════════════════════════════════════════════
 //  Attack Sheet
 // ═══════════════════════════════════════════════════════════
@@ -704,6 +715,7 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
   static const int _maxTypes = 10;
 
   List<CastleUnit> _units = [];
+  Map<int, UnitCatalogEntry> _catalog = {};
   List<CommanderInfo> _commanders = [];
   Lord? _selectedLord;
 
@@ -711,33 +723,72 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
   Map<int, int> _middleAmt = {};
   Map<int, int> _rightAmt = {};
 
-  final DefenderSummary _defenders = DefenderSummary();
+  final _lmCtrl = TextEditingController(text: '0');
+  final _lrCtrl = TextEditingController(text: '0');
+  final _mmCtrl = TextEditingController(text: '0');
+  final _mrCtrl = TextEditingController(text: '0');
+  final _rmCtrl = TextEditingController(text: '0');
+  final _rrCtrl = TextEditingController(text: '0');
+
+  DesertSpyReport? _lastReport;
 
   bool _loading = true;
   bool _sending = false;
   bool _spying = false;
+  bool _fetching = false;
   bool _recalling = false;
+  bool _autoAttackInProgress = false;
 
-  // cooldown للتجسس (30 ثانية)
   DateTime? _lastSpyLocalAt;
 
   @override
   void initState() {
     super.initState();
     _lastSpyLocalAt = widget.tower.lastSpyAt;
+    _setupDefenseListeners();
     _load();
   }
 
+  void _setupDefenseListeners() {
+    for (final c in [_lmCtrl, _lrCtrl, _mmCtrl, _mrCtrl, _rmCtrl, _rrCtrl]) {
+      c.addListener(_saveDefenders);
+    }
+  }
+
+  Future<void> _saveDefenders() async {
+    await widget.svc.saveCachedDefenders(
+        widget.tower, _buildDefenderSummary());
+  }
+
+  DefenderSummary _buildDefenderSummary() => DefenderSummary(
+    leftMelee: int.tryParse(_lmCtrl.text) ?? 0,
+    leftRanged: int.tryParse(_lrCtrl.text) ?? 0,
+    middleMelee: int.tryParse(_mmCtrl.text) ?? 0,
+    middleRanged: int.tryParse(_mrCtrl.text) ?? 0,
+    rightMelee: int.tryParse(_rmCtrl.text) ?? 0,
+    rightRanged: int.tryParse(_rrCtrl.text) ?? 0,
+  );
+
   Future<void> _load() async {
     try {
-      final catalog = await widget.client.loadCatalog();
+      _catalog = await widget.client.loadCatalog();
       final units = await widget.client.getCastleUnits(
-          widget.source.kingdomId, widget.source.areaId, catalog);
+          widget.source.kingdomId, widget.source.areaId, _catalog);
       final unlocked = widget.client.getUnlockedForArea(widget.source.areaId);
       final sendable = units
           .where((u) => unlocked.contains(u.wodId) && u.amount > 0)
           .toList();
       final cmds = await widget.client.getCommanders();
+
+      final cached = await widget.svc.loadCachedDefenders(widget.tower);
+      if (cached != null) {
+        _lmCtrl.text = cached.leftMelee.toString();
+        _lrCtrl.text = cached.leftRanged.toString();
+        _mmCtrl.text = cached.middleMelee.toString();
+        _mrCtrl.text = cached.middleRanged.toString();
+        _rmCtrl.text = cached.rightMelee.toString();
+        _rrCtrl.text = cached.rightRanged.toString();
+      }
 
       if (!mounted) return;
       setState(() {
@@ -763,6 +814,14 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     }
   }
 
+  @override
+  void dispose() {
+    for (final c in [_lmCtrl, _lrCtrl, _mmCtrl, _mrCtrl, _rmCtrl, _rrCtrl]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   int get _leftTotal => _leftAmt.values.fold(0, (s, e) => s + e);
   int get _middleTotal => _middleAmt.values.fold(0, (s, e) => s + e);
   int get _rightTotal => _rightAmt.values.fold(0, (s, e) => s + e);
@@ -783,29 +842,172 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     setState(() {});
   }
 
+  void _applySuggestion(UnitSuggestion s) {
+    _clearAll();
+    for (final u in s.left) if (u[0] > 0) _leftAmt[u[0]] = u[1];
+    for (final u in s.middle) if (u[0] > 0) _middleAmt[u[0]] = u[1];
+    for (final u in s.right) if (u[0] > 0) _rightAmt[u[0]] = u[1];
+    setState(() {});
+  }
+
   void _autoSuggest() {
-    if (_defenders.isEmpty) {
-      _snack('ادخل الدفاعات اليدوية الأول (من تقرير التجسس في اللعبة)',
-          color: AppTheme.orange);
+    final defs = _buildDefenderSummary();
+    if (defs.isEmpty) {
+      _snack('ادخل الدفاعات من تقرير التجسس الأول', color: AppTheme.orange);
       return;
     }
-    final suggestion = widget.svc.suggestCounter(
+    final s = widget.svc.suggestCounter(
       available: _units,
-      defenders: _defenders,
+      defenders: defs,
       maxTypes: _maxTypes,
     );
-    _clearAll();
-    for (final u in suggestion.left) {
-      if (u[0] > 0) _leftAmt[u[0]] = u[1];
+    _applySuggestion(s);
+    _snack(s.reason, color: kDesertSand);
+  }
+
+  Future<void> _autoAttack() async {
+    if (_selectedLord == null) {
+      _snack('اختر قائد', color: AppTheme.red);
+      return;
     }
-    for (final u in suggestion.middle) {
-      if (u[0] > 0) _middleAmt[u[0]] = u[1];
+    final defs = _buildDefenderSummary();
+    if (defs.isEmpty) {
+      _snack('ادخل الدفاعات من تقرير التجسس الأول', color: AppTheme.orange);
+      return;
     }
-    for (final u in suggestion.right) {
-      if (u[0] > 0) _rightAmt[u[0]] = u[1];
+    if (_autoAttackInProgress) return;
+
+    setState(() => _autoAttackInProgress = true);
+    final s = widget.svc.suggestCounter(
+      available: _units,
+      defenders: defs,
+      maxTypes: _maxTypes,
+    );
+    _applySuggestion(s);
+    await Future.delayed(const Duration(milliseconds: 300));
+    await _attack();
+    if (mounted) setState(() => _autoAttackInProgress = false);
+  }
+
+  /// ✅ جلب التقرير + ملء الدفاعات تلقائياً
+  Future<void> _fetchReport() async {
+    final msgId = widget.svc.latestSpyMessageId;
+    if (msgId == null) {
+      _snack(
+        'مفيش تقرير مستلم. اعمل تجسس أولاً واستنى ~30 ثانية',
+        color: AppTheme.orange,
+      );
+      return;
     }
-    setState(() {});
-    _snack(suggestion.reason, color: kDesertSand);
+    setState(() => _fetching = true);
+
+    final report = await widget.svc.fetchSpyReport(
+      messageId: msgId,
+      catalog: _catalog,
+    );
+
+    if (!mounted) return;
+    setState(() => _fetching = false);
+
+    if (report == null) {
+      _snack('فشل جلب التقرير — شوف اللوج',
+          color: AppTheme.red);
+      return;
+    }
+
+    // تحقق إن التقرير فعلاً عن البرج ده
+    if (!report.matches(widget.tower)) {
+      _snack(
+        'التقرير لبرج تاني (${report.targetX},${report.targetY}) '
+        'مش (${widget.tower.x},${widget.tower.y})',
+        color: AppTheme.orange,
+      );
+      return;
+    }
+
+    // ✅ املأ الدفاعات تلقائياً
+    final d = report.toDefenderSummary();
+    setState(() {
+      _lastReport = report;
+      _lmCtrl.text = d.leftMelee.toString();
+      _lrCtrl.text = d.leftRanged.toString();
+      _mmCtrl.text = d.middleMelee.toString();
+      _mrCtrl.text = d.middleRanged.toString();
+      _rmCtrl.text = d.rightMelee.toString();
+      _rrCtrl.text = d.rightRanged.toString();
+    });
+    await _saveDefenders();
+
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Theme.of(ctx).colorScheme.surface,
+        title: const Row(children: [
+          Icon(Icons.check_circle, color: Colors.green),
+          SizedBox(width: 8),
+          Text('تم جلب التقرير',
+              style: TextStyle(decoration: TextDecoration.none)),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _reportRow('الجناح اليسار', d.leftMelee, d.leftRanged),
+            const SizedBox(height: 6),
+            _reportRow('الأمام', d.middleMelee, d.middleRanged),
+            const SizedBox(height: 6),
+            _reportRow('الجناح اليمين', d.rightMelee, d.rightRanged),
+            const SizedBox(height: 12),
+            Text('GC: ${report.goldCampValue}  ·  AS: ${report.availableAttacks}',
+                style: TextStyle(
+                    color: AppTheme.subTextColor(ctx),
+                    fontSize: 11,
+                    decoration: TextDecoration.none)),
+            const SizedBox(height: 8),
+            const Text('✅ اتملت الدفاعات تلقائياً في النموذج',
+                style: TextStyle(
+                    color: Colors.green,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.none)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('تمام'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _reportRow(String label, int melee, int ranged) {
+    return Row(children: [
+      SizedBox(
+          width: 100,
+          child: Text(label,
+              style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  decoration: TextDecoration.none))),
+      Text('$melee melee',
+          style: const TextStyle(
+              color: kDesertSand,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              decoration: TextDecoration.none)),
+      const Text('  ·  ',
+          style: TextStyle(color: Colors.white38,
+              decoration: TextDecoration.none)),
+      Text('$ranged ranged',
+          style: const TextStyle(
+              color: kDesertGold,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              decoration: TextDecoration.none)),
+    ]);
   }
 
   bool get _canSpy {
@@ -818,17 +1020,16 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     if (!_canSpy) {
       final remaining =
           30 - DateTime.now().difference(_lastSpyLocalAt!).inSeconds;
-      _snack('انتظر $remaining ثانية قبل تجسس جديد', color: AppTheme.orange);
+      _snack('انتظر $remaining ثانية قبل تجسس جديد',
+          color: AppTheme.orange);
       return;
     }
     setState(() => _spying = true);
-
     final res = await widget.svc.spy(
       tower: widget.tower,
       source: widget.source,
       scoutCount: 11,
     );
-
     if (!mounted) return;
     setState(() {
       _spying = false;
@@ -838,33 +1039,10 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     if (res.success) {
       widget.onSpySent(res.movementId);
       if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: Theme.of(ctx).colorScheme.surface,
-          title: const Row(children: [
-            Icon(Icons.check_circle, color: Colors.green),
-            SizedBox(width: 8),
-            Text('تم إرسال الجواسيس',
-                style: TextStyle(decoration: TextDecoration.none)),
-          ]),
-          content: Text(
-            'الهدف: (${widget.tower.x},${widget.tower.y})\n'
-            'MID: ${res.movementId ?? "?"}\n'
-            'عدد الجواسيس: ${res.scoutCount ?? 11}\n\n'
-            '⚠️ مهم: التقرير مش هيظهر هنا في التطبيق.\n'
-            'افتح اللعبة → الرسائل ✉️ → تقارير\n'
-            'هتلاقي تقرير التجسس على البرج ده.',
-            style: const TextStyle(
-                decoration: TextDecoration.none, height: 1.6),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('فهمت'),
-            ),
-          ],
-        ),
+      _snack(
+        'تم إرسال الجواسيس (MID=${res.movementId ?? "?"})\n'
+        'استنى 20-30 ثانية، بعدين دوس "جلب تقرير"',
+        color: AppTheme.green,
       );
     } else {
       _snack(res.error ?? 'فشل التجسس', color: AppTheme.red);
@@ -919,30 +1097,13 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     }
   }
 
-  Future<void> _recall() async {
-    final mid = widget.tower.lastAttackMid;
-    if (mid == null || mid <= 0) {
-      _snack('مفيش هجوم نشط للانسحاب', color: AppTheme.orange);
-      return;
-    }
-    setState(() => _recalling = true);
-    final ok = await widget.svc.recall(mid);
-    if (!mounted) return;
-    setState(() => _recalling = false);
-    if (ok) {
-      _snack('تم الانسحاب ✓', color: AppTheme.green);
-      Navigator.pop(context, true);
-    } else {
-      _snack('فشل الانسحاب', color: AppTheme.red);
-    }
-  }
-
   void _snack(String msg, {Color? color}) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
         content: Text(msg,
-            style: const TextStyle(decoration: TextDecoration.none)),
+            style: const TextStyle(decoration: TextDecoration.none),
+            maxLines: 5),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 3),
@@ -1008,8 +1169,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         Container(
           width: 40, height: 40,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-                colors: [kDesertSand, kDesertDark]),
+            gradient:
+                const LinearGradient(colors: [kDesertSand, kDesertDark]),
             borderRadius: BorderRadius.circular(10),
           ),
           child: const Icon(Icons.landscape_rounded,
@@ -1034,10 +1195,12 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
   Widget _actionRow(DesertTower t) {
     final spyLabel = _spying
         ? 'جارٍ الإرسال...'
-        : (_canSpy ? 'تجسس على ${t.coordsLabel}' : 'انتظر قبل تجسس جديد');
-    return Row(children: [
-      Expanded(
-        flex: 2,
+        : (_canSpy ? 'تجسس على ${t.coordsLabel}' : 'انتظر قبل تجسس');
+    final hasMsg = widget.svc.latestSpyMessageId != null;
+
+    return Column(children: [
+      SizedBox(
+        width: double.infinity,
         child: OutlinedButton.icon(
           onPressed: _canSpy ? _spy : null,
           icon: _spying
@@ -1048,7 +1211,7 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
               : const Icon(Icons.visibility_rounded, size: 18),
           label: Text(spyLabel,
               style: const TextStyle(
-                  decoration: TextDecoration.none, fontSize: 12)),
+                  decoration: TextDecoration.none, fontSize: 13)),
           style: OutlinedButton.styleFrom(
             foregroundColor: kDesertSand,
             side: const BorderSide(color: kDesertSand),
@@ -1058,9 +1221,38 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
           ),
         ),
       ),
+      if (hasMsg) ...[
+        const SizedBox(height: 6),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _fetching ? null : _fetchReport,
+            icon: _fetching
+                ? const SizedBox(
+                    width: 16, height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: kDesertGold))
+                : const Icon(Icons.download_rounded, size: 18),
+            label: Text(
+                _fetching
+                    ? 'جارٍ الجلب...'
+                    : '📥 جلب التقرير وملء الدفاعات',
+                style: const TextStyle(
+                    decoration: TextDecoration.none, fontSize: 12)),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: kDesertGold,
+              side: const BorderSide(color: kDesertGold),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ),
+      ],
       if (t.hasActiveAttack) ...[
-        const SizedBox(width: 8),
-        Expanded(
+        const SizedBox(height: 6),
+        SizedBox(
+          width: double.infinity,
           child: OutlinedButton.icon(
             onPressed: _recalling ? null : _recall,
             icon: _recalling
@@ -1075,7 +1267,7 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
             style: OutlinedButton.styleFrom(
               foregroundColor: AppTheme.red,
               side: const BorderSide(color: AppTheme.red),
-              padding: const EdgeInsets.symmetric(vertical: 14),
+              padding: const EdgeInsets.symmetric(vertical: 10),
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10)),
             ),
@@ -1083,6 +1275,24 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         ),
       ],
     ]);
+  }
+
+  Future<void> _recall() async {
+    final mid = widget.tower.lastAttackMid;
+    if (mid == null || mid <= 0) {
+      _snack('مفيش هجوم نشط للانسحاب', color: AppTheme.orange);
+      return;
+    }
+    setState(() => _recalling = true);
+    final ok = await widget.svc.recall(mid);
+    if (!mounted) return;
+    setState(() => _recalling = false);
+    if (ok) {
+      _snack('تم الانسحاب ✓', color: AppTheme.green);
+      Navigator.pop(context, true);
+    } else {
+      _snack('فشل الانسحاب', color: AppTheme.red);
+    }
   }
 
   Widget _defendersSection() {
@@ -1097,72 +1307,100 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            const Icon(Icons.security_rounded,
-                color: kDesertSand, size: 18),
+            const Icon(Icons.security_rounded, color: kDesertSand, size: 18),
             const SizedBox(width: 6),
             const Expanded(
-              child: Text('دفاعات العدو (من تقرير التجسس في اللعبة)',
+              child: Text('دفاعات العدو',
                   style: TextStyle(
                       color: kDesertSand,
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
                       decoration: TextDecoration.none)),
             ),
-            TextButton(
-              onPressed: _autoSuggest,
-              style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-              child: const Text('توزيع ذكي 🎯',
-                  style: TextStyle(
-                      color: kDesertGold,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold)),
-            ),
+            if (_lastReport != null)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.green.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text('من التقرير ✓',
+                    style: TextStyle(
+                        color: Colors.green,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.none)),
+              ),
           ]),
           const SizedBox(height: 8),
-          _defenderRow('الجناح اليسار', _defenders.leftMelee,
-              _defenders.leftRanged, (m, r) {
-            setState(() {
-              _defenders.leftMelee = m;
-              _defenders.leftRanged = r;
-            });
-          }),
+          _defenderRow('يسار', _lmCtrl, _lrCtrl),
           const SizedBox(height: 6),
-          _defenderRow('الأمام', _defenders.middleMelee,
-              _defenders.middleRanged, (m, r) {
-            setState(() {
-              _defenders.middleMelee = m;
-              _defenders.middleRanged = r;
-            });
-          }),
+          _defenderRow('أمام', _mmCtrl, _mrCtrl),
           const SizedBox(height: 6),
-          _defenderRow('الجناح اليمين', _defenders.rightMelee,
-              _defenders.rightRanged, (m, r) {
-            setState(() {
-              _defenders.rightMelee = m;
-              _defenders.rightRanged = r;
-            });
-          }),
+          _defenderRow('يمين', _rmCtrl, _rrCtrl),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _autoSuggest,
+                icon: const Icon(Icons.auto_awesome_rounded, size: 16),
+                label: const Text('توزيع ذكي',
+                    style: TextStyle(
+                        decoration: TextDecoration.none, fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: kDesertSand,
+                  side: const BorderSide(color: kDesertSand),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: _autoAttackInProgress ? null : _autoAttack,
+                icon: _autoAttackInProgress
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.black))
+                    : const Icon(Icons.flash_on_rounded, size: 16),
+                label: Text(
+                    _autoAttackInProgress ? '...' : 'هجوم تلقائي',
+                    style: const TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.none,
+                        fontSize: 12)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: kDesertGold,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+          ]),
         ],
       ),
     );
   }
 
-  Widget _defenderRow(String label, int melee, int ranged,
-      void Function(int melee, int ranged) onChange) {
+  Widget _defenderRow(String label, TextEditingController meleeCtrl,
+      TextEditingController rangedCtrl) {
     return Row(children: [
       SizedBox(
-          width: 90,
+          width: 60,
           child: Text(label,
               style: const TextStyle(
                   color: Colors.white70,
                   fontSize: 11,
                   decoration: TextDecoration.none))),
       Expanded(
-        child: TextFormField(
-          initialValue: melee.toString(),
+        child: TextField(
+          controller: meleeCtrl,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           textAlign: TextAlign.center,
@@ -1183,13 +1421,12 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
                 borderRadius: BorderRadius.circular(6),
                 borderSide: const BorderSide(color: kDesertSand)),
           ),
-          onChanged: (v) => onChange(int.tryParse(v) ?? 0, ranged),
         ),
       ),
       const SizedBox(width: 6),
       Expanded(
-        child: TextFormField(
-          initialValue: ranged.toString(),
+        child: TextField(
+          controller: rangedCtrl,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           textAlign: TextAlign.center,
@@ -1210,7 +1447,6 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
                 borderRadius: BorderRadius.circular(6),
                 borderSide: const BorderSide(color: kDesertGold)),
           ),
-          onChanged: (v) => onChange(melee, int.tryParse(v) ?? 0),
         ),
       ),
     ]);
@@ -1220,211 +1456,4 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _sectionLabel('القائد'),
-        const SizedBox(height: 6),
-        DropdownButtonHideUnderline(
-          child: DropdownButton<Lord>(
-            value: _selectedLord,
-            isExpanded: true,
-            dropdownColor: Theme.of(context).colorScheme.surface,
-            items: _commanders
-                .where((c) => !c.isBusy)
-                .map((c) => DropdownMenuItem(
-                      value: c.lord,
-                      child: Text(
-                          c.lord.id == 0
-                              ? 'اللورد الرئيسي'
-                              : c.lord.displayName,
-                          style: const TextStyle(
-                              decoration: TextDecoration.none,
-                              fontSize: 13)),
-                    ))
-                .toList(),
-            onChanged: (v) => setState(() => _selectedLord = v),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _unitsSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(children: [
-          _sectionLabel(
-              'الوحدات ($_selectedTypes/$_maxTypes · $_grandTotal)'),
-          const Spacer(),
-          TextButton(
-              onPressed: _clearAll,
-              child: const Text('مسح',
-                  style:
-                      TextStyle(fontSize: 11, color: AppTheme.red))),
-        ]),
-        const SizedBox(height: 4),
-        ..._units.map((u) => _unitRow(u)),
-      ],
-    );
-  }
-
-  Widget _unitRow(CastleUnit u) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: u.roleColor.withOpacity(0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Icon(u.icon, color: u.roleColor, size: 16),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(u.displayName,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      decoration: TextDecoration.none)),
-            ),
-            Text('متاح: ${u.amount}',
-                style: const TextStyle(
-                    color: Colors.white54,
-                    fontSize: 10,
-                    decoration: TextDecoration.none)),
-          ]),
-          const SizedBox(height: 6),
-          Row(children: [
-            _wingField('L', _leftAmt[u.wodId] ?? 0, u.amount, (v) {
-              setState(() => _leftAmt[u.wodId] = v);
-            }, kDesertSand),
-            const SizedBox(width: 6),
-            _wingField('M', _middleAmt[u.wodId] ?? 0, u.amount, (v) {
-              setState(() => _middleAmt[u.wodId] = v);
-            }, kDesertGold),
-            const SizedBox(width: 6),
-            _wingField('R', _rightAmt[u.wodId] ?? 0, u.amount, (v) {
-              setState(() => _rightAmt[u.wodId] = v);
-            }, kDesertSand),
-          ]),
-        ],
-      ),
-    );
-  }
-
-  Widget _wingField(String label, int value, int max,
-      ValueChanged<int> onChange, Color color) {
-    return Expanded(
-      child: SizedBox(
-        height: 34,
-        child: TextFormField(
-          initialValue: value.toString(),
-          keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          textAlign: TextAlign.center,
-          style: TextStyle(
-              color: value > 0 ? color : Colors.white54,
-              fontSize: 12,
-              fontWeight: FontWeight.bold),
-          decoration: InputDecoration(
-            hintText: label,
-            hintStyle:
-                const TextStyle(color: Colors.white30, fontSize: 10),
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(vertical: 8),
-            enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide:
-                    BorderSide(color: value > 0 ? color : Colors.white12)),
-            focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(6),
-                borderSide: BorderSide(color: color)),
-          ),
-          onChanged: (v) {
-            final n = int.tryParse(v) ?? 0;
-            onChange(n.clamp(0, max));
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _summarySection() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(children: [
-        _summaryItem('يسار', _leftTotal, kDesertSand),
-        _summaryItem('أمام', _middleTotal, kDesertGold),
-        _summaryItem('يمين', _rightTotal, kDesertSand),
-        _summaryItem('إجمالي', _grandTotal, Colors.white),
-      ]),
-    );
-  }
-
-  Widget _summaryItem(String label, int value, Color color) {
-    return Expanded(
-      child: Column(children: [
-        Text(label,
-            style: const TextStyle(
-                color: Colors.white54,
-                fontSize: 10,
-                decoration: TextDecoration.none)),
-        const SizedBox(height: 2),
-        Text(value.toString(),
-            style: TextStyle(
-                color: color,
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                decoration: TextDecoration.none)),
-      ]),
-    );
-  }
-
-  Widget _sectionLabel(String s) => Text(s,
-      style: const TextStyle(
-          color: Colors.white70,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          decoration: TextDecoration.none));
-
-  Widget _footer() {
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: SizedBox(
-          width: double.infinity,
-          height: 52,
-          child: ElevatedButton.icon(
-            onPressed: _sending || _loading ? null : _attack,
-            icon: _sending
-                ? const SizedBox(
-                    width: 18, height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.gavel_rounded),
-            label: Text(
-                _sending ? 'جارٍ الإرسال...' : 'هجوم ($_grandTotal)',
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                    decoration: TextDecoration.none)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: kDesertSand,
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
+        _
