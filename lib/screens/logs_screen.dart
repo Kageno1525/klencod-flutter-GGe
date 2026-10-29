@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart'; // ✅ مهم عشان Ticker
 import 'package:flutter/services.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/theme.dart';
@@ -23,8 +24,11 @@ class _LogsScreenState extends State<LogsScreen> {
   @override
   void initState() {
     super.initState();
-    _catCtrl = TabController(length: LogCategory.values.length, vsync: _FakeVSync());
-    _dirCtrl = TabController(length: 5, vsync: _FakeVSync());
+    _catCtrl = TabController(
+      length: LogCategory.values.length,
+      vsync: const _FakeVSync(),
+    );
+    _dirCtrl = TabController(length: 5, vsync: const _FakeVSync());
     _catCtrl.addListener(() => setState(() {}));
     _dirCtrl.addListener(() => setState(() {}));
     _sub = TrafficLog.entryStream.listen((_) {
@@ -347,8 +351,10 @@ class _LogsScreenState extends State<LogsScreen> {
   }
 }
 
-// Fake VSync بسيط لو مش عايز TickerProviderStateMixin
+// ✅ FakeVSync بسيط مع import صحيح للـ Ticker
 class _FakeVSync implements TickerProvider {
+  const _FakeVSync();
+
   @override
   Ticker createTicker(TickerCallback onTick) => Ticker(onTick);
 }

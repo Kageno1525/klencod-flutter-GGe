@@ -255,13 +255,15 @@ class UnitSuggestion {
 }
 
 // ═══════════════════════════════════════════════════════════
+// ✅ الإعدادات — الافتراضي 5 بدل 50
+// ═══════════════════════════════════════════════════════════
 class DesertAttackSettings {
   int radiusTiles;
   String sortBy;
   int sourceAreaId;
 
   DesertAttackSettings({
-    this.radiusTiles = 50,
+    this.radiusTiles = 5,   // ✅ افتراضي 5 بدل 50
     this.sortBy = 'distance',
     this.sourceAreaId = 0,
   });
@@ -272,7 +274,7 @@ class DesertAttackSettings {
 
   static Future<DesertAttackSettings> load() async {
     final p = await SharedPreferences.getInstance();
-    int radius = p.getInt(_kRadius) ?? 50;
+    int radius = p.getInt(_kRadius) ?? 5;   // ✅ 5 بدل 50
     if (radius < kDesertRadiusMin) radius = kDesertRadiusMin;
     if (radius > kDesertRadiusMax) radius = kDesertRadiusMax;
     return DesertAttackSettings(
@@ -523,7 +525,7 @@ class DesertAttackService {
       }
     }
     TrafficLog.add('ST',
-        '[Desert] Scan done: ${found.length} towers from ${chunks.length} chunks');
+        '[Desert] Scan done: ${found.length} towers from ${chunks.length} chunks (radius=$radiusTiles)');
     return found;
   }
 
@@ -716,10 +718,17 @@ class DesertAttackService {
     required List<List<int>> rightUnits,
     bool markCooldownAfterSuccess = true,
   }) async {
-    final all = [...leftUnits, ...middleUnits, ...rightUnits]
-        .where((u) => u.length >= 2 && u[1] > 0).toList();
-    if (all.isEmpty) return DesertAttackResult.fail('NO_UNITS');
-    if (all.length > 10) return DesertAttackResult.fail('TOO_MANY_UNIT_TYPES');
+    final flat = [...leftUnits, ...middleUnits, ...rightUnits]
+        .where((u) => u.length >= 2 && u[0] > 0 && u[1] > 0)
+        .toList();
+    if (flat.isEmpty) return DesertAttackResult.fail('NO_UNITS');
+
+    final uniqueIds = <int>{};
+    for (final u in flat) uniqueIds.add(u[0]);
+    if (uniqueIds.length > 10) {
+      return DesertAttackResult.fail(
+          'TOO_MANY_UNIT_TYPES (${uniqueIds.length})');
+    }
 
     await _ensureKingdom(tower.kid);
     try {
@@ -741,9 +750,10 @@ class DesertAttackService {
         'RW': List.generate(8, (_) => [-1, 0]),
         'ASCT': 0,
       };
-      final total = all.fold<int>(0, (s, e) => s + e[1]);
+      final total = flat.fold<int>(0, (s, e) => s + e[1]);
       TrafficLog.add('ST',
-          '[Desert-Attack] cra → (${tower.x},${tower.y}) total=$total LID=$lordId');
+          '[Desert-Attack] cra → (${tower.x},${tower.y}) '
+          'total=$total types=${uniqueIds.length} LID=$lordId');
 
       final resp = await conn.sendXtAndWait(
         'cra', jsonEncode(payload),
@@ -788,7 +798,6 @@ class DesertAttackService {
     }
   }
 
-  // ✅ suggestCounter محسّنة: توزيع ذكي بدون تكرار + كاونتر + fallback آمن
   UnitSuggestion suggestCounter({
     required List<CastleUnit> available,
     required DefenderSummary defenders,
@@ -888,7 +897,6 @@ class DesertAttackService {
     var middleOut = clean(middle);
     var rightOut = clean(right);
 
-    // fallback: لو كل الأجنحة فاضية (الدفاعات = 0) → وزّع بالتساوي
     if (leftOut.isEmpty && middleOut.isEmpty && rightOut.isEmpty) {
       final all = [...combat]..sort((a, b) => b.amount.compareTo(a.amount));
       final types = all.take(maxTypes).toList();

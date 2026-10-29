@@ -238,10 +238,14 @@ class DesertAutoService {
       }
       if (desert == null) return;
 
-      _setStatus('🔍 Scanning towers...');
-      _towers = await _svc!.scanArea(source: desert, radiusTiles: 50);
+      // ✅ نقرأ النطاق من الإعدادات المحفوظة (الافتراضي 5)
+      final settings = await DesertAttackSettings.load();
+      final radius = settings.radiusTiles;
+
+      _setStatus('🔍 Scanning towers ($radius tile)...');
+      _towers = await _svc!.scanArea(source: desert, radiusTiles: radius);
       await p.setString(_kLastScan, DateTime.now().toIso8601String());
-      _setStatus('✓ Found ${_towers.length} towers');
+      _setStatus('✓ Found ${_towers.length} towers @ $radius tile');
     } catch (e) {
       _setStatus('❌ Scan error: $e');
     }
@@ -295,7 +299,6 @@ class DesertAutoService {
       for (final tower in candidates) {
         if (!_running) break;
 
-        // ── 1. Spy + fetch report إن لزم ──
         var report = _svc!.getCachedReport(tower);
         if (report == null ||
             DateTime.now().difference(report.fetchedAt).inMinutes > 10) {
@@ -310,7 +313,6 @@ class DesertAutoService {
           }
         }
 
-        // ── 2. تحقق من الجدوى ──
         final totalAvail =
             sendable.fold<int>(0, (s, u) => s + u.amount);
         final viable = _svc!.analyzeAttack(
@@ -324,13 +326,11 @@ class DesertAutoService {
           continue;
         }
 
-        // ── 3. اقترح وحدات ──
         final suggestion = _svc!.suggestCounter(
           available: sendable,
           defenders: report.toDefenderSummary(),
         );
 
-        // ✅ تحقق: لو التوزيع فاضي → ما نرسلش
         if (suggestion.totalUnits <= 0) {
           TrafficLog.add('ER',
               '[Desert-Auto] ⚠️ empty suggestion for ${tower.coordsLabel}: ${suggestion.reason}');
@@ -338,7 +338,6 @@ class DesertAutoService {
           continue;
         }
 
-        // ✅ تحقق: لو الأجنحة كلها فاضية (مش ممكن)، استخدم fallback
         if (suggestion.left.isEmpty &&
             suggestion.middle.isEmpty &&
             suggestion.right.isEmpty) {
@@ -347,7 +346,6 @@ class DesertAutoService {
           continue;
         }
 
-        // ── 4. اختر lord ──
         Lord lord;
         try {
           lord = freeLords.firstWhere((c) => c.lord.id != 0).lord;
@@ -378,11 +376,9 @@ class DesertAutoService {
           _setStatus('✅ Hit ${tower.coordsLabel}!');
           return;
         } else {
-          // ❌ بدل ما نوقف — نجرب البرج اللي بعده
           TrafficLog.add('ER',
               '[Desert-Auto] ❌ attack ${tower.coordsLabel} failed: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel}: ${result.error}');
-          // continue → جرّب البرج التالي
         }
       }
     } catch (e) {
