@@ -5,71 +5,44 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
 import '../models.dart';
 
-// ═══════════════════════════════════════════════════════════
-//  Level mapping: rawLevel → uiLevel
-//  rawLevel 0 → 20, 1 → 30, 2 → 40, 3 → 50, 4 → 60, 5 → 70, 6 → 80, 7 → 90, 8 → 100
-//  (نفس الصيغة rawLevel * 10 + 20 للتغطية الكاملة من 20 إلى 100)
-// ═══════════════════════════════════════════════════════════
-int rawToUiLevel(int rawLevel, {bool isResourceNode = false}) {
-  if (isResourceNode) return rawLevel;
-  if (rawLevel >= 0 && rawLevel <= 10) return rawLevel * 10 + 20;
-  return rawLevel;
-}
+const List<int> kAllUiLevels = [40, 50, 60, 70, 80];
+const int kRadiusMin = 5;
+const int kRadiusMax = 100;
+const int kRadiusStep = 5;
+const int kChunkSize = 13;
 
-// جميع المستويات المتاحة للفلترة (5 إلى 100 بخطوة 5)
-const List<int> kAllUiLevels = [
-  5, 10, 15, 20, 25, 30, 35, 40, 45, 50,
-  55, 60, 65, 70, 75, 80, 85, 90, 95, 100,
-];
-
-// ═══════════════════════════════════════════════════════════
-//  NpcTarget
-// ═══════════════════════════════════════════════════════════
 class NpcTarget {
   final int x, y, kid;
-  final int type; // 24 = camp, 25 = resource
+  final int type; // 24 = NPC عادي, 25 = gold camp
   final int areaId;
-  final int rawLevel;
+  final int uiLevel; // 40-80 (من rawLevel أو من GC بعد enrich)
   final int sourceAreaId;
   final String sourceName;
   final double distanceFromSource;
 
-  int? goldCampValue;      // GC
-  int? attacksRemaining;   // AS (مش هجمات متبقية فعلاً — حقل تاني، مؤقتاً بنعرضه كـ AS)
-  int? resourceAmount;
+  int? goldCampValue;    // من ssi (GC) — بس لـ type 25
+  final int? attacksRemaining; // من gaa AI[0][7] — بس لـ type 25
   DateTime? lastEnrichedAt;
 
   NpcTarget({
-    required this.x,
-    required this.y,
-    required this.kid,
-    required this.type,
-    required this.areaId,
-    required this.rawLevel,
-    required this.sourceAreaId,
-    required this.sourceName,
+    required this.x, required this.y, required this.kid,
+    required this.type, required this.areaId, required this.uiLevel,
+    required this.sourceAreaId, required this.sourceName,
     required this.distanceFromSource,
-    this.goldCampValue,
-    this.attacksRemaining,
-    this.resourceAmount,
-    this.lastEnrichedAt,
+    this.goldCampValue, this.attacksRemaining, this.lastEnrichedAt,
   });
 
-  int get uiLevel => rawToUiLevel(rawLevel, isResourceNode: type == 25);
-
   NpcTarget copyWith({
-    int? goldCampValue,
-    int? attacksRemaining,
-    int? resourceAmount,
-    DateTime? lastEnrichedAt,
+    int? uiLevel, int? goldCampValue, DateTime? lastEnrichedAt,
   }) =>
       NpcTarget(
         x: x, y: y, kid: kid, type: type, areaId: areaId,
-        rawLevel: rawLevel, sourceAreaId: sourceAreaId,
-        sourceName: sourceName, distanceFromSource: distanceFromSource,
+        uiLevel: uiLevel ?? this.uiLevel,
+        sourceAreaId: sourceAreaId,
+        sourceName: sourceName,
+        distanceFromSource: distanceFromSource,
         goldCampValue: goldCampValue ?? this.goldCampValue,
-        attacksRemaining: attacksRemaining ?? this.attacksRemaining,
-        resourceAmount: resourceAmount ?? this.resourceAmount,
+        attacksRemaining: attacksRemaining,
         lastEnrichedAt: lastEnrichedAt ?? this.lastEnrichedAt,
       );
 
@@ -79,13 +52,17 @@ class NpcTarget {
     return DateTime.now().difference(lastEnrichedAt!).inMinutes >= 5;
   }
 
-  // ✅ الذهبي = GC ≥ 75 و UI Level ≥ 80 (معاً فقط)
-  bool get isLegendary => (goldCampValue ?? 0) >= 75 && uiLevel >= 80;
+  // ✅ الذهبي: GC=75 و type=25 فقط
+  bool get isLegendary => type == 25 && (goldCampValue ?? 0) >= 75;
 
-  // أي GC > 0 → لون برتقالي (مش ذهبي)
-  bool get hasGold => (goldCampValue ?? 0) > 0;
+  // ✅ يعرض GC badge: بس لو type 25 و GC>=40 (يمنع GC:15 المزعج)
+  bool get hasGold => type == 25 && (goldCampValue ?? 0) >= 40;
 
-  String get typeLabel => type == 24 ? 'Camp' : 'Resource';
+  // ✅ الهجمات: لو null أو -1 → غير محدود
+  bool get hasAttacksLimit =>
+      attacksRemaining != null && attacksRemaining! >= 0;
+
+  String get typeLabel => type == 24 ? 'NPC' : 'Gold Camp';
 }
 
 class NpcAttackResult {
@@ -106,63 +83,47 @@ class NpcAttackResult {
       NpcAttackResult._(success: false, error: err);
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Filter settings
-// ═══════════════════════════════════════════════════════════
 class AttackFilterSettings {
   Set<int> visibleUiLevels;
-  int minGC;
   int radiusTiles;
   String sortBy;
-  bool onlyLegendary;
+  bool onlyGoldCamps;
   int sourceAreaId;
 
   AttackFilterSettings({
     Set<int>? visibleUiLevels,
-    this.minGC = 0,
     this.radiusTiles = 50,
-    this.sortBy = 'gc',
-    this.onlyLegendary = false,
+    this.sortBy = 'level',
+    this.onlyGoldCamps = false,
     this.sourceAreaId = 0,
   }) : visibleUiLevels = visibleUiLevels ?? kAllUiLevels.toSet();
 
-  static const _kLevels = 'atk_levels_v3';
-  static const _kMinGC = 'atk_min_gc';
-  static const _kRadius = 'atk_radius';
+  static const _kLevels = 'atk_levels_v6';
+  static const _kRadius = 'atk_radius_v4';
   static const _kSort = 'atk_sort';
-  static const _kLegendary = 'atk_legendary';
+  static const _kGold = 'atk_gold_only';
   static const _kSource = 'atk_source';
 
   static Future<AttackFilterSettings> load() async {
     final p = await SharedPreferences.getInstance();
     final lvlList = p.getStringList(_kLevels);
     Set<int>? uiLevels;
-
     if (lvlList != null && lvlList.isNotEmpty) {
       uiLevels = lvlList
           .map((s) => int.tryParse(s) ?? 0)
-          .where((i) => i > 0)
+          .where((i) => kAllUiLevels.contains(i))
           .toSet();
-
-      // Migration: لو القيم قديمة (2-6)، حوّلها لـ UI (40-80)
-      if (uiLevels.every((v) => v >= 2 && v <= 6)) {
-        uiLevels = uiLevels.map((v) => v * 10 + 20).toSet();
-      }
-
-      // لو القيم = الافتراضي القديم {40,50,60,70,80} → استخدم الافتراضي الجديد الكامل
-      const oldDefault = {40, 50, 60, 70, 80};
-      if (uiLevels.length == oldDefault.length &&
-          uiLevels.containsAll(oldDefault)) {
-        uiLevels = kAllUiLevels.toSet();
-      }
+      if (uiLevels.isEmpty) uiLevels = kAllUiLevels.toSet();
     }
+    int radius = p.getInt(_kRadius) ?? 50;
+    if (radius > kRadiusMax) radius = kRadiusMax;
+    if (radius < kRadiusMin) radius = kRadiusMin;
 
     return AttackFilterSettings(
       visibleUiLevels: uiLevels,
-      minGC: p.getInt(_kMinGC) ?? 0,
-      radiusTiles: p.getInt(_kRadius) ?? 50,
-      sortBy: p.getString(_kSort) ?? 'gc',
-      onlyLegendary: p.getBool(_kLegendary) ?? false,
+      radiusTiles: radius,
+      sortBy: p.getString(_kSort) ?? 'level',
+      onlyGoldCamps: p.getBool(_kGold) ?? false,
       sourceAreaId: p.getInt(_kSource) ?? 0,
     );
   }
@@ -171,17 +132,13 @@ class AttackFilterSettings {
     final p = await SharedPreferences.getInstance();
     await p.setStringList(
         _kLevels, visibleUiLevels.map((i) => i.toString()).toList());
-    await p.setInt(_kMinGC, minGC);
     await p.setInt(_kRadius, radiusTiles);
     await p.setString(_kSort, sortBy);
-    await p.setBool(_kLegendary, onlyLegendary);
+    await p.setBool(_kGold, onlyGoldCamps);
     await p.setInt(_kSource, sourceAreaId);
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Attack Service
-// ═══════════════════════════════════════════════════════════
 class AttackService {
   final GgeClient conn;
   AttackService(this.conn);
@@ -232,10 +189,20 @@ class AttackService {
     final minY = (cy - radiusTiles).clamp(1, 1000);
     final maxY = (cy + radiusTiles).clamp(1, 1000);
 
+    // ✅ chunk 13×13 (زي اللعبة)
+    final startX = (minX ~/ kChunkSize) * kChunkSize;
+    final endX = (maxX ~/ kChunkSize) * kChunkSize;
+    final startY = (minY ~/ kChunkSize) * kChunkSize;
+    final endY = (maxY ~/ kChunkSize) * kChunkSize;
+
     final chunks = <List<int>>[];
-    for (int x = minX; x <= maxX; x += 12) {
-      for (int y = minY; y <= maxY; y += 12) {
-        chunks.add([x, y, (x + 11).clamp(1, 1000), (y + 11).clamp(1, 1000)]);
+    for (int x = startX; x <= endX; x += kChunkSize) {
+      for (int y = startY; y <= endY; y += kChunkSize) {
+        chunks.add([
+          x, y,
+          (x + kChunkSize - 1).clamp(1, 1000),
+          (y + kChunkSize - 1).clamp(1, 1000),
+        ]);
       }
     }
 
@@ -270,16 +237,30 @@ class AttackService {
               if (entry is! List || entry.length < 9) continue;
               final type = _asInt(entry[0]);
 
-              // NPC camps فقط (type 24). type 25 resource nodes ملهاش لازمة للهجوم.
-              if (type != 24) continue;
+              int uiLevel;
+              int? attacks;
+
+              if (type == 24) {
+                // NPC عادي: rawLevel في index[8], هجمات = index[7] (-1 = غير محدود)
+                final rawLevel = _asInt(entry[8]);
+                if (rawLevel < 2 || rawLevel > 6) continue;
+                uiLevel = rawLevel * 10 + 20;
+                attacks = _asInt(entry[7]); // -1 = unlimited
+              } else if (type == 25) {
+                // ✅ gold camp: لازم index[6]==0 (مفيش موارد) و index[7]>0 (فيه هجمات)
+                //    لو index[6]>0 → resource node (مش للهجوم)
+                final currentRes = _asInt(entry[6]);
+                final atk = _asInt(entry[7]);
+                if (currentRes > 0 || atk <= 0) continue; // مش gold camp
+                attacks = atk; // 3-10 هجمات
+                uiLevel = 0; // هنحسبها بعدين من GC
+              } else {
+                continue;
+              }
 
               final x = _asInt(entry[1]);
               final y = _asInt(entry[2]);
               final areaId = _asInt(entry[3]);
-              final rawLevel = _asInt(entry[8]);
-
-              // ✅ نقبل rawLevel من 0 إلى 10 (يغطي UI 20-120)
-              if (rawLevel < 0 || rawLevel > 10) continue;
 
               final key = '$x,$y,$areaId';
               if (seen.contains(key)) continue;
@@ -290,10 +271,11 @@ class AttackService {
 
               found.add(NpcTarget(
                 x: x, y: y, kid: source.kingdomId,
-                type: type, areaId: areaId, rawLevel: rawLevel,
+                type: type, areaId: areaId, uiLevel: uiLevel,
                 sourceAreaId: source.areaId,
                 sourceName: source.displayName,
                 distanceFromSource: sqrt(dx * dx + dy * dy),
+                attacksRemaining: attacks,
               ));
             }
           }
@@ -304,14 +286,15 @@ class AttackService {
 
       done++;
       onProgress?.call(done, chunks.length);
-
       if (done < chunks.length) {
         await Future.delayed(Duration(milliseconds: 800 + Random().nextInt(400)));
       }
     }
 
+    final npcCount = found.where((t) => t.type == 24).length;
+    final goldCount = found.where((t) => t.type == 25).length;
     TrafficLog.add('ST',
-        '[Attack] Scan done: ${found.length} targets from ${chunks.length} chunks');
+        '[Attack] Scan done: ${found.length} targets ($npcCount NPC + $goldCount gold) from ${chunks.length} chunks');
     return found;
   }
 
@@ -331,23 +314,25 @@ class AttackService {
 
       final data = jsonDecode(resp.payload!) as Map<String, dynamic>;
       final gc = _asInt(data['GC']);
-      final as = _asInt(data['AS']);
 
-      final gaa = data['gaa'] as Map?;
-      final ai = gaa?['AI'] as List?;
-      int? resourceAmt;
-      if (ai != null && ai.isNotEmpty && ai[0] is List) {
-        final first = ai[0] as List;
-        if (first.length >= 10) {
-          final r = _asInt(first[9]);
-          if (r > 0) resourceAmt = r;
+      // ✅ حساب uiLevel من GC لـ type 25
+      int newLevel = target.uiLevel;
+      if (target.type == 25 && gc >= 40) {
+        if (gc >= 75) {
+          newLevel = 80;
+        } else {
+          // round to nearest 10, clamped [40, 80]
+          newLevel = ((gc / 10).round() * 10).clamp(40, 80);
         }
       }
 
+      TrafficLog.add('ST',
+          '[Attack] ssi (${target.x},${target.y}) type=${target.type} '
+          'GC=$gc AS=${data['AS']} Lv=$newLevel attacks=${target.attacksRemaining}');
+
       return target.copyWith(
         goldCampValue: gc,
-        attacksRemaining: as,
-        resourceAmount: resourceAmt,
+        uiLevel: newLevel,
         lastEnrichedAt: DateTime.now(),
       );
     } catch (e) {
@@ -366,8 +351,7 @@ class AttackService {
     if (units.length > 10) return NpcAttackResult.fail('TOO_MANY_UNIT_TYPES');
 
     if (source.kingdomId != target.kid) {
-      return NpcAttackResult.fail(
-          'CROSS_KINGDOM: المصدر والهدف في مملكتين مختلفتين');
+      return NpcAttackResult.fail('CROSS_KINGDOM');
     }
 
     await _ensureKingdom(target.kid);
@@ -377,8 +361,7 @@ class AttackService {
         'adi',
         jsonEncode({
           'SX': source.x, 'SY': source.y,
-          'TX': target.x, 'TY': target.y,
-          'KID': target.kid,
+          'TX': target.x, 'TY': target.y, 'KID': target.kid,
         }),
         responseCmd: 'adi',
         timeoutMs: 10000,
@@ -386,7 +369,7 @@ class AttackService {
       );
       if (adiResp.resultCode != 0) {
         TrafficLog.add('ST',
-            '[Attack] adi result=${adiResp.resultCode} (proceeding anyway)');
+            '[Attack] adi result=${adiResp.resultCode} (proceeding)');
       }
     } catch (e) {
       TrafficLog.add('ST', '[Attack] adi skipped: $e');
@@ -402,8 +385,7 @@ class AttackService {
       final totalUnits = units.fold<int>(0, (s, e) => s + e[1]);
       TrafficLog.add('ST',
           '[CRA] → (${target.x},${target.y}) Lv${target.uiLevel} '
-          'types=${units.length} totalUnits=$totalUnits '
-          'units=${jsonEncode(units)} LID=$lordId');
+          'type=${target.type} units=${jsonEncode(units)} LID=$lordId');
 
       final resp = await conn.sendXtAndWait(
         'cra',
@@ -421,11 +403,8 @@ class AttackService {
         return NpcAttackResult.ok(mid ?? -1, target, totalUnits);
       }
 
-      // ✅ كود 100 (مش موثق) — في اللوج رجع {"MS":32}
       if (resp.resultCode == 100) {
         final ms = _extractMs(resp.payload);
-        TrafficLog.add('ER',
-            '[CRA] result=100 MS=$ms — الاحتمال: جيشك أضعف من الحد الأدنى للمعسكر');
         return NpcAttackResult.fail(
             'CRA_100: ${ms != null ? "MS=$ms (جرب جيش أكبر)" : "unknown"}');
       }

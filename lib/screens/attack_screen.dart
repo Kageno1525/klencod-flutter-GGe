@@ -8,16 +8,12 @@ import 'package:gge/services/attack_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
 
-// ═══════════════════════════════════════════════════════════
-//  Helper: لون الـ level badge
-// ═══════════════════════════════════════════════════════════
 Color _uiLevelColor(int lvl, BuildContext context) {
-  if (lvl >= 80) return const Color(0xFFD4AF37); // ذهبي
+  if (lvl >= 80) return const Color(0xFFD4AF37);
   if (lvl >= 70) return AppTheme.orange;
   if (lvl >= 60) return AppTheme.blue;
   if (lvl >= 50) return AppTheme.teal;
   if (lvl >= 40) return AppTheme.purple;
-  if (lvl >= 30) return AppTheme.green;
   return AppTheme.subTextColor(context);
 }
 
@@ -126,12 +122,6 @@ class _AttackScreenState extends State<AttackScreen> {
         },
       );
 
-      found.sort((a, b) {
-        final lv = b.rawLevel.compareTo(a.rawLevel);
-        if (lv != 0) return lv;
-        return a.distanceFromSource.compareTo(b.distanceFromSource);
-      });
-
       if (!mounted) return;
       setState(() {
         _targets = found;
@@ -143,7 +133,12 @@ class _AttackScreenState extends State<AttackScreen> {
         return;
       }
 
-      _enrichBatch(found.take(20).toList());
+      // enrich النوادي الذهبية الأول (type 25) عشان تظهر بمستوى
+      final goldFirst = [
+        ...found.where((t) => t.type == 25),
+        ...found.where((t) => t.type == 24),
+      ];
+      _enrichBatch(goldFirst.take(30).toList());
     } catch (e) {
       if (!mounted) return;
       setState(() => _scanning = false);
@@ -177,28 +172,15 @@ class _AttackScreenState extends State<AttackScreen> {
     var list = _targets
         .where((t) => _settings.visibleUiLevels.contains(t.uiLevel))
         .toList();
-    if (_settings.minGC > 0) {
-      list = list
-          .where((t) => (t.goldCampValue ?? 0) >= _settings.minGC)
-          .toList();
-    }
-    if (_settings.onlyLegendary) {
-      list = list.where((t) => t.isLegendary).toList();
+
+    if (_settings.onlyGoldCamps) {
+      list = list.where((t) => t.type == 25).toList();
     }
 
     switch (_settings.sortBy) {
-      case 'gc':
-        list.sort((a, b) {
-          final g = (b.goldCampValue ?? 0).compareTo(a.goldCampValue ?? 0);
-          if (g != 0) return g;
-          final l = b.rawLevel.compareTo(a.rawLevel);
-          if (l != 0) return l;
-          return a.distanceFromSource.compareTo(b.distanceFromSource);
-        });
-        break;
       case 'level':
         list.sort((a, b) {
-          final l = b.rawLevel.compareTo(a.rawLevel);
+          final l = b.uiLevel.compareTo(a.uiLevel);
           if (l != 0) return l;
           return a.distanceFromSource.compareTo(b.distanceFromSource);
         });
@@ -207,11 +189,11 @@ class _AttackScreenState extends State<AttackScreen> {
         list.sort(
             (a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
         break;
-      case 'as':
+      case 'attacks':
         list.sort((a, b) {
-          final asA = a.attacksRemaining ?? 999;
-          final asB = b.attacksRemaining ?? 999;
-          return asB.compareTo(asA);
+          final aAtk = a.hasAttacksLimit ? a.attacksRemaining! : 9999;
+          final bAtk = b.hasAttacksLimit ? b.attacksRemaining! : 9999;
+          return aAtk.compareTo(bAtk);
         });
         break;
     }
@@ -236,16 +218,6 @@ class _AttackScreenState extends State<AttackScreen> {
     );
 
     if (result == true && mounted) {
-      setState(() {
-        final idx = _targets.indexWhere((x) =>
-            x.areaId == target.areaId && x.x == target.x && x.y == target.y);
-        if (idx >= 0 && _targets[idx].attacksRemaining != null) {
-          _targets[idx] = _targets[idx].copyWith(
-            attacksRemaining:
-                (_targets[idx].attacksRemaining! - 1).clamp(0, 9999),
-          );
-        }
-      });
       try {
         final fresh = await _svc.enrich(target);
         if (mounted) {
@@ -439,7 +411,8 @@ class _AttackScreenState extends State<AttackScreen> {
             const SizedBox(width: 8),
             _distanceChip(context),
             const SizedBox(width: 8),
-            if (_settings.onlyLegendary) _activeChip(context, 'GC 75 + Lv 80'),
+            if (_settings.onlyGoldCamps)
+              _activeChip(context, 'Gold فقط', color: const Color(0xFFD4AF37)),
           ],
         ),
       ),
@@ -475,10 +448,9 @@ class _AttackScreenState extends State<AttackScreen> {
 
   Widget _sortChip(BuildContext context) {
     final labels = {
-      'gc': 'Gold Camp',
       'level': 'المستوى',
       'distance': 'المسافة',
-      'as': 'AS'
+      'attacks': 'الهجمات'
     };
     return PopupMenuButton<String>(
       onSelected: (v) {
@@ -544,17 +516,18 @@ class _AttackScreenState extends State<AttackScreen> {
     );
   }
 
-  Widget _activeChip(BuildContext context, String label) {
+  Widget _activeChip(BuildContext context, String label, {Color? color}) {
+    final c = color ?? const Color(0xFFD4AF37);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-            colors: [Color(0xFFD4AF37), Color(0xFFFFD700)]),
+        color: c.withOpacity(0.2),
         borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c),
       ),
       child: Text(label,
-          style: const TextStyle(
-              color: Colors.black,
+          style: TextStyle(
+              color: c,
               fontSize: 11,
               fontWeight: FontWeight.bold,
               decoration: TextDecoration.none)),
@@ -613,12 +586,19 @@ class _AttackScreenState extends State<AttackScreen> {
 
   Widget _targetCard(BuildContext context, NpcTarget t) {
     final legendary = t.isLegendary;
+    final isGold = t.type == 25;
     final hasGold = t.hasGold;
-    final borderColor = legendary
-        ? const Color(0xFFD4AF37)
-        : hasGold
-            ? AppTheme.orange
-            : AppTheme.subTextColor(context).withOpacity(0.2);
+
+    Color borderColor;
+    if (legendary) {
+      borderColor = const Color(0xFFD4AF37);
+    } else if (hasGold) {
+      borderColor = AppTheme.orange;
+    } else if (isGold) {
+      borderColor = const Color(0xFFD4AF37).withOpacity(0.4);
+    } else {
+      borderColor = AppTheme.subTextColor(context).withOpacity(0.2);
+    }
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -660,14 +640,22 @@ class _AttackScreenState extends State<AttackScreen> {
                       ? const LinearGradient(
                           colors: [Color(0xFFD4AF37), Color(0xFFFFD700)])
                       : null,
-                  color: legendary ? null : AppTheme.teal.withOpacity(0.15),
+                  color: legendary
+                      ? null
+                      : (isGold
+                          ? const Color(0xFFD4AF37).withOpacity(0.15)
+                          : AppTheme.teal.withOpacity(0.15)),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
                   legendary
                       ? Icons.emoji_events_rounded
-                      : Icons.local_fire_department_rounded,
-                  color: legendary ? Colors.black : AppTheme.teal,
+                      : (isGold
+                          ? Icons.workspace_premium_rounded
+                          : Icons.local_fire_department_rounded),
+                  color: legendary
+                      ? Colors.black
+                      : (isGold ? const Color(0xFFD4AF37) : AppTheme.teal),
                   size: 22,
                 ),
               ),
@@ -685,7 +673,7 @@ class _AttackScreenState extends State<AttackScreen> {
                                 fontSize: 13,
                                 decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
-                        _levelBadge(context, t.uiLevel),
+                        if (t.uiLevel > 0) _levelBadge(context, t.uiLevel),
                         if (t.isEnriched && hasGold) ...[
                           const SizedBox(width: 6),
                           _gcBadge(t.goldCampValue!, legendary),
@@ -706,15 +694,25 @@ class _AttackScreenState extends State<AttackScreen> {
                                 fontSize: 10.5,
                                 decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
-                        if (t.isEnriched && t.attacksRemaining != null) ...[
-                          const Icon(Icons.info_outline_rounded,
-                              size: 11, color: AppTheme.orange),
+                        // ✅ الهجمات: من index[7] للـ gold camps
+                        if (isGold && t.hasAttacksLimit) ...[
+                          const Icon(Icons.gavel_rounded,
+                              size: 11, color: AppTheme.red),
                           const SizedBox(width: 3),
-                          Text('AS: ${t.attacksRemaining}',
+                          Text('${t.attacksRemaining} هجمة',
                               style: const TextStyle(
-                                  color: AppTheme.orange,
+                                  color: AppTheme.red,
                                   fontSize: 10.5,
                                   fontWeight: FontWeight.bold,
+                                  decoration: TextDecoration.none)),
+                        ] else if (isGold && !t.hasAttacksLimit) ...[
+                          const Icon(Icons.all_inclusive_rounded,
+                              size: 11, color: AppTheme.teal),
+                          const SizedBox(width: 3),
+                          Text('غير محدود',
+                              style: TextStyle(
+                                  color: AppTheme.teal,
+                                  fontSize: 10.5,
                                   decoration: TextDecoration.none)),
                         ] else if (!t.isEnriched) ...[
                           Icon(Icons.hourglass_empty_rounded,
@@ -804,7 +802,7 @@ class _AttackScreenState extends State<AttackScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSt) => AlertDialog(
           backgroundColor: Theme.of(ctx).colorScheme.surface,
-          title: const Text('نطاق المسح',
+          title: const Text('نطاق البحث (بالتايلز)',
               style: TextStyle(decoration: TextDecoration.none)),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
             Text('${temp.toInt()} tile',
@@ -814,13 +812,28 @@ class _AttackScreenState extends State<AttackScreen> {
                     decoration: TextDecoration.none)),
             Slider(
               value: temp,
-              min: 20,
-              max: 200,
-              divisions: 18,
+              min: kRadiusMin.toDouble(),
+              max: kRadiusMax.toDouble(),
+              divisions: ((kRadiusMax - kRadiusMin) ~/ kRadiusStep),
               activeColor: AppTheme.orange,
-              onChanged: (v) => setSt(() => temp = v),
+              label: '${temp.toInt()}',
+              onChanged: (v) => setSt(() =>
+                  temp = (v / kRadiusStep).round() * kRadiusStep.toDouble()),
             ),
-            Text('اكبر نطاق = طلبات أكتر = خطر بان أعلى',
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('$kRadiusMin',
+                  style: TextStyle(
+                      fontSize: 10.5,
+                      color: AppTheme.subTextColor(ctx),
+                      decoration: TextDecoration.none)),
+              Text('$kRadiusMax',
+                  style: TextStyle(
+                      fontSize: 10.5,
+                      color: AppTheme.subTextColor(ctx),
+                      decoration: TextDecoration.none)),
+            ]),
+            const SizedBox(height: 6),
+            Text('خطوة $kRadiusStep · أكبر نطاق = طلبات أكتر',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     fontSize: 10.5,
@@ -867,7 +880,7 @@ class _FilterSheetState extends State<_FilterSheet> {
 
     return Container(
       constraints:
-          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+          BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
       decoration: const BoxDecoration(
         color: Color(0xFF0B0B14),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -910,36 +923,12 @@ class _FilterSheetState extends State<_FilterSheet> {
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(children: [
-                        const Text('المستويات (5 - 100)',
-                            style: TextStyle(
-                                color: Colors.white70,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
-                                decoration: TextDecoration.none)),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: () {
-                            setState(() {
-                              final allSelected =
-                                  s.visibleUiLevels.length ==
-                                      kAllUiLevels.length;
-                              if (allSelected) {
-                                s.visibleUiLevels.clear();
-                              } else {
-                                s.visibleUiLevels = kAllUiLevels.toSet();
-                              }
-                            });
-                            widget.onChanged();
-                          },
-                          child: Text(
-                              s.visibleUiLevels.length == kAllUiLevels.length
-                                  ? 'مسح الكل'
-                                  : 'تحديد الكل',
-                              style: const TextStyle(
-                                  color: AppTheme.teal, fontSize: 11)),
-                        ),
-                      ]),
+                      const Text('المستويات',
+                          style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              decoration: TextDecoration.none)),
                       const SizedBox(height: 8),
                       Wrap(
                           spacing: 8,
@@ -960,12 +949,12 @@ class _FilterSheetState extends State<_FilterSheet> {
                               },
                               child: Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 6),
+                                    horizontal: 14, vertical: 8),
                                 decoration: BoxDecoration(
                                   color: active
                                       ? color.withOpacity(0.25)
                                       : Colors.white.withOpacity(0.05),
-                                  borderRadius: BorderRadius.circular(8),
+                                  borderRadius: BorderRadius.circular(10),
                                   border: Border.all(
                                       color:
                                           active ? color : Colors.white24),
@@ -976,45 +965,30 @@ class _FilterSheetState extends State<_FilterSheet> {
                                             ? color
                                             : Colors.white70,
                                         fontWeight: FontWeight.bold,
-                                        fontSize: 11,
+                                        fontSize: 12,
                                         decoration: TextDecoration.none)),
                               ),
                             );
                           }).toList()),
                       const SizedBox(height: 20),
-                      const Text('GC الأدنى',
-                          style: TextStyle(
-                              color: Colors.white70,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                              decoration: TextDecoration.none)),
-                      const SizedBox(height: 8),
-                      Row(children: [
-                        _gcChip(s, 0, 'الكل'),
-                        const SizedBox(width: 8),
-                        _gcChip(s, 60, 'GC 60+'),
-                        const SizedBox(width: 8),
-                        _gcChip(s, 75, 'GC 75'),
-                      ]),
-                      const SizedBox(height: 20),
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
-                        title: const Text('GC 75 + Lv 80 فقط (ذهبي)',
+                        title: const Text('Gold Camps فقط',
                             style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 13,
                                 fontWeight: FontWeight.bold,
                                 decoration: TextDecoration.none)),
                         subtitle: const Text(
-                            'يظهر بس اللي عندهم GC≥75 ولفل 80 مع بعض',
+                            'يظهر بس النوادي اللي فيها GC (type 25)',
                             style: TextStyle(
                                 color: Colors.white54,
                                 fontSize: 11,
                                 decoration: TextDecoration.none)),
-                        value: s.onlyLegendary,
+                        value: s.onlyGoldCamps,
                         activeColor: const Color(0xFFD4AF37),
                         onChanged: (v) {
-                          setState(() => s.onlyLegendary = v);
+                          setState(() => s.onlyGoldCamps = v);
                           widget.onChanged();
                         },
                       ),
@@ -1023,33 +997,6 @@ class _FilterSheetState extends State<_FilterSheet> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _gcChip(AttackFilterSettings s, int val, String label) {
-    final active = s.minGC == val;
-    final color = val == 75 ? const Color(0xFFD4AF37) : AppTheme.orange;
-    return GestureDetector(
-      onTap: () {
-        setState(() => s.minGC = val);
-        widget.onChanged();
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: active
-              ? color.withOpacity(0.25)
-              : Colors.white.withOpacity(0.05),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: active ? color : Colors.white24),
-        ),
-        child: Text(label,
-            style: TextStyle(
-                color: active ? color : Colors.white70,
-                fontWeight: FontWeight.bold,
-                fontSize: 11,
-                decoration: TextDecoration.none)),
       ),
     );
   }
@@ -1107,7 +1054,6 @@ class _AttackSheetState extends State<_AttackSheet> {
         final free = cmds.where((c) => !c.isBusy).toList();
         if (free.isNotEmpty) {
           try {
-            // ✅ فضّل لورد مش رئيسي (id != 0) لتجنب 218
             _selectedLord = free.firstWhere((c) => c.lord.id != 0).lord;
           } catch (_) {
             _selectedLord = free.first.lord;
@@ -1249,10 +1195,18 @@ class _AttackSheetState extends State<_AttackSheet> {
                       gradient: t.isLegendary
                           ? const LinearGradient(
                               colors: [Color(0xFFD4AF37), Color(0xFFFFD700)])
-                          : AppTheme.dangerGradient,
+                          : (t.type == 25
+                              ? const LinearGradient(colors: [
+                                  Color(0xFFD4AF37),
+                                  Color(0xFFB8860B)
+                                ])
+                              : AppTheme.dangerGradient),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Icon(Icons.gavel_rounded,
+                    child: Icon(
+                        t.type == 25
+                            ? Icons.workspace_premium_rounded
+                            : Icons.gavel_rounded,
                         color: Colors.white, size: 20)),
                 const SizedBox(width: 10),
                 Expanded(
@@ -1265,14 +1219,15 @@ class _AttackSheetState extends State<_AttackSheet> {
                             fontSize: 15,
                             fontWeight: FontWeight.bold,
                             decoration: TextDecoration.none)),
-                    if (t.isEnriched && t.hasGold)
-                      Text('GC ${t.goldCampValue} · AS: ${t.attacksRemaining ?? 0}',
+                    if (t.hasGold && t.hasAttacksLimit)
+                      Text(
+                          'GC ${t.goldCampValue} · ${t.attacksRemaining} هجمة',
                           style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 11,
                               decoration: TextDecoration.none))
-                    else if (t.isEnriched)
-                      Text('AS: ${t.attacksRemaining ?? 0}',
+                    else if (t.hasGold)
+                      Text('GC ${t.goldCampValue}',
                           style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 11,
