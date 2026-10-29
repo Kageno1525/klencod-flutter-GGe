@@ -218,44 +218,43 @@ class GgeClient {
             for (final area in areas) {
               if (area is! Map) continue;
               final u = area['U'];
-if (u is! Map) continue;
-final aid = _asInt(area['AID']);
-final areaSet = <int>{};
+              if (u is! Map) continue;
+              final aid = _asInt(area['AID']);
+              final areaSet = <int>{};
 
-// ✅ U = الوحدات الأساسية
-final unlockedU = u['U'] as List?;
-if (unlockedU != null) {
-  for (final id in unlockedU) {
-    final wod = _asIntOrNull(id);
-    if (wod != null && wod > 0) {
-      _unlockedUnitIds.add(wod);
-      areaSet.add(wod);
-    }
-  }
-}
+              // ✅ U = الوحدات الأساسية
+              final unlockedU = u['U'] as List?;
+              if (unlockedU != null) {
+                for (final id in unlockedU) {
+                  final wod = _asIntOrNull(id);
+                  if (wod != null && wod > 0) {
+                    _unlockedUnitIds.add(wod);
+                    areaSet.add(wod);
+                  }
+                }
+              }
 
-// ✅ L = وحدات Elite/Legendary (المهم!)
-final unlockedL = u['L'] as List?;
-if (unlockedL != null) {
-  for (final id in unlockedL) {
-    final wod = _asIntOrNull(id);
-    if (wod != null && wod > 0) {
-      _unlockedUnitIds.add(wod);
-      areaSet.add(wod);
-    }
-  }
-}
+              // ✅ L = وحدات Elite/Legendary (المهم!)
+              final unlockedL = u['L'] as List?;
+              if (unlockedL != null) {
+                for (final id in unlockedL) {
+                  final wod = _asIntOrNull(id);
+                  if (wod != null && wod > 0) {
+                    _unlockedUnitIds.add(wod);
+                    areaSet.add(wod);
+                  }
+                }
+              }
 
-if (aid > 0 && areaSet.isNotEmpty) {
-  _unlockedByAreaId[aid] = areaSet;
-}
+              if (aid > 0 && areaSet.isNotEmpty) {
+                _unlockedByAreaId[aid] = areaSet;
               }
             }
-            TrafficLog.add(
-                'ST',
-                '✅ Unlocked units from gpc: ${_unlockedUnitIds.length} total, '
-                '${_unlockedByAreaId.length} areas tracked');
           }
+          TrafficLog.add(
+              'ST',
+              '✅ Unlocked units from gpc: ${_unlockedUnitIds.length} total, '
+              '${_unlockedByAreaId.length} areas tracked');
         }
       } catch (e) {
         TrafficLog.add('ER', '❌ gbd parse error: $e');
