@@ -9,7 +9,7 @@ import '../models.dart';
 //  Level mapping: rawLevel (2-6) → uiLevel (40-80)
 // ═══════════════════════════════════════════════════════════
 int rawToUiLevel(int rawLevel, {bool isResourceNode = false}) {
-  if (isResourceNode) return rawLevel; // resource nodes عرض raw
+  if (isResourceNode) return rawLevel;
   if (rawLevel >= 2 && rawLevel <= 6) return rawLevel * 10 + 20;
   return rawLevel;
 }
@@ -48,7 +48,6 @@ class NpcTarget {
     this.lastEnrichedAt,
   });
 
-  /// UI level: 40, 50, 60, 70, 80
   int get uiLevel => rawToUiLevel(rawLevel, isResourceNode: type == 25);
 
   NpcTarget copyWith({
@@ -73,7 +72,6 @@ class NpcTarget {
     return DateTime.now().difference(lastEnrichedAt!).inMinutes >= 5;
   }
 
-  /// Legendary = GC >= 75 (only on level 80)
   bool get isLegendary => (goldCampValue ?? 0) >= 75;
   bool get hasGold => (goldCampValue ?? 0) > 0;
 
@@ -99,13 +97,13 @@ class NpcAttackResult {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Filter settings (persisted in prefs) — UI LEVELS (40-80)
+//  Filter settings
 // ═══════════════════════════════════════════════════════════
 class AttackFilterSettings {
   Set<int> visibleUiLevels;
   int minGC;
   int radiusTiles;
-  String sortBy; // 'gc' | 'level' | 'distance' | 'as'
+  String sortBy;
   bool onlyLegendary;
   int sourceAreaId;
 
@@ -134,7 +132,6 @@ class AttackFilterSettings {
           .map((s) => int.tryParse(s) ?? 0)
           .where((i) => i > 0)
           .toSet();
-      // Migration: لو القيم قديمة (2-6)، حوّلها لـ UI (40-80)
       if (uiLevels.every((v) => v >= 2 && v <= 6)) {
         uiLevels = uiLevels.map((v) => v * 10 + 20).toSet();
       }
@@ -217,11 +214,7 @@ class AttackService {
     final chunks = <List<int>>[];
     for (int x = minX; x <= maxX; x += 12) {
       for (int y = minY; y <= maxY; y += 12) {
-        chunks.add([
-          x, y,
-          (x + 11).clamp(1, 1000),
-          (y + 11).clamp(1, 1000)
-        ]);
+        chunks.add([x, y, (x + 11).clamp(1, 1000), (y + 11).clamp(1, 1000)]);
       }
     }
 
@@ -253,14 +246,22 @@ class AttackService {
           final ai = data['AI'] as List?;
           if (ai != null) {
             for (final entry in ai) {
-              if (entry is! List || entry.length < 4) continue;
+              if (entry is! List || entry.length < 9) continue;
               final type = _asInt(entry[0]);
-              if (type != 24 && type != 25) continue;
+
+              // ✅ فقط NPC camps (type 24). type 25 = resource nodes (لليجمع مش للهجوم)
+              if (type != 24) continue;
 
               final x = _asInt(entry[1]);
               final y = _asInt(entry[2]);
               final areaId = _asInt(entry[3]);
-              final rawLevel = _asInt(entry.length > 5 ? entry[5] : 0);
+
+              // ✅ [24, X, Y, areaId, -403, buildingType, "", -1, rawLevel, bounty]
+              //    rawLevel في index[8]، مش index[5] (اللي هو buildingType)
+              final rawLevel = _asInt(entry[8]);
+
+              // نطاق rawLevel الصحيح للـ NPC camps: 2-6
+              if (rawLevel < 2 || rawLevel > 6) continue;
 
               final key = '$x,$y,$areaId';
               if (seen.contains(key)) continue;
@@ -314,13 +315,14 @@ class AttackService {
       final gc = _asInt(data['GC']);
       final as = _asInt(data['AS']);
 
+      // bounty للـ NPC camps في index[9] (مش index[7])
       final gaa = data['gaa'] as Map?;
       final ai = gaa?['AI'] as List?;
       int? resourceAmt;
       if (ai != null && ai.isNotEmpty && ai[0] is List) {
         final first = ai[0] as List;
-        if (first.length >= 8) {
-          final r = _asInt(first[7]);
+        if (first.length >= 10) {
+          final r = _asInt(first[9]);
           if (r > 0) resourceAmt = r;
         }
       }
@@ -352,8 +354,9 @@ class AttackService {
 
     await _ensureKingdom(target.kid);
 
+    // ✅ adi preview — نتحقق من resultCode
     try {
-      await conn.sendXtAndWait(
+      final adiResp = await conn.sendXtAndWait(
         'adi',
         jsonEncode({
           'SX': source.x, 'SY': source.y,
@@ -364,6 +367,10 @@ class AttackService {
         timeoutMs: 10000,
         isAction: false,
       );
+      if (adiResp.resultCode != 0) {
+        TrafficLog.add('ST',
+            '[Attack] adi result=${adiResp.resultCode} (proceeding anyway)');
+      }
     } catch (e) {
       TrafficLog.add('ST', '[Attack] adi skipped: $e');
     }
@@ -375,8 +382,18 @@ class AttackService {
         kid: target.kid, lid: lordId, units: units,
       );
 
+      // ✅ debug logging للـ payload قبل الإرسال
+      final a = payload['A'] as List;
+      final a0 = a[0] as Map;
+      final m = a0['M'] as Map;
+      final l = a0['L'] as Map;
+      final r = a0['R'] as Map;
+      TrafficLog.add(
+          'ST',
+          '[CRA] slots: M.T=${(m['T'] as List).length} M.U=${(m['U'] as List).length} '
+          'L=${(l['U'] as List).length} R=${(r['U'] as List).length}');
       TrafficLog.add('ST',
-          '[CRA] → (${target.x},${target.y}) Lv${target.uiLevel} units=${units.length}');
+          '[CRA] → (${target.x},${target.y}) Lv${target.uiLevel} units=${jsonEncode(units)} LID=$lordId');
 
       final resp = await conn.sendXtAndWait(
         'cra',
@@ -425,14 +442,15 @@ class AttackService {
     final l = units.skip(6).take(2).toList();
     final r = units.skip(8).take(2).toList();
 
+    // ✅ T slots متساوية مع U slots في كل flank
     return {
       'SX': sx, 'SY': sy, 'TX': tx, 'TY': ty, 'KID': kid,
       'LID': lid, 'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
       'LP': 0, 'FC': 0, 'PTT': 0, 'SD': 0, 'ICA': 0, 'CD': 99,
       'A': [{
-        'L': {'T': [[-1, 0], [-1, 0]], 'U': fill(l, 2)},
-        'R': {'T': [[-1, 0], [-1, 0]], 'U': fill(r, 2)},
-        'M': {'T': [[-1, 0], [-1, 0], [-1, 0]], 'U': fill(m, 6)},
+        'L': {'T': List.generate(2, (_) => [-1, 0]), 'U': fill(l, 2)},
+        'R': {'T': List.generate(2, (_) => [-1, 0]), 'U': fill(r, 2)},
+        'M': {'T': List.generate(6, (_) => [-1, 0]), 'U': fill(m, 6)},
       }],
       'BKS': [],
       'AST': [-1, -1, -1],

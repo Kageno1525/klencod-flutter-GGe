@@ -672,7 +672,7 @@ class _AttackScreenState extends State<AttackScreen> {
                                 fontSize: 13,
                                 decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
-                        _levelBadge(context, t.uiLevel), // ✅ context
+                        _levelBadge(context, t.uiLevel),
                         if (t.isEnriched && hasGold) ...[
                           const SizedBox(width: 6),
                           _gcBadge(t.goldCampValue!, legendary),
@@ -720,7 +720,6 @@ class _AttackScreenState extends State<AttackScreen> {
                   ],
                 ),
               ),
-              // ✅ شيل const + ضيف context
               Icon(Icons.chevron_right_rounded,
                   color: AppTheme.subTextColor(context)),
             ],
@@ -730,7 +729,6 @@ class _AttackScreenState extends State<AttackScreen> {
     );
   }
 
-  // ✅ الدالة بقت بتاخد context
   Widget _levelBadge(BuildContext context, int lvl) {
     final color = lvl >= 80
         ? const Color(0xFFD4AF37)
@@ -1086,7 +1084,8 @@ class _AttackSheetState extends State<_AttackSheet> {
         final free = cmds.where((c) => !c.isBusy).toList();
         if (free.isNotEmpty) {
           try {
-            _selectedLord = free.firstWhere((c) => c.lord.id == 0).lord;
+            // ✅ فضّل لورد مش رئيسي (id != 0) لتجنب 218
+            _selectedLord = free.firstWhere((c) => c.lord.id != 0).lord;
           } catch (_) {
             _selectedLord = free.first.lord;
           }
