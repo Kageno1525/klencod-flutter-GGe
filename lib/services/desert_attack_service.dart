@@ -750,13 +750,13 @@ class DesertAttackService {
 
     await _ensureKingdom(tower.kid);
     try {
-      // ✅ WT: -1 = استخدم الريشة (أقصى سرعة)
-      // ✅ PTT: 1 = Premium Travel Type = مفعّل
+      // ✅ WT: 0 = نفس أمر الهجوم الشغال بالريشة
+      // ✅ PTT: 1 = Premium Travel Type (الريشة)
       final payload = {
         'SX': source.x, 'SY': source.y,
         'TX': tower.x, 'TY': tower.y,
         'KID': tower.kid, 'LID': lordId,
-        'WT': -1, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
+        'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
         'LP': 0, 'FC': 0, 'PTT': 1, 'SD': 0, 'ICA': 0, 'CD': 99,
         'A': [{
           'L': {'T': List.generate(2, (_) => [-1, 0]),
