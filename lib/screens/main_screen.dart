@@ -15,7 +15,7 @@ import 'package:gge/screens/notifications_screen.dart';
 import 'package:gge/services/notifications_service.dart';
 import 'package:gge/services/background_service.dart';
 import 'package:gge/screens/auto_defense_screen.dart';
-
+import 'package:gge/screens/attack_screen.dart'; // ✅ NEW
 
 class MainScreen extends StatefulWidget {
   final GgeClient client;
@@ -33,7 +33,7 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     _loadUser();
-    
+
     // ✅ ربط حدث طرد الحساب
     widget.client.onSessionConflict = _handleSessionConflict;
   }
@@ -54,7 +54,8 @@ class _MainScreenState extends State<MainScreen> {
       builder: (_) => AlertDialog(
         backgroundColor: Theme.of(context).colorScheme.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('انتهت الجلسة', style: TextStyle(decoration: TextDecoration.none)),
+        title: const Text('انتهت الجلسة',
+            style: TextStyle(decoration: TextDecoration.none)),
         content: const Text(
           'تم تسجيل الدخول لحسابك من مكان آخر (لعبت من الموبايل أو الكمبيوتر).\n\n'
           'هيتم تسجيل خروجك من التطبيق عشان ميحصلش تعارض.',
@@ -272,6 +273,7 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  // ✅ 8 tiles (زودنا Auto Defense + Attack)
   Widget _gridSection(BuildContext context) {
     return GridView.count(
       shrinkWrap: true,
@@ -281,8 +283,9 @@ class _MainScreenState extends State<MainScreen> {
       crossAxisSpacing: 14,
       childAspectRatio: 1.2,
       children: [
+        // 1) Transfer
         FadeSlideIn(
-          delay: const Duration(milliseconds: 200),
+          delay: const Duration(milliseconds: 150),
           child: EnterTile(
             icon: Icons.swap_horiz_rounded,
             title: S.transferTroops,
@@ -294,8 +297,9 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
+        // 2) Training
         FadeSlideIn(
-          delay: const Duration(milliseconds: 300),
+          delay: const Duration(milliseconds: 200),
           child: EnterTile(
             icon: Icons.military_tech_rounded,
             title: S.trainTroops,
@@ -307,8 +311,9 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
+        // 3) Smuggle
         FadeSlideIn(
-          delay: const Duration(milliseconds: 400),
+          delay: const Duration(milliseconds: 250),
           child: EnterTile(
             icon: Icons.local_shipping_rounded,
             title: S.smuggleTroops,
@@ -320,8 +325,9 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
+        // 4) Commanders
         FadeSlideIn(
-          delay: const Duration(milliseconds: 500),
+          delay: const Duration(milliseconds: 300),
           child: EnterTile(
             icon: Icons.people_alt_rounded,
             title: S.commanders,
@@ -333,8 +339,9 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
+        // 5) Stats
         FadeSlideIn(
-          delay: const Duration(milliseconds: 600),
+          delay: const Duration(milliseconds: 350),
           child: EnterTile(
             icon: Icons.analytics_rounded,
             title: S.statsTitle,
@@ -346,8 +353,9 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
+        // 6) Notifications
         FadeSlideIn(
-          delay: const Duration(milliseconds: 700),
+          delay: const Duration(milliseconds: 400),
           child: EnterTile(
             icon: Icons.notifications_active_rounded,
             title: S.notificationsTitle,
@@ -356,6 +364,42 @@ class _MainScreenState extends State<MainScreen> {
               context,
               MaterialPageRoute(
                   builder: (_) => NotificationsScreen(client: widget.client)),
+            ),
+          ),
+        ),
+        // 7) ✅ Auto Defense (جديد)
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 450),
+          child: EnterTile(
+            icon: Icons.shield_moon_rounded,
+            title: 'دفاع تلقائي',
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF00838F), Color(0xFF26A69A)],
+            ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => AutoDefenseScreen(client: widget.client)),
+            ),
+          ),
+        ),
+        // 8) ✅ Attack NPC (جديد)
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 500),
+          child: EnterTile(
+            icon: Icons.gps_fixed_rounded,
+            title: 'هجوم NPC',
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFFB71C1C), Color(0xFFE53935)],
+            ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => AttackScreen(client: widget.client)),
             ),
           ),
         ),

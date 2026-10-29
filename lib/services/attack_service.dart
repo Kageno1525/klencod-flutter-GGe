@@ -6,11 +6,20 @@ import '../gge_client.dart';
 import '../models.dart';
 
 // ═══════════════════════════════════════════════════════════
-//  Models
+//  Level mapping: rawLevel (2-6) → uiLevel (40-80)
+// ═══════════════════════════════════════════════════════════
+int rawToUiLevel(int rawLevel, {bool isResourceNode = false}) {
+  if (isResourceNode) return rawLevel; // resource nodes عرض raw
+  if (rawLevel >= 2 && rawLevel <= 6) return rawLevel * 10 + 20;
+  return rawLevel;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  NpcTarget
 // ═══════════════════════════════════════════════════════════
 class NpcTarget {
   final int x, y, kid;
-  final int type; // 24 = camp, 25 = resource node
+  final int type; // 24 = camp, 25 = resource
   final int areaId;
   final int rawLevel;
   final int sourceAreaId;
@@ -18,7 +27,7 @@ class NpcTarget {
   final double distanceFromSource;
 
   // from ssi enrichment
-  int? goldCampValue; // GC
+  int? goldCampValue; // GC — only appears on level 80 (raw 6)
   int? attacksRemaining; // AS
   int? resourceAmount;
   DateTime? lastEnrichedAt;
@@ -39,6 +48,9 @@ class NpcTarget {
     this.lastEnrichedAt,
   });
 
+  /// UI level: 40, 50, 60, 70, 80
+  int get uiLevel => rawToUiLevel(rawLevel, isResourceNode: type == 25);
+
   NpcTarget copyWith({
     int? goldCampValue,
     int? attacksRemaining,
@@ -46,15 +58,9 @@ class NpcTarget {
     DateTime? lastEnrichedAt,
   }) =>
       NpcTarget(
-        x: x,
-        y: y,
-        kid: kid,
-        type: type,
-        areaId: areaId,
-        rawLevel: rawLevel,
-        sourceAreaId: sourceAreaId,
-        sourceName: sourceName,
-        distanceFromSource: distanceFromSource,
+        x: x, y: y, kid: kid, type: type, areaId: areaId,
+        rawLevel: rawLevel, sourceAreaId: sourceAreaId,
+        sourceName: sourceName, distanceFromSource: distanceFromSource,
         goldCampValue: goldCampValue ?? this.goldCampValue,
         attacksRemaining: attacksRemaining ?? this.attacksRemaining,
         resourceAmount: resourceAmount ?? this.resourceAmount,
@@ -67,8 +73,9 @@ class NpcTarget {
     return DateTime.now().difference(lastEnrichedAt!).inMinutes >= 5;
   }
 
+  /// Legendary = GC >= 75 (only on level 80)
   bool get isLegendary => (goldCampValue ?? 0) >= 75;
-  bool get isHighValue => (goldCampValue ?? 0) >= 60;
+  bool get hasGold => (goldCampValue ?? 0) > 0;
 
   String get typeLabel => type == 24 ? 'Camp' : 'Resource';
 }
@@ -81,10 +88,7 @@ class NpcAttackResult {
   final int totalUnits;
 
   NpcAttackResult._({
-    required this.success,
-    this.error,
-    this.movementId,
-    this.target,
+    required this.success, this.error, this.movementId, this.target,
     this.totalUnits = 0,
   });
 
@@ -95,10 +99,10 @@ class NpcAttackResult {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Attack Filter Settings (persisted)
+//  Filter settings (persisted in prefs) — UI LEVELS (40-80)
 // ═══════════════════════════════════════════════════════════
 class AttackFilterSettings {
-  Set<int> visibleRawLevels;
+  Set<int> visibleUiLevels;
   int minGC;
   int radiusTiles;
   String sortBy; // 'gc' | 'level' | 'distance' | 'as'
@@ -106,15 +110,15 @@ class AttackFilterSettings {
   int sourceAreaId;
 
   AttackFilterSettings({
-    Set<int>? visibleRawLevels,
+    Set<int>? visibleUiLevels,
     this.minGC = 0,
     this.radiusTiles = 50,
     this.sortBy = 'gc',
     this.onlyLegendary = false,
     this.sourceAreaId = 0,
-  }) : visibleRawLevels = visibleRawLevels ?? {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
+  }) : visibleUiLevels = visibleUiLevels ?? {40, 50, 60, 70, 80};
 
-  static const _kLevels = 'atk_levels';
+  static const _kLevels = 'atk_levels_v2';
   static const _kMinGC = 'atk_min_gc';
   static const _kRadius = 'atk_radius';
   static const _kSort = 'atk_sort';
@@ -123,11 +127,20 @@ class AttackFilterSettings {
 
   static Future<AttackFilterSettings> load() async {
     final p = await SharedPreferences.getInstance();
-    final lvl = p.getStringList(_kLevels);
+    final lvlList = p.getStringList(_kLevels);
+    Set<int>? uiLevels;
+    if (lvlList != null && lvlList.isNotEmpty) {
+      uiLevels = lvlList
+          .map((s) => int.tryParse(s) ?? 0)
+          .where((i) => i > 0)
+          .toSet();
+      // Migration: لو القيم قديمة (2-6)، حوّلها لـ UI (40-80)
+      if (uiLevels.every((v) => v >= 2 && v <= 6)) {
+        uiLevels = uiLevels.map((v) => v * 10 + 20).toSet();
+      }
+    }
     return AttackFilterSettings(
-      visibleRawLevels: lvl == null
-          ? null
-          : lvl.map((s) => int.tryParse(s) ?? 0).where((i) => i > 0).toSet(),
+      visibleUiLevels: uiLevels,
       minGC: p.getInt(_kMinGC) ?? 0,
       radiusTiles: p.getInt(_kRadius) ?? 50,
       sortBy: p.getString(_kSort) ?? 'gc',
@@ -138,7 +151,8 @@ class AttackFilterSettings {
 
   Future<void> save() async {
     final p = await SharedPreferences.getInstance();
-    await p.setStringList(_kLevels, visibleRawLevels.map((i) => i.toString()).toList());
+    await p.setStringList(
+        _kLevels, visibleUiLevels.map((i) => i.toString()).toList());
     await p.setInt(_kMinGC, minGC);
     await p.setInt(_kRadius, radiusTiles);
     await p.setString(_kSort, sortBy);
@@ -154,11 +168,8 @@ class AttackService {
   final GgeClient conn;
   AttackService(this.conn);
 
-  // Track current kingdom to skip unnecessary jca calls
   int? _currentKid;
   DateTime? _lastJcaAt;
-
-  // Scan cache to prevent spam
   DateTime? _lastScanAt;
   static const _scanCooldown = Duration(seconds: 30);
 
@@ -183,7 +194,6 @@ class AttackService {
     }
   }
 
-  /// مسح منطقة حول القلعة المصدر
   Future<List<NpcTarget>> scanArea({
     required OwnedCastle source,
     required int radiusTiles,
@@ -207,16 +217,17 @@ class AttackService {
     final chunks = <List<int>>[];
     for (int x = minX; x <= maxX; x += 12) {
       for (int y = minY; y <= maxY; y += 12) {
-        final x2 = (x + 11).clamp(1, 1000);
-        final y2 = (y + 11).clamp(1, 1000);
-        chunks.add([x, y, x2, y2]);
+        chunks.add([
+          x, y,
+          (x + 11).clamp(1, 1000),
+          (y + 11).clamp(1, 1000)
+        ]);
       }
     }
 
-    // Hard cap — ban protection
     if (chunks.length > 40) {
       chunks.removeRange(40, chunks.length);
-      TrafficLog.add('ST', '[Attack] Scan capped to 40 chunks (ban protection)');
+      TrafficLog.add('ST', '[Attack] Scan capped to 40 chunks');
     }
 
     final found = <NpcTarget>[];
@@ -257,14 +268,13 @@ class AttackService {
 
               final dx = (x - cx).toDouble();
               final dy = (y - cy).toDouble();
-              final dist = sqrt(dx * dx + dy * dy);
 
               found.add(NpcTarget(
                 x: x, y: y, kid: source.kingdomId,
                 type: type, areaId: areaId, rawLevel: rawLevel,
                 sourceAreaId: source.areaId,
                 sourceName: source.displayName,
-                distanceFromSource: dist,
+                distanceFromSource: sqrt(dx * dx + dy * dy),
               ));
             }
           }
@@ -277,16 +287,15 @@ class AttackService {
       onProgress?.call(done, chunks.length);
 
       if (done < chunks.length) {
-        // Ban protection: 800-1200ms
         await Future.delayed(Duration(milliseconds: 800 + Random().nextInt(400)));
       }
     }
 
-    TrafficLog.add('ST', '[Attack] Scan done: ${found.length} targets from ${chunks.length} chunks');
+    TrafficLog.add('ST',
+        '[Attack] Scan done: ${found.length} targets from ${chunks.length} chunks');
     return found;
   }
 
-  /// جلب تفاصيل هدف (GC + AS)
   Future<NpcTarget> enrich(NpcTarget target) async {
     await _ensureKingdom(target.kid);
 
@@ -328,7 +337,6 @@ class AttackService {
     }
   }
 
-  /// هجوم على هدف NPC
   Future<NpcAttackResult> attack({
     required NpcTarget target,
     required OwnedCastle source,
@@ -342,10 +350,8 @@ class AttackService {
       return NpcAttackResult.fail('CROSS_KINGDOM: المصدر والهدف في مملكتين مختلفتين');
     }
 
-    // jca
     await _ensureKingdom(target.kid);
 
-    // adi preview
     try {
       await conn.sendXtAndWait(
         'adi',
@@ -362,7 +368,6 @@ class AttackService {
       TrafficLog.add('ST', '[Attack] adi skipped: $e');
     }
 
-    // cra execute
     try {
       final payload = _buildCraPayload(
         sx: source.x, sy: source.y,
@@ -370,7 +375,8 @@ class AttackService {
         kid: target.kid, lid: lordId, units: units,
       );
 
-      TrafficLog.add('ST', '[CRA] → (${target.x},${target.y}) units=${units.length} types');
+      TrafficLog.add('ST',
+          '[CRA] → (${target.x},${target.y}) Lv${target.uiLevel} units=${units.length}');
 
       final resp = await conn.sendXtAndWait(
         'cra',
@@ -388,7 +394,6 @@ class AttackService {
         return NpcAttackResult.ok(mid ?? -1, target, total);
       }
 
-      // error mapping
       if (resp.resultCode == 91) return NpcAttackResult.fail('UNIT_NOT_SENDABLE_91');
       if (resp.resultCode == 218) return NpcAttackResult.fail('LORD_BUSY_218');
       if (resp.resultCode == 181) return NpcAttackResult.fail('MAX_MOVEMENTS_181');
@@ -396,7 +401,8 @@ class AttackService {
         return NpcAttackResult.fail('LORD_UNAVAILABLE');
       }
 
-      return NpcAttackResult.fail('CRA error ${resp.resultCode}: ${errorName(resp.resultCode)}');
+      return NpcAttackResult.fail(
+          'CRA error ${resp.resultCode}: ${errorName(resp.resultCode)}');
     } catch (e) {
       TrafficLog.add('ER', '[CRA] exception: $e');
       return NpcAttackResult.fail('$e');
@@ -407,17 +413,14 @@ class AttackService {
     required int sx, sy, tx, ty, kid, lid,
     required List<List<int>> units,
   }) {
-    List<List<int>> fillSlots(List<List<int>> u, int count) {
+    List<List<int>> fill(List<List<int>> u, int count) {
       final r = <List<int>>[];
       for (int i = 0; i < count; i++) {
-        if (i < u.length) r.add(u[i]);
-        else r.add([-1, 0]);
+        r.add(i < u.length ? u[i] : [-1, 0]);
       }
       return r;
     }
 
-    // ✅ التوزيع: M أولاً (6 slots) — الأسلم هجومياً
-    // ثم L (2 slots)، ثم R (2 slots)
     final m = units.take(6).toList();
     final l = units.skip(6).take(2).toList();
     final r = units.skip(8).take(2).toList();
@@ -427,9 +430,9 @@ class AttackService {
       'LID': lid, 'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
       'LP': 0, 'FC': 0, 'PTT': 0, 'SD': 0, 'ICA': 0, 'CD': 99,
       'A': [{
-        'L': {'T': [[-1, 0], [-1, 0]], 'U': fillSlots(l, 2)},
-        'R': {'T': [[-1, 0], [-1, 0]], 'U': fillSlots(r, 2)},
-        'M': {'T': [[-1, 0], [-1, 0], [-1, 0]], 'U': fillSlots(m, 6)},
+        'L': {'T': [[-1, 0], [-1, 0]], 'U': fill(l, 2)},
+        'R': {'T': [[-1, 0], [-1, 0]], 'U': fill(r, 2)},
+        'M': {'T': [[-1, 0], [-1, 0], [-1, 0]], 'U': fill(m, 6)},
       }],
       'BKS': [],
       'AST': [-1, -1, -1],
@@ -442,13 +445,17 @@ class AttackService {
     if (payload == null || payload.isEmpty) return null;
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
-      // cra response structure varies — try common paths
-      final a = data['A'] as Map?;
-      final m = a?['M'] as Map?;
-      final mid = m?['MID'] ?? data['MID'] ?? (a?['M'] as Map?)?['MID'];
-      if (mid is int) return mid;
-      if (mid is num) return mid.toInt();
-      if (mid is String) return int.tryParse(mid);
+      final candidates = <dynamic>[
+        data['MID'],
+        (data['A'] as Map?)?['M'] != null
+            ? ((data['A'] as Map)['M'] as Map)['MID']
+            : null,
+      ];
+      for (final c in candidates) {
+        if (c is int) return c;
+        if (c is num) return c.toInt();
+        if (c is String) return int.tryParse(c);
+      }
     } catch (_) {}
     return null;
   }

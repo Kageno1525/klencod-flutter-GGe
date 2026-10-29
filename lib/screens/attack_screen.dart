@@ -47,7 +47,6 @@ class _AttackScreenState extends State<AttackScreen> {
       setState(() {
         _castles = preferred.isNotEmpty ? preferred : castles;
         if (_castles.isNotEmpty) {
-          // Pick based on saved sourceAreaId, or default to Storm Islands (KID=4) if available
           try {
             _source = _castles.firstWhere((c) => c.areaId == _settings.sourceAreaId);
           } catch (_) {
@@ -71,9 +70,10 @@ class _AttackScreenState extends State<AttackScreen> {
     _refreshTimer?.cancel();
     _refreshTimer = Timer.periodic(const Duration(seconds: 60), (_) async {
       if (!mounted || _scanning || _enriching) return;
+      // refresh stale only
       final stale = _targets.where((t) => t.isEnriched && t.isStaleEnrichment).toList();
       if (stale.isEmpty) return;
-      _enrichBatch(stale.take(10).toList(), silent: true);
+      _enrichBatch(stale.take(10).toList());
     });
   }
 
@@ -83,9 +83,6 @@ class _AttackScreenState extends State<AttackScreen> {
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Scan & Enrich
-  // ═══════════════════════════════════════════════════════
   Future<void> _scan() async {
     if (_source == null) {
       _snack('اختر قلعة مصدر أولاً', color: AppTheme.red);
@@ -110,6 +107,13 @@ class _AttackScreenState extends State<AttackScreen> {
         },
       );
 
+      // Sort: level 6 first (they have GC)
+      found.sort((a, b) {
+        final lv = b.rawLevel.compareTo(a.rawLevel);
+        if (lv != 0) return lv;
+        return a.distanceFromSource.compareTo(b.distanceFromSource);
+      });
+
       if (!mounted) return;
       setState(() {
         _targets = found;
@@ -121,8 +125,7 @@ class _AttackScreenState extends State<AttackScreen> {
         return;
       }
 
-      // Enrich top candidates progressively
-      _enrichBatch(found.take(15).toList(), silent: false);
+      _enrichBatch(found.take(20).toList());
     } catch (e) {
       if (!mounted) return;
       setState(() => _scanning = false);
@@ -130,8 +133,8 @@ class _AttackScreenState extends State<AttackScreen> {
     }
   }
 
-  Future<void> _enrichBatch(List<NpcTarget> batch, {required bool silent}) async {
-    if (_enriching) return;
+  Future<void> _enrichBatch(List<NpcTarget> batch) async {
+    if (_enriching || batch.isEmpty) return;
     setState(() => _enriching = true);
 
     for (final t in batch) {
@@ -140,7 +143,8 @@ class _AttackScreenState extends State<AttackScreen> {
         final enriched = await _svc.enrich(t);
         if (!mounted) break;
         setState(() {
-          final idx = _targets.indexWhere((x) => x.areaId == t.areaId && x.x == t.x && x.y == t.y);
+          final idx = _targets.indexWhere(
+              (x) => x.areaId == t.areaId && x.x == t.x && x.y == t.y);
           if (idx >= 0) _targets[idx] = enriched;
         });
       } catch (_) {}
@@ -150,11 +154,11 @@ class _AttackScreenState extends State<AttackScreen> {
     if (mounted) setState(() => _enriching = false);
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Filtering & sorting
-  // ═══════════════════════════════════════════════════════
+  // ✅ فلترة بـ UI level
   List<NpcTarget> get _filtered {
-    var list = _targets.where((t) => _settings.visibleRawLevels.contains(t.rawLevel)).toList();
+    var list = _targets
+        .where((t) => _settings.visibleUiLevels.contains(t.uiLevel))
+        .toList();
     if (_settings.minGC > 0) {
       list = list.where((t) => (t.goldCampValue ?? 0) >= _settings.minGC).toList();
     }
@@ -193,9 +197,6 @@ class _AttackScreenState extends State<AttackScreen> {
     return list;
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Attack flow
-  // ═══════════════════════════════════════════════════════
   Future<void> _openAttackSheet(NpcTarget target) async {
     if (_source == null) {
       _snack('اختر قلعة مصدر', color: AppTheme.red);
@@ -214,21 +215,21 @@ class _AttackScreenState extends State<AttackScreen> {
     );
 
     if (result == true && mounted) {
-      // Update target locally (decrement AS)
       setState(() {
-        final idx = _targets.indexWhere((x) => x.areaId == target.areaId && x.x == target.x && x.y == target.y);
+        final idx = _targets.indexWhere(
+            (x) => x.areaId == target.areaId && x.x == target.x && x.y == target.y);
         if (idx >= 0 && _targets[idx].attacksRemaining != null) {
           _targets[idx] = _targets[idx].copyWith(
             attacksRemaining: (_targets[idx].attacksRemaining! - 1).clamp(0, 9999),
           );
         }
       });
-      // Refresh target's details
       try {
         final fresh = await _svc.enrich(target);
         if (mounted) {
           setState(() {
-            final idx = _targets.indexWhere((x) => x.areaId == target.areaId && x.x == target.x && x.y == target.y);
+            final idx = _targets.indexWhere(
+                (x) => x.areaId == target.areaId && x.x == target.x && x.y == target.y);
             if (idx >= 0) _targets[idx] = fresh;
           });
         }
@@ -246,9 +247,6 @@ class _AttackScreenState extends State<AttackScreen> {
       ));
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Build
-  // ═══════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     final filtered = _filtered;
@@ -285,7 +283,9 @@ class _AttackScreenState extends State<AttackScreen> {
           Positioned(
             left: 16, right: 16, bottom: 16,
             child: GradientButton(
-              label: _scanning ? 'جارٍ المسح ($_scanDone/$_scanTotal)' : 'مسح المنطقة (${_settings.radiusTiles} tile)',
+              label: _scanning
+                  ? 'جارٍ المسح ($_scanDone/$_scanTotal)'
+                  : 'مسح المنطقة (${_settings.radiusTiles} tile)',
               icon: Icons.radar_rounded,
               gradient: AppTheme.cosmosGradient,
               loading: _scanning,
@@ -302,18 +302,20 @@ class _AttackScreenState extends State<AttackScreen> {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
       child: Row(
         children: [
-          AppIconBtn(icon: Icons.arrow_back_rounded, onTap: () => Navigator.pop(context), size: 42),
+          AppIconBtn(icon: Icons.arrow_back_rounded,
+              onTap: () => Navigator.pop(context), size: 42),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('الهجوم على NPC',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800,
-                        color: AppTheme.textColor(context), letterSpacing: -0.3,
-                        decoration: TextDecoration.none)),
+                Text('هجوم على NPC', style: TextStyle(
+                    fontSize: 20, fontWeight: FontWeight.w800,
+                    color: AppTheme.textColor(context), letterSpacing: -0.3,
+                    decoration: TextDecoration.none)),
                 Text('${_targets.length} هدف · ${_filtered.length} ظاهر',
-                    style: TextStyle(fontSize: 11, color: AppTheme.subTextColor(context),
+                    style: TextStyle(fontSize: 11,
+                        color: AppTheme.subTextColor(context),
                         decoration: TextDecoration.none)),
               ],
             ),
@@ -342,9 +344,7 @@ class _AttackScreenState extends State<AttackScreen> {
             Expanded(
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<OwnedCastle>(
-                  value: _source,
-                  isExpanded: true,
-                  isDense: true,
+                  value: _source, isExpanded: true, isDense: true,
                   dropdownColor: Theme.of(context).colorScheme.surface,
                   borderRadius: BorderRadius.circular(12),
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
@@ -378,21 +378,23 @@ class _AttackScreenState extends State<AttackScreen> {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            _filterChip(context, icon: Icons.tune_rounded, label: 'فلترة', onTap: _openFilterSheet),
+            _filterChip(context, icon: Icons.tune_rounded, label: 'فلترة',
+                onTap: _openFilterSheet),
             const SizedBox(width: 8),
             _sortChip(context),
             const SizedBox(width: 8),
             _distanceChip(context),
             const SizedBox(width: 8),
             if (_settings.onlyLegendary)
-              _activeChip(context, 'Legendary فقط'),
+              _activeChip(context, 'GC 75 فقط'),
           ],
         ),
       ),
     );
   }
 
-  Widget _filterChip(BuildContext context, {required IconData icon, required String label, required VoidCallback onTap}) {
+  Widget _filterChip(BuildContext context, {required IconData icon,
+      required String label, required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -418,14 +420,14 @@ class _AttackScreenState extends State<AttackScreen> {
       onSelected: (v) {
         setState(() { _settings.sortBy = v; _settings.save(); });
       },
-      itemBuilder: (_) => labels.entries
-          .map((e) => PopupMenuItem(value: e.key,
-              child: Row(children: [
-                if (_settings.sortBy == e.key) const Icon(Icons.check, size: 14, color: AppTheme.green),
-                const SizedBox(width: 6),
-                Text(e.value, style: TextStyle(color: AppTheme.textColor(context))),
-              ])))
-          .toList(),
+      itemBuilder: (_) => labels.entries.map((e) => PopupMenuItem(
+          value: e.key,
+          child: Row(children: [
+            if (_settings.sortBy == e.key)
+              const Icon(Icons.check, size: 14, color: AppTheme.green),
+            const SizedBox(width: 6),
+            Text(e.value, style: TextStyle(color: AppTheme.textColor(context))),
+          ]))).toList(),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
@@ -436,8 +438,9 @@ class _AttackScreenState extends State<AttackScreen> {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.sort_rounded, color: AppTheme.teal, size: 14),
           const SizedBox(width: 6),
-          Text(labels[_settings.sortBy] ?? '', style: const TextStyle(color: AppTheme.teal,
-              fontSize: 11, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+          Text(labels[_settings.sortBy] ?? '', style: const TextStyle(
+              color: AppTheme.teal, fontSize: 11, fontWeight: FontWeight.bold,
+              decoration: TextDecoration.none)),
         ]),
       ),
     );
@@ -456,8 +459,9 @@ class _AttackScreenState extends State<AttackScreen> {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           const Icon(Icons.place_rounded, color: AppTheme.orange, size: 14),
           const SizedBox(width: 6),
-          Text('${_settings.radiusTiles} tile', style: const TextStyle(color: AppTheme.orange,
-              fontSize: 11, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+          Text('${_settings.radiusTiles} tile', style: const TextStyle(
+              color: AppTheme.orange, fontSize: 11, fontWeight: FontWeight.bold,
+              decoration: TextDecoration.none)),
         ]),
       ),
     );
@@ -498,12 +502,16 @@ class _AttackScreenState extends State<AttackScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(color: AppTheme.teal.withOpacity(0.12),
-                    shape: BoxShape.circle, border: Border.all(color: AppTheme.teal.withOpacity(0.3))),
-                child: Icon(Icons.radar_rounded, size: 48, color: AppTheme.teal.withOpacity(0.7))),
+                decoration: BoxDecoration(
+                    color: AppTheme.teal.withOpacity(0.12),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppTheme.teal.withOpacity(0.3))),
+                child: Icon(Icons.radar_rounded, size: 48,
+                    color: AppTheme.teal.withOpacity(0.7))),
             const SizedBox(height: 16),
             Text('مفيش أهداف لسه', style: TextStyle(color: AppTheme.textColor(context),
-                fontSize: 14, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+                fontSize: 14, fontWeight: FontWeight.bold,
+                decoration: TextDecoration.none)),
             const SizedBox(height: 4),
             Text('دوس "مسح المنطقة" عشان تبدأ', textAlign: TextAlign.center,
                 style: TextStyle(color: AppTheme.subTextColor(context),
@@ -516,10 +524,10 @@ class _AttackScreenState extends State<AttackScreen> {
 
   Widget _targetCard(BuildContext context, NpcTarget t) {
     final legendary = t.isLegendary;
-    final highValue = t.isHighValue;
+    final hasGold = t.hasGold;
     final borderColor = legendary
         ? const Color(0xFFD4AF37)
-        : highValue
+        : hasGold
             ? AppTheme.orange
             : AppTheme.subTextColor(context).withOpacity(0.2);
 
@@ -532,20 +540,20 @@ class _AttackScreenState extends State<AttackScreen> {
             gradient: legendary
                 ? const LinearGradient(
                     begin: Alignment.topLeft, end: Alignment.bottomRight,
-                    colors: [Color(0x33D4AF37), Color(0x11FFD700)])
+                    colors: [Color(0x44D4AF37), Color(0x11FFD700)])
                 : null,
-            color: legendary ? null : AppTheme.glassCard(context: context, padding: EdgeInsets.zero).decoration?.color,
+            color: legendary ? null
+                : (AppTheme.isDark(context) ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.03)),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: borderColor, width: legendary ? 1.6 : 1.2),
             boxShadow: legendary
-                ? [BoxShadow(color: const Color(0xFFD4AF37).withOpacity(0.25),
-                    blurRadius: 16, offset: const Offset(0, 6))]
+                ? [BoxShadow(color: const Color(0xFFD4AF37).withOpacity(0.3),
+                    blurRadius: 18, offset: const Offset(0, 6))]
                 : null,
           ),
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
-              // Icon
               Container(
                 width: 46, height: 46,
                 decoration: BoxDecoration(
@@ -568,15 +576,16 @@ class _AttackScreenState extends State<AttackScreen> {
                   children: [
                     Row(
                       children: [
-                        Text('(${t.x},${t.y})',
-                            style: TextStyle(color: AppTheme.textColor(context),
-                                fontWeight: FontWeight.bold, fontSize: 13,
-                                decoration: TextDecoration.none)),
+                        Text('(${t.x},${t.y})', style: TextStyle(
+                            color: AppTheme.textColor(context),
+                            fontWeight: FontWeight.bold, fontSize: 13,
+                            decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
-                        _levelBadge(context, t.rawLevel),
-                        if (t.isEnriched) ...[
+                        _levelBadge(t.uiLevel),
+                        // ✅ GC badge — only if has GC (>0)
+                        if (t.isEnriched && hasGold) ...[
                           const SizedBox(width: 6),
-                          _gcBadge(t.goldCampValue ?? 0, legendary),
+                          _gcBadge(t.goldCampValue!, legendary),
                         ],
                       ],
                     ),
@@ -594,8 +603,9 @@ class _AttackScreenState extends State<AttackScreen> {
                           const Icon(Icons.gavel_rounded, size: 11, color: AppTheme.red),
                           const SizedBox(width: 3),
                           Text('${t.attacksRemaining} هجمة',
-                              style: const TextStyle(color: AppTheme.red, fontSize: 10.5,
-                                  fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+                              style: const TextStyle(color: AppTheme.red,
+                                  fontSize: 10.5, fontWeight: FontWeight.bold,
+                                  decoration: TextDecoration.none)),
                         ] else if (!t.isEnriched) ...[
                           const Icon(Icons.hourglass_empty_rounded, size: 11,
                               color: AppTheme.subTextColor),
@@ -603,14 +613,6 @@ class _AttackScreenState extends State<AttackScreen> {
                           Text('جارٍ الجلب...', style: TextStyle(
                               color: AppTheme.subTextColor(context).withOpacity(0.7),
                               fontSize: 10.5, decoration: TextDecoration.none)),
-                        ],
-                        const SizedBox(width: 8),
-                        if (t.resourceAmount != null && t.resourceAmount! > 0) ...[
-                          const Icon(Icons.inventory_2_rounded, size: 11, color: AppTheme.purple),
-                          const SizedBox(width: 3),
-                          Text(_fmtNum(t.resourceAmount!),
-                              style: const TextStyle(color: AppTheme.purple, fontSize: 10.5,
-                                  decoration: TextDecoration.none)),
                         ],
                       ],
                     ),
@@ -625,14 +627,16 @@ class _AttackScreenState extends State<AttackScreen> {
     );
   }
 
-  Widget _levelBadge(BuildContext context, int lvl) {
-    final color = lvl >= 6
+  Widget _levelBadge(int lvl) {
+    final color = lvl >= 80
         ? const Color(0xFFD4AF37)
-        : lvl >= 5
+        : lvl >= 70
             ? AppTheme.orange
-            : lvl >= 4
+            : lvl >= 60
                 ? AppTheme.blue
-                : AppTheme.teal;
+                : lvl >= 50
+                    ? AppTheme.teal
+                    : AppTheme.subTextColor;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
@@ -646,12 +650,7 @@ class _AttackScreenState extends State<AttackScreen> {
   }
 
   Widget _gcBadge(int gc, bool legendary) {
-    if (gc <= 0) return const SizedBox.shrink();
-    final color = legendary
-        ? const Color(0xFFD4AF37)
-        : gc >= 60
-            ? AppTheme.orange
-            : AppTheme.subTextColor;
+    final color = legendary ? const Color(0xFFD4AF37) : AppTheme.orange;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
@@ -668,15 +667,6 @@ class _AttackScreenState extends State<AttackScreen> {
     );
   }
 
-  String _fmtNum(int n) {
-    if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
-    if (n >= 1000) return '${(n / 1000).toStringAsFixed(1)}K';
-    return '$n';
-  }
-
-  // ═══════════════════════════════════════════════════════
-  //  Sheets
-  // ═══════════════════════════════════════════════════════
   void _openFilterSheet() {
     showModalBottomSheet(
       context: context,
@@ -698,16 +688,15 @@ class _AttackScreenState extends State<AttackScreen> {
           backgroundColor: Theme.of(ctx).colorScheme.surface,
           title: const Text('نطاق المسح', style: TextStyle(decoration: TextDecoration.none)),
           content: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text('${temp.toInt()} tile', style: const TextStyle(
-                fontSize: 22, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
-            Slider(
-              value: temp, min: 20, max: 200, divisions: 18,
-              activeColor: AppTheme.orange,
-              onChanged: (v) => setSt(() => temp = v),
-            ),
+            Text('${temp.toInt()} tile', style: const TextStyle(fontSize: 22,
+                fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+            Slider(value: temp, min: 20, max: 200, divisions: 18,
+                activeColor: AppTheme.orange,
+                onChanged: (v) => setSt(() => temp = v)),
             Text('اكبر نطاق = طلبات أكتر = خطر بان أعلى',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10.5, color: AppTheme.subTextColor(ctx),
+                style: TextStyle(fontSize: 10.5,
+                    color: AppTheme.subTextColor(ctx),
                     decoration: TextDecoration.none)),
           ]),
           actions: [
@@ -727,7 +716,7 @@ class _AttackScreenState extends State<AttackScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Filter Sheet
+//  Filter Sheet — UI levels 40-80
 // ═══════════════════════════════════════════════════════════
 class _FilterSheet extends StatefulWidget {
   final AttackFilterSettings settings;
@@ -742,6 +731,8 @@ class _FilterSheetState extends State<_FilterSheet> {
   @override
   Widget build(BuildContext context) {
     final s = widget.settings;
+    const levels = [40, 50, 60, 70, 80];
+
     return Container(
       constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.7),
       decoration: const BoxDecoration(
@@ -762,8 +753,9 @@ class _FilterSheetState extends State<_FilterSheet> {
               child: Row(children: [
                 const Icon(Icons.tune_rounded, color: AppTheme.teal, size: 20),
                 const SizedBox(width: 8),
-                const Text('فلترة', style: TextStyle(color: Colors.white, fontSize: 16,
-                    fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
+                const Text('فلترة', style: TextStyle(color: Colors.white,
+                    fontSize: 16, fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.none)),
                 const Spacer(),
                 TextButton(onPressed: () => Navigator.pop(context),
                     child: const Text('تم', style: TextStyle(color: AppTheme.teal))),
@@ -775,36 +767,42 @@ class _FilterSheetState extends State<_FilterSheet> {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text('المستويات', style: TextStyle(color: Colors.white70,
-                      fontWeight: FontWeight.bold, fontSize: 13, decoration: TextDecoration.none)),
+                      fontWeight: FontWeight.bold, fontSize: 13,
+                      decoration: TextDecoration.none)),
                   const SizedBox(height: 8),
-                  Wrap(spacing: 8, runSpacing: 8, children: List.generate(13, (i) {
-                    final lvl = i + 2;
-                    final active = s.visibleRawLevels.contains(lvl);
+                  Wrap(spacing: 8, runSpacing: 8, children: levels.map((lvl) {
+                    final active = s.visibleUiLevels.contains(lvl);
+                    final color = lvl == 80
+                        ? const Color(0xFFD4AF37)
+                        : lvl == 70
+                            ? AppTheme.orange
+                            : AppTheme.teal;
                     return GestureDetector(
                       onTap: () {
                         setState(() {
-                          if (active) s.visibleRawLevels.remove(lvl);
-                          else s.visibleRawLevels.add(lvl);
+                          if (active) s.visibleUiLevels.remove(lvl);
+                          else s.visibleUiLevels.add(lvl);
                         });
                         widget.onChanged();
                       },
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                         decoration: BoxDecoration(
-                          color: active ? AppTheme.teal : Colors.white.withOpacity(0.1),
+                          color: active ? color.withOpacity(0.25) : Colors.white.withOpacity(0.05),
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: active ? AppTheme.teal : Colors.white24),
+                          border: Border.all(color: active ? color : Colors.white24),
                         ),
                         child: Text('Lv $lvl', style: TextStyle(
-                            color: active ? Colors.white : Colors.white70,
+                            color: active ? color : Colors.white70,
                             fontWeight: FontWeight.bold, fontSize: 12,
                             decoration: TextDecoration.none)),
                       ),
                     );
-                  })),
+                  }).toList()),
                   const SizedBox(height: 20),
                   const Text('GC الأدنى', style: TextStyle(color: Colors.white70,
-                      fontWeight: FontWeight.bold, fontSize: 13, decoration: TextDecoration.none)),
+                      fontWeight: FontWeight.bold, fontSize: 13,
+                      decoration: TextDecoration.none)),
                   const SizedBox(height: 8),
                   Row(children: [
                     _gcChip(s, 0, 'الكل'),
@@ -816,10 +814,12 @@ class _FilterSheetState extends State<_FilterSheet> {
                   const SizedBox(height: 20),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('Legendary فقط', style: TextStyle(color: Colors.white,
-                        fontSize: 13, fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
-                    subtitle: const Text('يظهر الـ GC=75 فقط', style: TextStyle(color: Colors.white54,
-                        fontSize: 11, decoration: TextDecoration.none)),
+                    title: const Text('GC 75 فقط', style: TextStyle(color: Colors.white,
+                        fontSize: 13, fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.none)),
+                    subtitle: const Text('يظهر بس اللي عندهم GC=75 (لفل 80)',
+                        style: TextStyle(color: Colors.white54, fontSize: 11,
+                            decoration: TextDecoration.none)),
                     value: s.onlyLegendary,
                     activeColor: const Color(0xFFD4AF37),
                     onChanged: (v) { setState(() => s.onlyLegendary = v); widget.onChanged(); },
@@ -845,15 +845,17 @@ class _FilterSheetState extends State<_FilterSheet> {
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: active ? color : Colors.white24),
         ),
-        child: Text(label, style: TextStyle(color: active ? color : Colors.white70,
-            fontWeight: FontWeight.bold, fontSize: 11, decoration: TextDecoration.none)),
+        child: Text(label, style: TextStyle(
+            color: active ? color : Colors.white70,
+            fontWeight: FontWeight.bold, fontSize: 11,
+            decoration: TextDecoration.none)),
       ),
     );
   }
 }
 
 // ═══════════════════════════════════════════════════════════
-//  Attack Sheet (unit picker + lord picker + attack)
+//  Attack Sheet
 // ═══════════════════════════════════════════════════════════
 class _AttackSheet extends StatefulWidget {
   final GgeClient client;
@@ -889,8 +891,9 @@ class _AttackSheetState extends State<_AttackSheet> {
       final units = await widget.client.getCastleUnits(
           widget.source.kingdomId, widget.source.areaId, catalog);
       final unlocked = widget.client.getUnlockedForArea(widget.source.areaId);
-      final sendable = units.where((u) => unlocked.contains(u.wodId) && u.amount > 0).toList();
-
+      final sendable = units
+          .where((u) => unlocked.contains(u.wodId) && u.amount > 0)
+          .toList();
       final cmds = await widget.client.getCommanders();
 
       if (!mounted) return;
@@ -931,7 +934,6 @@ class _AttackSheetState extends State<_AttackSheet> {
   });
 
   void _selectAll() {
-    // Offensive first, max 10
     final offensive = _units.where((u) => u.isCombat && !u.isDefensive).toList();
     final defensive = _units.where((u) => u.isCombat && u.isDefensive).toList();
     final ordered = [...offensive, ...defensive];
@@ -1029,11 +1031,15 @@ class _AttackSheetState extends State<_AttackSheet> {
                 Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('(${t.x},${t.y}) · Lv ${t.rawLevel}',
+                    Text('(${t.x},${t.y}) · Lv ${t.uiLevel}',
                         style: const TextStyle(color: Colors.white, fontSize: 15,
                             fontWeight: FontWeight.bold, decoration: TextDecoration.none)),
-                    if (t.isEnriched)
-                      Text('GC ${t.goldCampValue ?? 0} · ${t.attacksRemaining ?? 0} هجمة',
+                    if (t.isEnriched && t.hasGold)
+                      Text('GC ${t.goldCampValue} · ${t.attacksRemaining ?? 0} هجمة',
+                          style: const TextStyle(color: Colors.white70, fontSize: 11,
+                              decoration: TextDecoration.none))
+                    else if (t.isEnriched)
+                      Text('${t.attacksRemaining ?? 0} هجمة',
                           style: const TextStyle(color: Colors.white70, fontSize: 11,
                               decoration: TextDecoration.none)),
                   ],
@@ -1050,26 +1056,23 @@ class _AttackSheetState extends State<_AttackSheet> {
                       controller: scrollCtrl,
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
                       children: [
-                        // Lord picker
                         _sectionLabel('القائد'),
                         const SizedBox(height: 8),
                         DropdownButtonHideUnderline(
                           child: DropdownButton<Lord>(
-                            value: _selectedLord,
-                            isExpanded: true,
+                            value: _selectedLord, isExpanded: true,
                             dropdownColor: Theme.of(context).colorScheme.surface,
                             items: _commanders.where((c) => !c.isBusy)
                                 .map((c) => DropdownMenuItem(
                                   value: c.lord,
-                                  child: Text(c.lord.id == 0 ? 'اللورد الرئيسي' : c.lord.displayName,
+                                  child: Text(
+                                      c.lord.id == 0 ? 'اللورد الرئيسي' : c.lord.displayName,
                                       style: const TextStyle(decoration: TextDecoration.none)),
                                 )).toList(),
                             onChanged: (v) => setState(() => _selectedLord = v),
                           ),
                         ),
                         const SizedBox(height: 16),
-
-                        // Units
                         Row(children: [
                           _sectionLabel('الوحدات ($_selectedTypes/$_maxTypes · $_totalUnits)'),
                           const Spacer(),
@@ -1096,8 +1099,8 @@ class _AttackSheetState extends State<_AttackSheet> {
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                         : const Icon(Icons.gavel_rounded),
                     label: Text(_sending ? 'جارٍ الإرسال...' : 'هجوم ($_totalUnits)',
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15,
-                            decoration: TextDecoration.none)),
+                        style: const TextStyle(fontWeight: FontWeight.bold,
+                            fontSize: 15, decoration: TextDecoration.none)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.red,
                       foregroundColor: Colors.white,
@@ -1160,7 +1163,8 @@ class _AttackSheetState extends State<_AttackSheet> {
           child: Container(width: 30, height: 30,
               decoration: BoxDecoration(color: AppTheme.teal.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(6)),
-              child: const Icon(Icons.keyboard_double_arrow_up_rounded, color: AppTheme.teal, size: 14)),
+              child: const Icon(Icons.keyboard_double_arrow_up_rounded,
+                  color: AppTheme.teal, size: 14)),
         ),
       ]),
     );
