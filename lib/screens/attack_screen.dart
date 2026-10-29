@@ -1039,9 +1039,9 @@ class _AttackSheetState extends State<_AttackSheet> {
       final catalog = await widget.client.loadCatalog();
       final units = await widget.client.getCastleUnits(
           widget.source.kingdomId, widget.source.areaId, catalog);
-      final unlocked = widget.client.getUnlockedForArea(widget.source.areaId);
-      final sendable =
-          units.where((u) => unlocked.contains(u.wodId) && u.amount > 0).toList();
+      // ✅ شيلنا فلتر unlocked — كل وحدة موجودة في AC قابلة للإرسال
+final sendable =
+    units.where((u) => u.isCombat && u.amount > 0).toList();
       final cmds = await widget.client.getCommanders();
 
       if (!mounted) return;

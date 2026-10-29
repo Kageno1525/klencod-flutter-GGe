@@ -901,10 +901,10 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
       _catalog = await widget.client.loadCatalog();
       final units = await widget.client.getCastleUnits(
           widget.source.kingdomId, widget.source.areaId, _catalog);
-      final unlocked = widget.client.getUnlockedForArea(widget.source.areaId);
-      final sendable = units
-          .where((u) => unlocked.contains(u.wodId) && u.amount > 0)
-          .toList();
+      // ✅ شيلنا فلتر unlocked
+final sendable = units
+    .where((u) => u.isCombat && u.amount > 0)
+    .toList();
       final cmds = await widget.client.getCommanders();
 
       final cached = await widget.svc.loadCachedDefenders(widget.tower);

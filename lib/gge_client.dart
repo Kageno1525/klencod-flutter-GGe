@@ -218,21 +218,37 @@ class GgeClient {
             for (final area in areas) {
               if (area is! Map) continue;
               final u = area['U'];
-              if (u is! Map) continue;
-              final aid = _asInt(area['AID']);
-              final unlocked = u['U'] as List?;
-              if (unlocked != null) {
-                final areaSet = <int>{};
-                for (final id in unlocked) {
-                  final wod = _asIntOrNull(id);
-                  if (wod != null && wod > 0) {
-                    _unlockedUnitIds.add(wod);
-                    areaSet.add(wod);
-                  }
-                }
-                if (aid > 0 && areaSet.isNotEmpty) {
-                  _unlockedByAreaId[aid] = areaSet;
-                }
+if (u is! Map) continue;
+final aid = _asInt(area['AID']);
+final areaSet = <int>{};
+
+// ✅ U = الوحدات الأساسية
+final unlockedU = u['U'] as List?;
+if (unlockedU != null) {
+  for (final id in unlockedU) {
+    final wod = _asIntOrNull(id);
+    if (wod != null && wod > 0) {
+      _unlockedUnitIds.add(wod);
+      areaSet.add(wod);
+    }
+  }
+}
+
+// ✅ L = وحدات Elite/Legendary (المهم!)
+final unlockedL = u['L'] as List?;
+if (unlockedL != null) {
+  for (final id in unlockedL) {
+    final wod = _asIntOrNull(id);
+    if (wod != null && wod > 0) {
+      _unlockedUnitIds.add(wod);
+      areaSet.add(wod);
+    }
+  }
+}
+
+if (aid > 0 && areaSet.isNotEmpty) {
+  _unlockedByAreaId[aid] = areaSet;
+}
               }
             }
             TrafficLog.add(

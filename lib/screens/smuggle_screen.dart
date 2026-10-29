@@ -137,21 +137,22 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   /// ✅ White-list: فقط الجنود اللي role=melee/ranged.
   ///    الأدوات (Shields, Chests, Boosts, Ram, Ladder) كلها role مختلف → بتختفي.
   bool _isSendableForSmuggle(CastleUnit u) {
-    final info = u.info;
-    if (info == null) return false;
+  final info = u.info;
+  if (info == null) return false;
 
-    if (info.role != 'melee' && info.role != 'ranged') return false;
+  // ✅ يقبل كل الجنود القتالية (هجوم + دفاع)
+  if (!u.isCombat) return false;
 
-    // استبعاد أمان: الجدران/البوابات/الخنادق حتى لو اتصنفوا melee
-    final type = info.type ?? '';
-    if (type.contains('Wall') ||
-        type.contains('Gate') ||
-        type.contains('Moat')) {
-      return false;
-    }
-
-    return true;
+  // ✅ يستبعد الجدران/البوابات/الخنادق (مش جنود — مباني دفاعية)
+  final type = info.type ?? '';
+  if (type.contains('Wall') ||
+      type.contains('Gate') ||
+      type.contains('Moat')) {
+    return false;
   }
+
+  return true;
+}
 
   Future<void> _loadUnits() async {
     if (_source == null) return;

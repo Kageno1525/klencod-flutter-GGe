@@ -17,16 +17,14 @@ class DesertAutoService {
   static const _kLastScan = 'desert_auto_last_scan';
   static const _kLastReplenish = 'desert_auto_last_repl';
 
-  /// ✅ الحالة الحية
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
 
   Timer? _timer;
-  StreamSubscription? _xtSub; // ← ✅ الجديد: المستمع
+  StreamSubscription? _xtSub;
   bool _running = false;
   bool _processing = false;
   DesertAttackService? _svc;
   GgeClient? _client;
-
   List<DesertTower> _towers = [];
 
   Future<bool> isEnabled() async {
@@ -43,27 +41,17 @@ class DesertAutoService {
   Future<void> setSource(int areaId) async {
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kSourceAreaId, areaId);
-    TrafficLog.add('ST', '[Desert-Auto] source set to $areaId');
-  }
-
-  Future<int> getSource() async {
-    final p = await SharedPreferences.getInstance();
-    return p.getInt(_kSourceAreaId) ?? 0;
   }
 
   bool get isRunning => _running;
 
   Future<void> start(GgeClient client, {int? sourceAreaId}) async {
-    if (_running) {
-      TrafficLog.add('ST', '[Desert-Auto] already running');
-      return;
-    }
+    if (_running) return;
 
     _client = client;
     _svc = DesertAttackService(client);
     await _svc!.loadCooldowns();
 
-    // ✅ المستمع ده هو المفتاح — لازم قبل أي spy
     _xtSub?.cancel();
     _xtSub = client.xtStream.listen((msg) {
       if (msg.command != 'sne' || msg.payload == null) return;
@@ -91,11 +79,9 @@ class DesertAutoService {
     _running = true;
     _processing = false;
     _setStatus('🚀 Started');
-
     _tick();
 
     _timer?.cancel();
-    // ✅ 30 ثانية بدل 90 (زي ما طلبت)
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
   }
 
@@ -129,15 +115,12 @@ class DesertAutoService {
     try {
       await _maybeReplenish();
       if (!_running) return;
-
       await _maybeRescan();
       if (!_running) return;
-
       await _tryAttackTowers();
 
       if (_running) {
         final current = statusNotifier.value;
-        // ✅ لو حصل حاجة مفيدة → احتفظ بها + ضيف الوقت
         if (current == initialStatus) {
           _setStatus('💤 Idle  ·  ⏱ 30s');
         } else if (!current.contains('❌')) {
@@ -151,18 +134,12 @@ class DesertAutoService {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Auto-Replenish
-  // ═══════════════════════════════════════════════════════
   Future<void> _maybeReplenish() async {
     if (_client == null) return;
     final p = await SharedPreferences.getInstance();
 
     final desertArea = p.getInt(_kSourceAreaId) ?? 0;
-    if (desertArea == 0) {
-      _setStatus('⚠️ Select a desert castle first');
-      return;
-    }
+    if (desertArea == 0) return;
 
     final lastStr = p.getString(_kLastReplenish);
     if (lastStr != null) {
@@ -170,7 +147,6 @@ class DesertAutoService {
       if (last != null) {
         final elapsed = DateTime.now().difference(last).inMinutes;
         if (elapsed < 20) {
-          // ← نقل لسه في الطريق، متقولش idle
           _setStatus('🚚 Units in transit (${elapsed}m ago)');
           return;
         }
@@ -183,37 +159,23 @@ class DesertAutoService {
       final castles = await _client!.getCastles();
       OwnedCastle? main;
       OwnedCastle? desert;
-
       for (final c in castles) {
         if (c.areaType == 1) main = c;
         if (c.areaId == desertArea) desert = c;
       }
-
-      if (desert == null) {
-        _setStatus('⚠️ Desert castle not found');
-        return;
-      }
-      if (main == null) {
-        _setStatus('⚠️ No main castle');
-        return;
-      }
-      if (main.areaId == desert.areaId) {
-        _setStatus('⚠️ Main = desert');
-        return;
-      }
+      if (desert == null || main == null) return;
+      if (main.areaId == desert.areaId) return;
 
       final catalog = await _client!.loadCatalog();
       final desertUnits = await _client!.getCastleUnits(
           desert.kingdomId, desert.areaId, catalog);
 
+      // ✅ شيلنا فلتر unlocked — كل وحدة offensive قابلة للإرسال
       final offCount = desertUnits
-          .where((u) => u.isCombat && !u.isDefensive)
+          .where((u) => u.isCombat && !u.isDefensive && u.amount > 0)
           .fold<int>(0, (s, u) => s + u.amount);
 
-      if (offCount >= minOff) {
-        // مفيش مشكلة وحدات — منقولش حاجة
-        return;
-      }
+      if (offCount >= minOff) return;
 
       _setStatus('🔄 Need transfer: $offCount < $minOff');
 
@@ -234,7 +196,6 @@ class DesertAutoService {
       }
 
       _setStatus('📤 Transferring ${toTransfer.length} types...');
-
       final result = await _client!.transfer(
         source: main,
         target: desert,
@@ -253,9 +214,6 @@ class DesertAutoService {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Rescan
-  // ═══════════════════════════════════════════════════════
   Future<void> _maybeRescan() async {
     if (_client == null || _svc == null) return;
     final p = await SharedPreferences.getInstance();
@@ -290,9 +248,6 @@ class DesertAutoService {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Attack towers
-  // ═══════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
 
@@ -311,14 +266,14 @@ class DesertAutoService {
       final catalog = await _client!.loadCatalog();
       final units = await _client!.getCastleUnits(
           desert.kingdomId, desert.areaId, catalog);
-      final unlocked = _client!.getUnlockedForArea(desert.areaId);
+
+      // ✅ شيلنا فلتر unlocked — أي وحدة قتالية موجودة في AC
       final sendable = units
-          .where((u) => unlocked.contains(u.wodId) && u.amount > 0)
-          .where((u) => u.isCombat)
+          .where((u) => u.isCombat && u.amount > 0)
           .toList();
 
       if (sendable.isEmpty) {
-        _setStatus('⏳ No units yet in desert');
+        _setStatus('⏳ No combat units in desert');
         return;
       }
 
@@ -342,20 +297,17 @@ class DesertAutoService {
       for (final tower in candidates) {
         if (!_running) break;
 
-        // ✅ نجرب التقرير من الكاش الأول
         var report = _svc!.getCachedReport(tower);
         if (report == null ||
             DateTime.now().difference(report.fetchedAt).inMinutes > 10) {
           _setStatus('🔍 Spying ${tower.coordsLabel}...');
           await _spyAndFetch(tower, desert, catalog);
-          // بعد الـ fetch، نجيب التقرير من الكاش
           report = _svc!.getCachedReport(tower);
-          if (report == null || !report.matches(tower)) {
-            continue; // جرّب البرج اللي بعده
-          }
+          if (report == null || !report.matches(tower)) continue;
         }
 
-        final totalAvail = sendable.fold<int>(0, (s, u) => s + u.amount);
+        final totalAvail =
+            sendable.fold<int>(0, (s, u) => s + u.amount);
         final viable = _svc!.analyzeAttack(
           report: report,
           myUnitCount: totalAvail,
@@ -393,7 +345,7 @@ class DesertAutoService {
 
         if (result.success) {
           _setStatus('✅ Hit ${tower.coordsLabel}!');
-          return; // برج واحد بس في كل tick
+          return;
         } else {
           _setStatus('❌ Attack failed: ${result.error}');
           return;
@@ -404,9 +356,6 @@ class DesertAutoService {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Spy + Fetch (مع Polling بدل الـ 25s الثابتة)
-  // ═══════════════════════════════════════════════════════
   Future<void> _spyAndFetch(
     DesertTower tower,
     OwnedCastle desert,
@@ -414,7 +363,6 @@ class DesertAutoService {
   ) async {
     if (_svc == null) return;
 
-    // ✅ امسح msgId القديم عشان منستخدمش تقرير برج تاني
     _svc!.latestSpyMessageId = null;
     _svc!.latestSpyMessageIdAt = null;
 
@@ -426,7 +374,6 @@ class DesertAutoService {
 
     _setStatus('⏳ Waiting for report...');
 
-    // ✅ Polling كل 2s، أقصى 15 محاولة = 30s
     int? msgId;
     for (int i = 0; i < 15; i++) {
       await Future.delayed(const Duration(seconds: 2));
