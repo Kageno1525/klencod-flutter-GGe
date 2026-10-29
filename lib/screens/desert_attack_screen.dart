@@ -53,13 +53,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen> {
         final type = m[1] as int?;
         if (msgId == null || type != 4) continue;
         _svc.captureSneReport(msgId);
-        // نحدث الشاشة لو حصل spy جديد
-        if (mounted) {
-          setState(() {
-            // نحدّث البرج اللي عملنا عليه spy
-            // (بنستخدم آخر tower عملنا عليه spy، ونسجله كـ "آخر تجسس")
-          });
-        }
       }
     } catch (_) {}
   }
@@ -761,13 +754,13 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
   }
 
   DefenderSummary _buildDefenderSummary() => DefenderSummary(
-    leftMelee: int.tryParse(_lmCtrl.text) ?? 0,
-    leftRanged: int.tryParse(_lrCtrl.text) ?? 0,
-    middleMelee: int.tryParse(_mmCtrl.text) ?? 0,
-    middleRanged: int.tryParse(_mrCtrl.text) ?? 0,
-    rightMelee: int.tryParse(_rmCtrl.text) ?? 0,
-    rightRanged: int.tryParse(_rrCtrl.text) ?? 0,
-  );
+        leftMelee: int.tryParse(_lmCtrl.text) ?? 0,
+        leftRanged: int.tryParse(_lrCtrl.text) ?? 0,
+        middleMelee: int.tryParse(_mmCtrl.text) ?? 0,
+        middleRanged: int.tryParse(_mrCtrl.text) ?? 0,
+        rightMelee: int.tryParse(_rmCtrl.text) ?? 0,
+        rightRanged: int.tryParse(_rrCtrl.text) ?? 0,
+      );
 
   Future<void> _load() async {
     try {
@@ -829,24 +822,42 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
 
   int get _selectedTypes {
     final set = <int>{};
-    for (final e in _leftAmt.entries) if (e.value > 0) set.add(e.key);
-    for (final e in _middleAmt.entries) if (e.value > 0) set.add(e.key);
-    for (final e in _rightAmt.entries) if (e.value > 0) set.add(e.key);
+    for (final e in _leftAmt.entries) {
+      if (e.value > 0) set.add(e.key);
+    }
+    for (final e in _middleAmt.entries) {
+      if (e.value > 0) set.add(e.key);
+    }
+    for (final e in _rightAmt.entries) {
+      if (e.value > 0) set.add(e.key);
+    }
     return set.length;
   }
 
   void _clearAll() {
-    for (final k in _leftAmt.keys) _leftAmt[k] = 0;
-    for (final k in _middleAmt.keys) _middleAmt[k] = 0;
-    for (final k in _rightAmt.keys) _rightAmt[k] = 0;
+    for (final k in _leftAmt.keys) {
+      _leftAmt[k] = 0;
+    }
+    for (final k in _middleAmt.keys) {
+      _middleAmt[k] = 0;
+    }
+    for (final k in _rightAmt.keys) {
+      _rightAmt[k] = 0;
+    }
     setState(() {});
   }
 
   void _applySuggestion(UnitSuggestion s) {
     _clearAll();
-    for (final u in s.left) if (u[0] > 0) _leftAmt[u[0]] = u[1];
-    for (final u in s.middle) if (u[0] > 0) _middleAmt[u[0]] = u[1];
-    for (final u in s.right) if (u[0] > 0) _rightAmt[u[0]] = u[1];
+    for (final u in s.left) {
+      if (u[0] > 0) _leftAmt[u[0]] = u[1];
+    }
+    for (final u in s.middle) {
+      if (u[0] > 0) _middleAmt[u[0]] = u[1];
+    }
+    for (final u in s.right) {
+      if (u[0] > 0) _rightAmt[u[0]] = u[1];
+    }
     setState(() {});
   }
 
@@ -889,7 +900,6 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     if (mounted) setState(() => _autoAttackInProgress = false);
   }
 
-  /// ✅ جلب التقرير + ملء الدفاعات تلقائياً
   Future<void> _fetchReport() async {
     final msgId = widget.svc.latestSpyMessageId;
     if (msgId == null) {
@@ -910,22 +920,18 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     setState(() => _fetching = false);
 
     if (report == null) {
-      _snack('فشل جلب التقرير — شوف اللوج',
-          color: AppTheme.red);
+      _snack('فشل جلب التقرير — شوف اللوج', color: AppTheme.red);
       return;
     }
 
-    // تحقق إن التقرير فعلاً عن البرج ده
     if (!report.matches(widget.tower)) {
       _snack(
-        'التقرير لبرج تاني (${report.targetX},${report.targetY}) '
-        'مش (${widget.tower.x},${widget.tower.y})',
+        'التقرير لبرج تاني (${report.targetX},${report.targetY})',
         color: AppTheme.orange,
       );
       return;
     }
 
-    // ✅ املأ الدفاعات تلقائياً
     final d = report.toDefenderSummary();
     setState(() {
       _lastReport = report;
@@ -959,13 +965,14 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
             const SizedBox(height: 6),
             _reportRow('الجناح اليمين', d.rightMelee, d.rightRanged),
             const SizedBox(height: 12),
-            Text('GC: ${report.goldCampValue}  ·  AS: ${report.availableAttacks}',
+            Text(
+                'GC: ${report.goldCampValue}  ·  AS: ${report.availableAttacks}',
                 style: TextStyle(
                     color: AppTheme.subTextColor(ctx),
                     fontSize: 11,
                     decoration: TextDecoration.none)),
             const SizedBox(height: 8),
-            const Text('✅ اتملت الدفاعات تلقائياً في النموذج',
+            const Text('✅ اتملت الدفاعات تلقائياً',
                 style: TextStyle(
                     color: Colors.green,
                     fontSize: 11,
@@ -975,9 +982,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('تمام'),
-          ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('تمام')),
         ],
       ),
     );
@@ -999,8 +1005,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
               fontWeight: FontWeight.bold,
               decoration: TextDecoration.none)),
       const Text('  ·  ',
-          style: TextStyle(color: Colors.white38,
-              decoration: TextDecoration.none)),
+          style:
+              TextStyle(color: Colors.white38, decoration: TextDecoration.none)),
       Text('$ranged ranged',
           style: const TextStyle(
               color: kDesertGold,
@@ -1041,7 +1047,7 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
       if (!mounted) return;
       _snack(
         'تم إرسال الجواسيس (MID=${res.movementId ?? "?"})\n'
-        'استنى 20-30 ثانية، بعدين دوس "جلب تقرير"',
+        'استنى 20-30 ثانية، بعدين دوس "جلب التقرير"',
         color: AppTheme.green,
       );
     } else {
@@ -1205,7 +1211,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
           onPressed: _canSpy ? _spy : null,
           icon: _spying
               ? const SizedBox(
-                  width: 16, height: 16,
+                  width: 16,
+                  height: 16,
                   child: CircularProgressIndicator(
                       strokeWidth: 2, color: kDesertSand))
               : const Icon(Icons.visibility_rounded, size: 18),
@@ -1229,7 +1236,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
             onPressed: _fetching ? null : _fetchReport,
             icon: _fetching
                 ? const SizedBox(
-                    width: 16, height: 16,
+                    width: 16,
+                    height: 16,
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: kDesertGold))
                 : const Icon(Icons.download_rounded, size: 18),
@@ -1257,7 +1265,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
             onPressed: _recalling ? null : _recall,
             icon: _recalling
                 ? const SizedBox(
-                    width: 16, height: 16,
+                    width: 16,
+                    height: 16,
                     child: CircularProgressIndicator(
                         strokeWidth: 2, color: AppTheme.red))
                 : const Icon(Icons.replay_rounded, size: 18),
@@ -1307,7 +1316,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            const Icon(Icons.security_rounded, color: kDesertSand, size: 18),
+            const Icon(Icons.security_rounded,
+                color: kDesertSand, size: 18),
             const SizedBox(width: 6),
             const Expanded(
               child: Text('دفاعات العدو',
@@ -1319,8 +1329,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
             ),
             if (_lastReport != null)
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 6, vertical: 2),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: Colors.green.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(4),
@@ -1363,7 +1373,8 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
                 onPressed: _autoAttackInProgress ? null : _autoAttack,
                 icon: _autoAttackInProgress
                     ? const SizedBox(
-                        width: 14, height: 14,
+                        width: 14,
+                        height: 14,
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.black))
                     : const Icon(Icons.flash_on_rounded, size: 16),
@@ -1452,8 +1463,225 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
     ]);
   }
 
+  // ✅ _lordSection — كامل ومغلق
   Widget _lordSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _
+        _sectionLabel('القائد'),
+        const SizedBox(height: 6),
+        DropdownButtonHideUnderline(
+          child: DropdownButton<Lord>(
+            value: _selectedLord,
+            isExpanded: true,
+            dropdownColor: Theme.of(context).colorScheme.surface,
+            items: _commanders
+                .where((c) => !c.isBusy)
+                .map((c) => DropdownMenuItem(
+                      value: c.lord,
+                      child: Text(
+                          c.lord.id == 0
+                              ? 'اللورد الرئيسي'
+                              : c.lord.displayName,
+                          style: const TextStyle(
+                              decoration: TextDecoration.none,
+                              fontSize: 13)),
+                    ))
+                .toList(),
+            onChanged: (v) => setState(() => _selectedLord = v),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ✅ _unitsSection — كامل
+  Widget _unitsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          _sectionLabel(
+              'الوحدات ($_selectedTypes/$_maxTypes · $_grandTotal)'),
+          const Spacer(),
+          TextButton(
+              onPressed: _clearAll,
+              child: const Text('مسح',
+                  style:
+                      TextStyle(fontSize: 11, color: AppTheme.red))),
+        ]),
+        const SizedBox(height: 4),
+        ..._units.map((u) => _unitRow(u)),
+      ],
+    );
+  }
+
+  // ✅ _unitRow — كامل
+  Widget _unitRow(CastleUnit u) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: u.roleColor.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(u.icon, color: u.roleColor, size: 16),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(u.displayName,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.none)),
+            ),
+            Text('متاح: ${u.amount}',
+                style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 10,
+                    decoration: TextDecoration.none)),
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            _wingField('L', _leftAmt[u.wodId] ?? 0, u.amount, (v) {
+              setState(() => _leftAmt[u.wodId] = v);
+            }, kDesertSand),
+            const SizedBox(width: 6),
+            _wingField('M', _middleAmt[u.wodId] ?? 0, u.amount, (v) {
+              setState(() => _middleAmt[u.wodId] = v);
+            }, kDesertGold),
+            const SizedBox(width: 6),
+            _wingField('R', _rightAmt[u.wodId] ?? 0, u.amount, (v) {
+              setState(() => _rightAmt[u.wodId] = v);
+            }, kDesertSand),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  // ✅ _wingField — كامل
+  Widget _wingField(String label, int value, int max,
+      ValueChanged<int> onChange, Color color) {
+    return Expanded(
+      child: SizedBox(
+        height: 34,
+        child: TextFormField(
+          key: ValueKey('${label}_${value}_${color.value}'),
+          initialValue: value.toString(),
+          keyboardType: TextInputType.number,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          textAlign: TextAlign.center,
+          style: TextStyle(
+              color: value > 0 ? color : Colors.white54,
+              fontSize: 12,
+              fontWeight: FontWeight.bold),
+          decoration: InputDecoration(
+            hintText: label,
+            hintStyle:
+                const TextStyle(color: Colors.white30, fontSize: 10),
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(vertical: 8),
+            enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide:
+                    BorderSide(color: value > 0 ? color : Colors.white12)),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: BorderSide(color: color)),
+          ),
+          onChanged: (v) {
+            final n = int.tryParse(v) ?? 0;
+            onChange(n.clamp(0, max));
+          },
+        ),
+      ),
+    );
+  }
+
+  // ✅ _summarySection — كامل
+  Widget _summarySection() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.03),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        _summaryItem('يسار', _leftTotal, kDesertSand),
+        _summaryItem('أمام', _middleTotal, kDesertGold),
+        _summaryItem('يمين', _rightTotal, kDesertSand),
+        _summaryItem('إجمالي', _grandTotal, Colors.white),
+      ]),
+    );
+  }
+
+  // ✅ _summaryItem — كامل
+  Widget _summaryItem(String label, int value, Color color) {
+    return Expanded(
+      child: Column(children: [
+        Text(label,
+            style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 10,
+                decoration: TextDecoration.none)),
+        const SizedBox(height: 2),
+        Text(value.toString(),
+            style: TextStyle(
+                color: color,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                decoration: TextDecoration.none)),
+      ]),
+    );
+  }
+
+  // ✅ _sectionLabel — كامل
+  Widget _sectionLabel(String s) => Text(s,
+      style: const TextStyle(
+          color: Colors.white70,
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
+          decoration: TextDecoration.none));
+
+  // ✅ _footer — كامل
+  Widget _footer() {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: ElevatedButton.icon(
+            onPressed: _sending || _loading ? null : _attack,
+            icon: _sending
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.gavel_rounded),
+            label: Text(
+                _sending ? 'جارٍ الإرسال...' : 'هجوم ($_grandTotal)',
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    decoration: TextDecoration.none)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: kDesertSand,
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
