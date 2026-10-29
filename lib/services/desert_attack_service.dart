@@ -9,7 +9,7 @@ const int kDesertRadiusMin = 5;
 const int kDesertRadiusMax = 100;
 const int kDesertRadiusStep = 5;
 const int kDesertChunkSize = 13;
-const int kDefaultTowerCooldownMinutes = 240; // ✅ 4 ساعات
+const int kDefaultTowerCooldownMinutes = 240;
 const int kAttackPowerPerUnit = 10;
 
 // ═══════════════════════════════════════════════════════════
@@ -566,6 +566,7 @@ class DesertAttackService {
 
   Future<DesertSpyReport?> fetchSpyReport({
     required int messageId,
+    required DesertTower tower,
     required Map<int, UnitCatalogEntry> catalog,
   }) async {
     try {
@@ -582,9 +583,10 @@ class DesertAttackService {
         return null;
       }
 
-      final report = _parseBsd(resp.payload!, messageId, catalog);
+      final report = _parseBsd(resp.payload!, messageId, catalog, tower);
       if (report != null) {
-        _reportCache['${report.targetX},${report.targetY},1'] = report;
+        // ✅ مفتاح الـ cache بالبرج (مش بالـ targetX/Y)
+        _reportCache[tower.key] = report;
         TrafficLog.add('ST',
             '[Desert] ✓ report: ${report.summaryLine} '
             'AS=${report.defensiveStrength} units=${report.totalEnemyUnits}');
@@ -600,11 +602,26 @@ class DesertAttackService {
       _reportCache[tower.key];
 
   DesertSpyReport? _parseBsd(
-      String payload, int messageId, Map<int, UnitCatalogEntry> catalog) {
+    String payload,
+    int messageId,
+    Map<int, UnitCatalogEntry> catalog,
+    DesertTower tower,
+  ) {
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
       final s = data['S'] as List?;
       if (s == null || s.length < 3) return null;
+
+      // ✅ التحقق من OI.DUM/OID — لو البرج مدمر أو NPC، نرجع null
+      final oi = data['OI'] as Map?;
+      final dum = oi?['DUM'] == true;
+      final oid = _asInt(oi?['OID']);
+      if (dum || oid <= 0) {
+        TrafficLog.add('ER',
+            '[Desert] bsd target is destroyed/NPC (OID=$oid DUM=$dum) '
+            'for ${tower.coordsLabel} — skip');
+        return null;
+      }
 
       DefenderWing parseWing(dynamic wingData) {
         int melee = 0, ranged = 0;
@@ -642,9 +659,15 @@ class DesertAttackService {
         }
       }
 
-      final ai = data['AI'] as Map?;
-      final tx = _asInt(ai?['X']);
-      final ty = _asInt(ai?['Y']);
+      // ✅ الإحداثيات من SO.AI (البرج) أو من tower
+      final so = data['SO'] as Map?;
+      final ai = (data['AI'] as Map?) ?? (so?['AI'] as Map?);
+      int tx = _asInt(ai?['X']);
+      int ty = _asInt(ai?['Y']);
+      if (tx <= 0 || ty <= 0) {
+        tx = tower.x;
+        ty = tower.y;
+      }
 
       return DesertSpyReport(
         messageId: messageId,
@@ -730,7 +753,6 @@ class DesertAttackService {
 
     await _ensureKingdom(tower.kid);
     try {
-      // ✅ تفعيل الريشة (PTT: 1) عشان الجيش يروح بسرعة زي التجسس
       final payload = {
         'SX': source.x, 'SY': source.y,
         'TX': tower.x, 'TY': tower.y,
@@ -778,7 +800,7 @@ class DesertAttackService {
       if (resp.resultCode == 218) return DesertAttackResult.fail('LORD_BUSY_218');
       if (resp.resultCode == 181) return DesertAttackResult.fail('MAX_MOVEMENTS_181');
       if (resp.resultCode == 100) return DesertAttackResult.fail('CRA_100');
-      if (resp.resultCode == 313) return DesertAttackResult.fail('CRA_313 (Already gone/Cooldown)');
+      if (resp.resultCode == 313) return DesertAttackResult.fail('CRA_313 (Already gone)');
       return DesertAttackResult.fail('CRA ${resp.resultCode}');
     } catch (e) {
       TrafficLog.add('ER', '[Desert-Attack] exception: $e');
@@ -854,27 +876,23 @@ class DesertAttackService {
       required int maxSlots,
     }) {
       final totalDefForWing = defMelee + defRanged;
-      if (totalDefForWing <= 0) return []; // ✅ جناح العدو فاضي، متبعتش جنود
+      if (totalDefForWing <= 0) return [];
 
-      // حساب نسبة هذا الجناح من إجمالي دفاعات العدو
       final wingShare = totalDefForWing / totalDef;
       
       int target;
       if (totalAvail >= totalDef * 1.5) {
-        // لو الجنود كفاية، بنبعت 1.5 ضعف دفاع الجناح
         target = (totalDefForWing * 1.5).round();
       } else {
-        // لو الجنود قليلة، بنوزعها بالنسب عشان منسيبش جناح فاضي
         target = (totalAvail * wingShare).round();
       }
       if (target == 0) target = 1;
 
-      // موازنة القوة (Counter) - لو العدو رماية نبعت مشاة والعكس
       double meleeRatio = 0.5;
       if (ranged.isEmpty) meleeRatio = 1.0;
       else if (melee.isEmpty) meleeRatio = 0.0;
-      else if (defRanged > defMelee) meleeRatio = 0.7; // العدو رماية -> نبعت 70% مشاة
-      else if (defMelee > defRanged) meleeRatio = 0.3; // العدو مشاة -> نبعت 70% رماية
+      else if (defRanged > defMelee) meleeRatio = 0.7;
+      else if (defMelee > defRanged) meleeRatio = 0.3;
 
       int meleeTarget = (target * meleeRatio).round();
       int rangedTarget = target - meleeTarget;
@@ -924,7 +942,6 @@ class DesertAttackService {
         rangedAlloc += take;
       }
 
-      // ✅ لو لسه فاضي (بسبب نقص الوحدات)، نحاول نحط أي حاجة متاحة
       if (out.isEmpty) {
         for (final u in melee) {
           final rem = remaining[u.wodId] ?? 0;

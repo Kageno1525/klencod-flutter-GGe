@@ -23,6 +23,7 @@ class DesertAutoService {
   static const _kLastReplenish = 'desert_auto_last_repl';
   static const _kCommanderIds = 'desert_auto_commander_ids';
   static const _kTransferUnitIds = 'desert_auto_transfer_unit_ids';
+  static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 100;
 
@@ -88,16 +89,52 @@ class DesertAutoService {
 
   bool get isRunning => _running;
 
+  // ══════════════════════════════════════════════════════════
+  //  Failed Towers Persistence
+  // ══════════════════════════════════════════════════════════
+  Future<void> _loadFailedTowers() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString(_kFailedTowers);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final now = DateTime.now();
+      _failedTowers.clear();
+      for (final e in data.entries) {
+        final dt = DateTime.tryParse(e.value as String);
+        if (dt != null && dt.isAfter(now)) {
+          _failedTowers[e.key] = dt;
+        }
+      }
+      if (_failedTowers.isNotEmpty) {
+        TrafficLog.add('ST',
+            '[Desert-Auto] loaded ${_failedTowers.length} failed towers from disk');
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveFailedTowers() async {
+    final p = await SharedPreferences.getInstance();
+    final now = DateTime.now();
+    final data = <String, String>{};
+    for (final e in _failedTowers.entries) {
+      if (e.value.isAfter(now)) {
+        data[e.key] = e.value.toIso8601String();
+      }
+    }
+    await p.setString(_kFailedTowers, jsonEncode(data));
+  }
+
   Future<void> start(GgeClient client, {int? sourceAreaId}) async {
     if (_running) return;
 
     _client = client;
     _svc = DesertAttackService(client);
     await _svc!.loadCooldowns();
+    await _loadFailedTowers(); // ✅ نحمّل الأبراج اللي فشلت قبل كده
 
     attacksThisSession = 0;
     towersScanned = 0;
-    _failedTowers.clear();
 
     _xtSub?.cancel();
     _xtSub = client.xtStream.listen((msg) {
@@ -154,13 +191,15 @@ class DesertAutoService {
     if (at == null) return false;
     if (DateTime.now().difference(at).inMinutes >= minutes) {
       _failedTowers.remove(t.key);
+      _saveFailedTowers();
       return false;
     }
     return true;
   }
 
   void _markTowerFailed(DesertTower t) {
-    _failedTowers[t.key] = DateTime.now();
+    _failedTowers[t.key] = DateTime.now().add(const Duration(hours: 4));
+    _saveFailedTowers();
     TrafficLog.add('ST',
         '[Desert-Auto] ⏸️ marked ${t.coordsLabel} failed (4 hours)');
   }
@@ -391,9 +430,9 @@ class DesertAutoService {
 
         final report = _svc!.getCachedReport(tower);
         if (report == null || !report.matches(tower)) {
-          _setStatus('❌ Spy failed for ${tower.coordsLabel}');
+          _setStatus('⏭️ Target ${tower.coordsLabel} destroyed/NPC — skip');
           _markTowerFailed(tower);
-          return;
+          continue; // ✅ نكمل للبرج اللي بعده بدل return
         }
 
         final viable = _svc!.analyzeAttack(
@@ -405,7 +444,7 @@ class DesertAutoService {
         if (!viable.likelyWin) {
           _setStatus('⏭️ Skip ${tower.coordsLabel}: ${viable.hint}');
           _markTowerFailed(tower);
-          return;
+          continue; // ✅ نكمل
         }
 
         final suggestion = _svc!.suggestCounter(
@@ -419,7 +458,7 @@ class DesertAutoService {
                 suggestion.right.isEmpty)) {
           _setStatus('⚠️ Empty suggestion for ${tower.coordsLabel}');
           _markTowerFailed(tower);
-          return;
+          continue; // ✅ نكمل
         }
 
         Lord lord;
@@ -449,13 +488,13 @@ class DesertAutoService {
               '($attacksThisTick this tick, $attacksThisSession session)');
           _setStatus(
               '✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
-          continue; // نرجع نلف تاني
+          continue;
         } else {
           TrafficLog.add('ER',
               '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel}: ${result.error}');
-          _markTowerFailed(tower); // لو 313 أو غيره، بيتعلم كـ failed عشان ميتبعتش تاني
-          return;
+          _markTowerFailed(tower);
+          continue; // ✅ نكمل للبرج اللي بعده
         }
       }
     } catch (e) {
@@ -497,6 +536,7 @@ class DesertAutoService {
     _setStatus('📥 Fetching report msgId=$msgId...');
     final report = await _svc!.fetchSpyReport(
       messageId: msgId,
+      tower: tower,
       catalog: catalog,
     );
 
@@ -506,4 +546,4 @@ class DesertAutoService {
       _setStatus('✓ Report: ${report.totalEnemyUnits} units');
     }
   }
-}
+}ج
