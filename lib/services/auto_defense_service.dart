@@ -1,24 +1,23 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
 import '../models.dart';
 
-// ═══════════════════════════════════════════════════════════════
-//  Settings
-// ═══════════════════════════════════════════════════════════════
+enum EvacUnitFilter { all, offenseOnly, defenseOnly }
+
 class AutoDefenseSettings {
   bool enabled;
   bool normalModeEnabled;
   bool saveModeEnabled;
   bool spyModeEnabled;
-
   int normalTriggerSeconds;
   int spyTriggerSeconds;
   int saveHours;
-
   int? preferredAllyPlayerId;
   List<int> unitPriority;
   bool skipNpcAttacks;
+  EvacUnitFilter evacUnitFilter;
 
   AutoDefenseSettings({
     this.enabled = false,
@@ -31,6 +30,7 @@ class AutoDefenseSettings {
     this.preferredAllyPlayerId,
     List<int>? unitPriority,
     this.skipNpcAttacks = true,
+    this.evacUnitFilter = EvacUnitFilter.all,
   }) : unitPriority = unitPriority ?? [];
 
   static const _kEnabled = 'ad_enabled';
@@ -43,10 +43,14 @@ class AutoDefenseSettings {
   static const _kPrefAlly = 'ad_pref_ally';
   static const _kPriority = 'ad_priority';
   static const _kSkipNpc = 'ad_skip_npc';
+  static const _kEvacFilter = 'ad_evac_filter';
+  static const _kGlobalHours = 'ad_global_hours';
+
+  int globalEvacHours = 12;
 
   static Future<AutoDefenseSettings> load() async {
     final p = await SharedPreferences.getInstance();
-    return AutoDefenseSettings(
+    final s = AutoDefenseSettings(
       enabled: p.getBool(_kEnabled) ?? false,
       normalModeEnabled: p.getBool(_kNormal) ?? false,
       saveModeEnabled: p.getBool(_kSave) ?? false,
@@ -60,7 +64,11 @@ class AutoDefenseSettings {
           .where((i) => i > 0)
           .toList(),
       skipNpcAttacks: p.getBool(_kSkipNpc) ?? true,
+      evacUnitFilter: EvacUnitFilter.values[(p.getInt(_kEvacFilter) ?? 0)
+          .clamp(0, EvacUnitFilter.values.length - 1)],
     );
+    s.globalEvacHours = p.getInt(_kGlobalHours) ?? 12;
+    return s;
   }
 
   Future<void> save() async {
@@ -80,12 +88,11 @@ class AutoDefenseSettings {
     await p.setStringList(
         _kPriority, unitPriority.map((i) => i.toString()).toList());
     await p.setBool(_kSkipNpc, skipNpcAttacks);
+    await p.setInt(_kEvacFilter, evacUnitFilter.index);
+    await p.setInt(_kGlobalHours, globalEvacHours);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  State models
-// ═══════════════════════════════════════════════════════════════
 class _PendingAttack {
   final int movementId;
   final int targetAreaId;
@@ -114,19 +121,21 @@ class _PendingAttack {
 
 class _CastleEvac {
   final int sourceAreaId;
-  final int evacuationMovementId; // -1 لو مش عارفينه
+  final List<int> evacuationMovementIds;
   final String targetAllyName;
   final DateTime createdAt;
   final bool spyMode;
+  final int wtHours;
   bool recalled;
   DateTime? recallAt;
 
   _CastleEvac({
     required this.sourceAreaId,
-    required this.evacuationMovementId,
+    required this.evacuationMovementIds,
     required this.targetAllyName,
     required this.createdAt,
     required this.spyMode,
+    required this.wtHours,
     this.recalled = false,
     this.recallAt,
   });
@@ -146,9 +155,6 @@ class _AllyPick {
   _AllyPick(this.name, this.playerId, this.castle);
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  Service
-// ═══════════════════════════════════════════════════════════════
 class AutoDefenseService {
   AutoDefenseService._();
   static final AutoDefenseService instance = AutoDefenseService._();
@@ -160,15 +166,20 @@ class AutoDefenseService {
 
   final Map<int, _PendingAttack> _pending = {};
   final Map<int, _CastleEvac> _evac = {};
-
-  // cooldown على المحاولات عشان ما نعملش spam لو فشلت
+  final Set<int> _evacuationInProgress = {};
   final Map<int, DateTime> _lastAttemptAt = {};
   static const _attemptCooldown = Duration(seconds: 30);
 
-  // cache للقواد
   List<CommanderInfo>? _commandersCache;
   DateTime? _commandersCacheAt;
   static const _commandersTtl = Duration(seconds: 30);
+
+  // Global evacuation state
+  bool _globalEvacRunning = false;
+  bool _globalEvacCancelled = false;
+  int _globalEvacCurrent = 0;
+  int _globalEvacTotal = 0;
+  String _globalEvacStatus = '';
 
   final List<AutoDefenseLogEntry> _log = [];
   final StreamController<List<AutoDefenseLogEntry>> _logCtrl =
@@ -182,9 +193,14 @@ class AutoDefenseService {
   Map<int, _PendingAttack> get pendingAttacks => Map.unmodifiable(_pending);
   Map<int, _CastleEvac> get activeEvacuations => Map.unmodifiable(_evac);
 
+  bool get globalEvacRunning => _globalEvacRunning;
+  int get globalEvacCurrent => _globalEvacCurrent;
+  int get globalEvacTotal => _globalEvacTotal;
+  String get globalEvacStatus => _globalEvacStatus;
+
   void _addLog(String msg, [String? kind]) {
     _log.insert(0, AutoDefenseLogEntry(DateTime.now(), msg, kind));
-    if (_log.length > 100) _log.removeRange(100, _log.length);
+    if (_log.length > 200) _log.removeRange(200, _log.length);
     if (!_logCtrl.isClosed) _logCtrl.add(List.unmodifiable(_log));
     TrafficLog.add('ST', '[AutoDef] $msg');
   }
@@ -206,13 +222,10 @@ class AutoDefenseService {
   Future<void> start() async {
     if (_running) return;
     _running = true;
-
     _sub?.cancel();
     _sub = GgeClient().attackStream.listen(_onAttack);
-
     _tick?.cancel();
     _tick = Timer.periodic(const Duration(seconds: 1), (_) => _onTick());
-
     _addLog('✅ Auto-defense started', 'info');
     _prefetch();
   }
@@ -252,17 +265,13 @@ class AutoDefenseService {
     return cmds;
   }
 
-  // ── Attack stream ──────────────────────────────────────────
   void _onAttack(AttackAlert alert) {
     if (!_running || !settings.enabled) return;
-
     if (alert.isCancelled) {
       _pending.remove(alert.movementId);
       return;
     }
-
     final isNpc = _isNpcAttack(alert);
-
     _pending[alert.movementId] = _PendingAttack(
       movementId: alert.movementId,
       targetAreaId: alert.targetAreaId,
@@ -274,11 +283,9 @@ class AutoDefenseService {
       attackerAlliance: alert.attackerAlliance,
       isNpc: isNpc,
     );
-
     TrafficLog.add('ST',
         '[AutoDef] Tracked mid=${alert.movementId} → area=${alert.targetAreaId} '
-        'ETA=${alert.arrivalAt.toIso8601String()} from=${alert.attackerName} '
-        'npc=$isNpc');
+        'ETA=${alert.arrivalAt.toIso8601String()} from=${alert.attackerName}');
   }
 
   bool _isNpcAttack(AttackAlert a) {
@@ -292,18 +299,15 @@ class AutoDefenseService {
         n.contains('بربري')) {
       return true;
     }
-    // playerID في GGE عادةً 6-8 أرقام. أقل من 100000 = على الأغلب NPC
     if (a.attackerId > 0 && a.attackerId < 100000) return true;
     return false;
   }
 
-  // ── Tick ───────────────────────────────────────────────────
   void _onTick() {
     if (!_running || !settings.enabled) return;
 
     _pending.removeWhere((_, a) => a.isPast);
 
-    // grouping per castle
     final byCastle = <int, List<_PendingAttack>>{};
     for (final a in _pending.values) {
       if (a.remainingSeconds() < -60) continue;
@@ -322,8 +326,10 @@ class AutoDefenseService {
       final ev = _evac[areaId];
       final alreadyEvacuated = ev != null && !ev.recalled;
 
-      if (!alreadyEvacuated && remaining > 0 && remaining <= _triggerFor()) {
-        // cooldown
+      if (!alreadyEvacuated &&
+          remaining > 0 &&
+          remaining <= _triggerFor() &&
+          !_evacuationInProgress.contains(areaId)) {
         final lastTry = _lastAttemptAt[areaId];
         if (lastTry == null ||
             DateTime.now().difference(lastTry) >= _attemptCooldown) {
@@ -333,10 +339,7 @@ class AutoDefenseService {
       }
     }
 
-    // Spy mode recall logic:
-    // 1) لو الـ evacuation في spy mode
-    // 2) كل الهجمات على نفس القلعة إما ضربت (remaining <= 0) أو اترفضت
-    // 3) مفيش هجوم وشيك (<= 30s)
+    // Spy mode recall
     for (final ev in _evac.values.toList()) {
       if (ev.recalled || !ev.spyMode) continue;
       final castleAttacks = _pending.values
@@ -351,6 +354,20 @@ class AutoDefenseService {
         _recallEvacuation(ev, reason: 'all attacks cleared');
       }
     }
+
+    // Normal/Save mode: recall after saveHours (no pending attacks)
+    for (final ev in _evac.values.toList()) {
+      if (ev.recalled || ev.spyMode) continue;
+      final castleAttacks = _pending.values
+          .where((a) => a.targetAreaId == ev.sourceAreaId)
+          .toList();
+      final stillPending = castleAttacks.any((a) => a.remainingSeconds() > -60);
+      if (stillPending) continue;
+      final ageSeconds = DateTime.now().difference(ev.createdAt).inSeconds;
+      if (ageSeconds >= ev.wtHours * 3600) {
+        _recallEvacuation(ev, reason: 'save time elapsed');
+      }
+    }
   }
 
   int _triggerFor() {
@@ -358,118 +375,60 @@ class AutoDefenseService {
     return settings.normalTriggerSeconds;
   }
 
-  // ── Evacuation ─────────────────────────────────────────────
-  Future<void> _triggerEvacuation(
-      _PendingAttack attack, int totalAttacks) async {
-    final areaId = attack.targetAreaId;
-    final existing = _evac[areaId];
-    if (existing != null && !existing.recalled) return;
+  // ── Unit filtering ─────────────────────────────────────────
+  bool _isSendableForEvac(CastleUnit u) {
+    final info = u.info;
+    if (info == null) {
+      // Unknown unit — range heuristic (700-800 غالباً tools)
+      if (u.wodId >= 700 && u.wodId <= 800) return false;
+      return true;
+    }
+    final type = (info.type ?? '').toLowerCase();
+    final role = (info.role ?? '').toLowerCase();
 
-    final isSpy = settings.spyModeEnabled;
-    _addLog(
-        '🚀 EVAC ${isSpy ? "SPY" : "NORMAL"} → castle area=$areaId '
-        '(attack in ${attack.remainingSeconds()}s, total=$totalAttacks)',
-        'evac');
+    // Wall/Gate/Moat/Trap
+    if (role == 'wall' || role == 'gate' || role == 'moat' || role == 'trap') {
+      return false;
+    }
+    if (type.contains('def_building') ||
+        type.contains('defbuilding') ||
+        type.contains('_wall') ||
+        type.contains('wall_') ||
+        type.contains('_gate') ||
+        type.contains('gate_') ||
+        type.contains('_moat') ||
+        type.contains('moat_') ||
+        type.contains('_trap') ||
+        type.contains('trap_')) {
+      return false;
+    }
 
-    try {
-      final client = GgeClient();
+    // Tools
+    if (role == 'tool' ||
+        type.contains('_tool') ||
+        type.contains('tool_') ||
+        type.contains('ram_') ||
+        type.contains('_ram') ||
+        type.contains('ladder_') ||
+        type.contains('_ladder') ||
+        type.contains('siege_tower') ||
+        type.contains('siegetower') ||
+        type.contains('catapult') ||
+        type.contains('ballista')) {
+      return false;
+    }
 
-      // 1. Castle
-      final allCastles = await client.getCastles();
-      OwnedCastle? source;
-      for (final c in allCastles) {
-        if (c.areaId == areaId) {
-          source = c;
-          break;
-        }
-      }
-      if (source == null) {
-        _addLog('⚠️ Castle area=$areaId not found', 'warn');
-        return;
-      }
+    return true;
+  }
 
-      // 2. Units
-      final catalog = await client.loadCatalog();
-      final allUnits =
-          await client.getCastleUnits(source.kingdomId, source.areaId, catalog);
-      final unlocked = client.getUnlockedForArea(source.areaId);
-      final sendable = allUnits
-          .where((u) => unlocked.contains(u.wodId) && u.amount > 0)
-          .toList();
-
-      if (sendable.isEmpty) {
-        _addLog('⚠️ No sendable units at castle $areaId', 'warn');
-        return;
-      }
-
-      // 3. Offensive أولاً — استبعد الدفاعية
-      final offensive =
-          sendable.where((u) => u.isCombat && !u.isDefensive).toList();
-      final pool = offensive.isNotEmpty ? offensive : sendable;
-
-      // 4. ترتيب حسب الأولوية
-      final ordered = _orderByPriority(pool);
-      final toSend = ordered
-          .take(10)
-          .map((u) => <int>[u.wodId, u.amount])
-          .toList();
-
-      if (toSend.isEmpty) {
-        _addLog('⚠️ No units after filter', 'warn');
-        return;
-      }
-
-      // 5. Ally target
-      final ally = await _pickAllyCastle(source);
-      if (ally == null) {
-        _addLog('⚠️ No allied castle available in same kingdom', 'warn');
-        return;
-      }
-
-      // 6. Pick free lord
-      final lordId = await _pickLordForEvac();
-      if (lordId == null) {
-        _addLog('⚠️ No free lord for evac', 'warn');
-        return;
-      }
-
-      // 7. WT: Spy=1h, Normal/Save=saveHours (WT in HOURS)
-      final wt = isSpy ? 1 : settings.saveHours;
-
-      final totalUnits = toSend.fold<int>(0, (s, e) => s + e[1]);
-      _addLog(
-          '📤 Sending $totalUnits units (${toSend.length} types) '
-          'from ${source.displayName} → ${ally.name} '
-          '(WT=${wt}h, LID=$lordId)',
-          'evac');
-
-      final result = await client.sendToAlly(
-        source: source,
-        target: ally.castle,
-        units: toSend,
-        stationTime: wt,
-        lordId: lordId,
-      );
-
-      if (!result.success) {
-        _addLog('❌ Evac failed: ${result.error}', 'error');
-        return;
-      }
-
-      final mid = result.movementId ?? -1;
-      _evac[areaId] = _CastleEvac(
-        sourceAreaId: areaId,
-        evacuationMovementId: mid,
-        targetAllyName: ally.name,
-        createdAt: DateTime.now(),
-        spyMode: isSpy,
-      );
-
-      _addLog(
-          '✅ EVAC started MID=$mid (${isSpy ? "SPY" : "${wt}h save"})',
-          'evac');
-    } catch (e) {
-      _addLog('❌ Evac exception: $e', 'error');
+  List<CastleUnit> _applyUnitFilter(List<CastleUnit> units) {
+    switch (settings.evacUnitFilter) {
+      case EvacUnitFilter.all:
+        return units;
+      case EvacUnitFilter.offenseOnly:
+        return units.where((u) => u.isCombat && !u.isDefensive).toList();
+      case EvacUnitFilter.defenseOnly:
+        return units.where((u) => u.isCombat && u.isDefensive).toList();
     }
   }
 
@@ -494,6 +453,160 @@ class AutoDefenseService {
     return out;
   }
 
+  List<List<List<int>>> _splitIntoBatches(
+      List<CastleUnit> units, int maxPerBatch) {
+    final batches = <List<List<int>>>[];
+    List<List<int>> current = [];
+    for (final u in units) {
+      if (current.length >= maxPerBatch) {
+        batches.add(current);
+        current = [];
+      }
+      current.add([u.wodId, u.amount]);
+    }
+    if (current.isNotEmpty) batches.add(current);
+    return batches;
+  }
+
+  // ── Trigger evacuation (multi-batch) ───────────────────────
+  Future<void> _triggerEvacuation(
+      _PendingAttack attack, int totalAttacks) async {
+    final areaId = attack.targetAreaId;
+    final existing = _evac[areaId];
+    if (existing != null && !existing.recalled) return;
+    if (_evacuationInProgress.contains(areaId)) return;
+    _evacuationInProgress.add(areaId);
+
+    final isSpy = settings.spyModeEnabled;
+    _addLog(
+        '🚀 EVAC ${isSpy ? "SPY" : "NORMAL"} → area=$areaId '
+        '(attack in ${attack.remainingSeconds()}s)',
+        'evac');
+
+    try {
+      final client = GgeClient();
+      final allCastles = await client.getCastles();
+      OwnedCastle? source;
+      for (final c in allCastles) {
+        if (c.areaId == areaId) {
+          source = c;
+          break;
+        }
+      }
+      if (source == null) {
+        _addLog('⚠️ Castle area=$areaId not found', 'warn');
+        return;
+      }
+
+      final catalog = await client.loadCatalog();
+      final allUnits =
+          await client.getCastleUnits(source.kingdomId, source.areaId, catalog);
+
+      final sendable = allUnits.where(_isSendableForEvac).toList();
+      if (sendable.isEmpty) {
+        _addLog('⚠️ No sendable units at $areaId', 'warn');
+        return;
+      }
+
+      final filtered = _applyUnitFilter(sendable);
+      if (filtered.isEmpty) {
+        _addLog('⚠️ No units after type filter (${settings.evacUnitFilter.name})',
+            'warn');
+        return;
+      }
+
+      final ordered = _orderByPriority(filtered);
+      final batches = _splitIntoBatches(ordered, 10);
+      _addLog('📦 Split into ${batches.length} batch(es)', 'evac');
+
+      final ally = await _pickAllyCastle(source);
+      if (ally == null) {
+        _addLog('⚠️ No allied castle in same kingdom', 'warn');
+        return;
+      }
+
+      // Prefetch free lords
+      final cmds = await _getCommanders(force: true);
+      final freeLordIds = cmds
+          .where((c) => !c.isBusy)
+          .map((c) => c.lord.id)
+          .toList()
+        ..sort((a, b) {
+          if (a == 0) return -1;
+          if (b == 0) return 1;
+          return a.compareTo(b);
+        });
+
+      if (freeLordIds.isEmpty) {
+        _addLog('⚠️ No free lord for evac', 'warn');
+        return;
+      }
+
+      final wt = isSpy ? 1 : settings.saveHours;
+      final listMids = <int>[];
+      int lordIndex = 0;
+
+      for (int i = 0; i < batches.length; i++) {
+        if (DateTime.now().isAfter(attack.arrivalAt)) {
+          _addLog('⏰ Attack arrived, stopping batches', 'warn');
+          break;
+        }
+        if (lordIndex >= freeLordIds.length) {
+          _addLog(
+              '⚠️ Out of free lords at batch ${i + 1}/${batches.length}', 'warn');
+          break;
+        }
+
+        final batch = batches[i];
+        final lordId = freeLordIds[lordIndex++];
+        final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
+
+        _addLog(
+            '📤 Batch ${i + 1}/${batches.length}: $totalUnits units, LID=$lordId',
+            'evac');
+
+        final result = await client.sendToAlly(
+          source: source,
+          target: ally.castle,
+          units: batch,
+          stationTime: wt,
+          lordId: lordId,
+        );
+
+        if (!result.success) {
+          _addLog('❌ Batch ${i + 1} failed: ${result.error}', 'error');
+          break;
+        }
+
+        if (result.movementId != null) listMids.add(result.movementId!);
+        _addLog('✅ Batch ${i + 1} MID=${result.movementId}', 'evac');
+
+        if (i < batches.length - 1) {
+          await Future.delayed(
+              Duration(milliseconds: 6000 + Random().nextInt(1500)));
+        }
+      }
+
+      if (listMids.isNotEmpty) {
+        _evac[areaId] = _CastleEvac(
+          sourceAreaId: areaId,
+          evacuationMovementIds: listMids,
+          targetAllyName: ally.name,
+          createdAt: DateTime.now(),
+          spyMode: isSpy,
+          wtHours: wt,
+        );
+        _addLog(
+            '✅ Evac complete: ${listMids.length}/${batches.length} batches',
+            'evac');
+      }
+    } catch (e) {
+      _addLog('❌ Evac exception: $e', 'error');
+    } finally {
+      _evacuationInProgress.remove(areaId);
+    }
+  }
+
   Future<_AllyPick?> _pickAllyCastle(OwnedCastle source) async {
     List<AllyMember>? members;
     try {
@@ -504,7 +617,6 @@ class AutoDefenseService {
     }
     if (members == null || members.isEmpty) return null;
 
-    // Preferred first
     if (settings.preferredAllyPlayerId != null) {
       for (final m in members) {
         if (m.playerId == settings.preferredAllyPlayerId) {
@@ -516,7 +628,6 @@ class AutoDefenseService {
       }
     }
 
-    // Best: peace + closest (in same kingdom)
     final candidates = <(AllyMember, AllyCastle, int)>[];
     for (final m in members) {
       for (final c in m.castles) {
@@ -554,30 +665,183 @@ class AutoDefenseService {
         return free.first.lord.id;
       }
     } catch (_) {
-      return 0;
+      return null;
     }
   }
 
   Future<void> _recallEvacuation(_CastleEvac ev, {String? reason}) async {
-    if (ev.evacuationMovementId <= 0) {
-      _addLog('⚠️ Cannot recall — no MID for area=${ev.sourceAreaId}',
-          'warn');
-      return;
+    if (ev.evacuationMovementIds.isEmpty) return;
+    int successCount = 0;
+    for (final mid in ev.evacuationMovementIds) {
+      try {
+        final res = await GgeClient().recallMovement(mid);
+        if (res.success) successCount++;
+      } catch (_) {}
+      await Future.delayed(
+          Duration(milliseconds: 5500 + Random().nextInt(1500)));
     }
+    if (successCount > 0) {
+      ev.recalled = true;
+      ev.recallAt = DateTime.now();
+      _addLog(
+          '🔙 Recalled $successCount/${ev.evacuationMovementIds.length}'
+          '${reason != null ? " ($reason)" : ""}',
+          'recall');
+    }
+  }
+
+  // ── Global evacuation ──────────────────────────────────────
+  Future<void> evacuateAllCastles() async {
+    if (_globalEvacRunning) return;
+    _globalEvacRunning = true;
+    _globalEvacCancelled = false;
+    _globalEvacCurrent = 0;
+    _globalEvacTotal = 0;
+    _globalEvacStatus = '';
+
     try {
-      final res = await GgeClient().recallMovement(ev.evacuationMovementId);
-      if (res.success) {
-        ev.recalled = true;
-        ev.recallAt = DateTime.now();
-        _addLog(
-            '🔙 Recalled MID=${ev.evacuationMovementId}'
-            '${reason != null ? " ($reason)" : ""}',
-            'recall');
-      } else {
-        _addLog('⚠️ Recall failed: ${res.error}', 'warn');
+      final client = GgeClient();
+      final allCastles = await client.getCastles();
+      final targets = allCastles
+          .where((c) =>
+              c.areaType == 1 || c.areaType == 4 || c.areaType == 12)
+          .toList();
+
+      _globalEvacTotal = targets.length;
+      _addLog('🌍 Global evac: ${targets.length} castles', 'evac');
+
+      for (int i = 0; i < targets.length; i++) {
+        if (_globalEvacCancelled) {
+          _addLog('⏹️ Global evac cancelled at ${i + 1}/${targets.length}',
+              'warn');
+          break;
+        }
+
+        _globalEvacCurrent = i + 1;
+        _globalEvacStatus = targets[i].displayName;
+        _addLog('🏰 Castle ${i + 1}/${targets.length}: ${targets[i].displayName}',
+            'evac');
+
+        await _evacuateCastleStandalone(targets[i]);
+
+        if (i < targets.length - 1 && !_globalEvacCancelled) {
+          await Future.delayed(
+              Duration(milliseconds: 2000 + Random().nextInt(1000)));
+        }
+      }
+
+      if (!_globalEvacCancelled) {
+        _addLog('✅ Global evac done', 'evac');
       }
     } catch (e) {
-      _addLog('❌ Recall exception: $e', 'error');
+      _addLog('❌ Global evac exception: $e', 'error');
+    } finally {
+      _globalEvacRunning = false;
+      _globalEvacCancelled = false;
+      _globalEvacStatus = '';
+    }
+  }
+
+  void stopGlobalEvac() {
+    _globalEvacCancelled = true;
+  }
+
+  Future<void> _evacuateCastleStandalone(OwnedCastle source) async {
+    final areaId = source.areaId;
+    if (_evacuationInProgress.contains(areaId)) {
+      _addLog('⏭️ Castle busy, skip', 'warn');
+      return;
+    }
+    _evacuationInProgress.add(areaId);
+
+    try {
+      final client = GgeClient();
+      final catalog = await client.loadCatalog();
+      final allUnits =
+          await client.getCastleUnits(source.kingdomId, source.areaId, catalog);
+
+      final sendable = allUnits.where(_isSendableForEvac).toList();
+      if (sendable.isEmpty) {
+        _addLog('⚠️ No sendable units at ${source.displayName}', 'warn');
+        return;
+      }
+
+      final filtered = _applyUnitFilter(sendable);
+      if (filtered.isEmpty) return;
+
+      final ordered = _orderByPriority(filtered);
+      final batches = _splitIntoBatches(ordered, 10);
+
+      final ally = await _pickAllyCastle(source);
+      if (ally == null) {
+        _addLog('⚠️ No ally for ${source.displayName}', 'warn');
+        return;
+      }
+
+      final cmds = await _getCommanders(force: true);
+      final freeLordIds = cmds
+          .where((c) => !c.isBusy)
+          .map((c) => c.lord.id)
+          .toList()
+        ..sort((a, b) {
+          if (a == 0) return -1;
+          if (b == 0) return 1;
+          return a.compareTo(b);
+        });
+
+      if (freeLordIds.isEmpty) return;
+
+      final wt = settings.globalEvacHours;
+      final listMids = <int>[];
+      int lordIndex = 0;
+
+      for (int i = 0; i < batches.length; i++) {
+        if (_globalEvacCancelled) break;
+        if (lordIndex >= freeLordIds.length) {
+          _addLog('⚠️ Out of lords at batch ${i + 1}', 'warn');
+          break;
+        }
+
+        final lordId = freeLordIds[lordIndex++];
+        final totalUnits = batches[i].fold<int>(0, (s, e) => s + e[1]);
+
+        final result = await client.sendToAlly(
+          source: source,
+          target: ally.castle,
+          units: batches[i],
+          stationTime: wt,
+          lordId: lordId,
+        );
+
+        if (!result.success) {
+          _addLog('❌ Batch ${i + 1} failed: ${result.error}', 'error');
+          break;
+        }
+
+        if (result.movementId != null) listMids.add(result.movementId!);
+        _addLog('✅ ${source.displayName} batch ${i + 1}/${batches.length}: '
+            '$totalUnits units, LID=$lordId, MID=${result.movementId}', 'evac');
+
+        if (i < batches.length - 1) {
+          await Future.delayed(
+              Duration(milliseconds: 6000 + Random().nextInt(1500)));
+        }
+      }
+
+      if (listMids.isNotEmpty) {
+        _evac[areaId] = _CastleEvac(
+          sourceAreaId: areaId,
+          evacuationMovementIds: listMids,
+          targetAllyName: ally.name,
+          createdAt: DateTime.now(),
+          spyMode: false,
+          wtHours: wt,
+        );
+      }
+    } catch (e) {
+      _addLog('❌ Castle ${source.displayName} evac exception: $e', 'error');
+    } finally {
+      _evacuationInProgress.remove(areaId);
     }
   }
 

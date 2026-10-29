@@ -16,8 +16,6 @@ class SmuggleScreen extends StatefulWidget {
 }
 
 class _SmuggleScreenState extends State<SmuggleScreen> {
-  /// ⚠️ الحد الأقصى لأنواع الجنود في طلب واحد = 10.
-  ///    تجاوز هذا الرقم = ban (bot detection). السبب الحقيقي للبان ساعتين.
   static const int kMaxUnitTypes = 10;
 
   List<OwnedCastle> _castles = [];
@@ -95,9 +93,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
             (c) => c.lord.id == _selectedLord!.id,
             orElse: () => CommanderInfo(lord: _selectedLord!),
           );
-          if (current.isBusy) {
-            _selectedLord = null;
-          }
+          if (current.isBusy) _selectedLord = null;
         }
       });
     } catch (_) {
@@ -130,6 +126,55 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     }
   }
 
+  /// ✅ هل الوحدة قابلة للإرسال في smuggle؟
+  ///   - combat (melee/ranged) + defense units (militia/peasant/anti) = مسموح
+  ///   - wall/gate/moat/trap = مرفوض
+  ///   - tools = مرفوض (smuggle مش هجوم)
+  bool _isSendableForSmuggle(CastleUnit u) {
+    final info = u.info;
+    if (info == null) {
+      // Unknown unit — range heuristic
+      if (u.wodId >= 700 && u.wodId <= 800) return false;
+      return true;
+    }
+    final type = (info.type ?? '').toLowerCase();
+    final role = (info.role ?? '').toLowerCase();
+
+    // Wall/Gate/Moat/Trap
+    if (role == 'wall' || role == 'gate' || role == 'moat' || role == 'trap') {
+      return false;
+    }
+    if (type.contains('def_building') ||
+        type.contains('defbuilding') ||
+        type.contains('_wall') ||
+        type.contains('wall_') ||
+        type.contains('_gate') ||
+        type.contains('gate_') ||
+        type.contains('_moat') ||
+        type.contains('moat_') ||
+        type.contains('_trap') ||
+        type.contains('trap_')) {
+      return false;
+    }
+
+    // Tools
+    if (role == 'tool' ||
+        type.contains('_tool') ||
+        type.contains('tool_') ||
+        type.contains('ram_') ||
+        type.contains('_ram') ||
+        type.contains('ladder_') ||
+        type.contains('_ladder') ||
+        type.contains('siege_tower') ||
+        type.contains('siegetower') ||
+        type.contains('catapult') ||
+        type.contains('ballista')) {
+      return false;
+    }
+
+    return true;
+  }
+
   Future<void> _loadUnits() async {
     if (_source == null) return;
     setState(() {
@@ -144,11 +189,11 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           .getCastleUnits(_source!.kingdomId, _source!.areaId, _catalog);
       if (!mounted) return;
 
-      final unlocked = widget.client.getUnlockedForArea(_source!.areaId);
+      // ✅ استبعد الأدوات والـ wall/gate/moat فقط
       final sendable = <CastleUnit>[];
       int hidden = 0;
       for (final u in rawUnits) {
-        if (unlocked.contains(u.wodId)) {
+        if (_isSendableForSmuggle(u)) {
           sendable.add(u);
         } else {
           hidden++;
@@ -167,7 +212,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       if (sendable.isEmpty && hidden > 0) {
         _snack(
           S.isAr
-              ? 'كل الوحدات في ${_source!.displayName} دفاعية ومش قابلة للإرسال'
+              ? 'كل الوحدات في ${_source!.displayName} دفاعية/أدوات ومش قابلة للإرسال'
               : 'All units at ${_source!.displayName} are defensive / non-sendable',
           color: AppTheme.orange,
         );
@@ -187,9 +232,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   List<AllyMember> get _filteredMembers {
-    if (_filter == 'peace') {
-      return _members.where((m) => m.hasPeace).toList();
-    }
+    if (_filter == 'peace') return _members.where((m) => m.hasPeace).toList();
     return _members;
   }
 
@@ -204,7 +247,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     }
   }
 
-  /// ✅ عدد الأنواع المحددة حالياً (كل نوع فيه amount > 0)
   int get _selectedTypesCount {
     int t = 0;
     for (final u in _units) {
@@ -223,36 +265,25 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     return t;
   }
 
-  /// ✅ تحديد الكل — بحد أقصى [kMaxUnitTypes] أنواع (يفضّل الهجوم أولاً).
-  ///    السبب: GGE بيعتبر أي طلب فيه > 10 أنواع = bot behavior → ban.
   void _selectAllUnits() {
-    // 1) صفّر الكل الأول
     for (final c in _amtCtrl.values) {
       c.text = '0';
     }
-
-    // 2) رتّب: هجوم أولاً، ثم دفاع، ثم باقي
     final offensive =
         _filteredUnits.where((u) => u.isCombat && !u.isDefensive).toList();
     final defensive =
         _filteredUnits.where((u) => u.isCombat && u.isDefensive).toList();
     final others = _filteredUnits.where((u) => !u.isCombat).toList();
     final ordered = [...offensive, ...defensive, ...others];
-
-    // 3) اختار أول kMaxUnitTypes فقط
-    final toSelect = ordered.take(kMaxUnitTypes).toList();
-    for (final u in toSelect) {
+    for (final u in ordered.take(kMaxUnitTypes)) {
       _amtCtrl[u.wodId]?.text = u.amount.toString();
     }
-
     setState(() {});
-
-    // 4) تنبيه لو فيه وحدات زيادة مش اتحددت
     if (ordered.length > kMaxUnitTypes) {
       _snack(
         S.isAr
-            ? 'تم تحديد $kMaxUnitTypes أنواع فقط (الحد الأقصى) — باقي الأنواع لم تُحدد'
-            : 'Only $kMaxUnitTypes types selected (max limit) — others not selected',
+            ? 'تم تحديد $kMaxUnitTypes أنواع فقط (الحد الأقصى)'
+            : 'Only $kMaxUnitTypes types selected (max)',
         color: AppTheme.orange,
       );
     }
@@ -266,26 +297,15 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   Future<void> _send() async {
-    if (_source == null) {
-      _snack('Select source', color: AppTheme.red);
-      return;
-    }
+    if (_source == null) return _snack('Select source', color: AppTheme.red);
     if (_target == null || _targetCastle == null) {
-      _snack('Select target', color: AppTheme.red);
-      return;
+      return _snack('Select target', color: AppTheme.red);
     }
     if (_selectedLord == null) {
-      _snack(S.allLordsBusy, color: AppTheme.red);
-      return;
+      return _snack(S.allLordsBusy, color: AppTheme.red);
     }
     if (_targetCastle!.kingdomId != _source!.kingdomId) {
-      _snack(
-        S.isAr
-            ? '⚠️ الهدف في KID ${_targetCastle!.kingdomId} والمصدر في KID ${_source!.kingdomId}.'
-            : '⚠️ Cross-kingdom: target KID=${_targetCastle!.kingdomId}, source KID=${_source!.kingdomId}.',
-        color: AppTheme.orange,
-      );
-      return;
+      return _snack('مصدر وهدف في مملكتين مختلفتين', color: AppTheme.orange);
     }
 
     final toSend = <List<int>>[];
@@ -293,22 +313,13 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       final a = int.tryParse(_amtCtrl[u.wodId]?.text ?? '0') ?? 0;
       if (a > 0) toSend.add([u.wodId, a.clamp(0, u.amount)]);
     }
-
-    if (toSend.isEmpty) {
-      _snack(S.noUnitsSelected, color: AppTheme.orange);
-      return;
-    }
-
-    // ⚠️ حماية نهائية: منع أكتر من kMaxUnitTypes أنواع (ده اللي جاب البان ساعتين)
+    if (toSend.isEmpty) return _snack(S.noUnitsSelected, color: AppTheme.orange);
     if (toSend.length > kMaxUnitTypes) {
-      _snack(
-        S.isAr
-            ? '🚫 خطر بان: لا يمكن إرسال أكثر من $kMaxUnitTypes أنواع في طلب واحد (المحدد: ${toSend.length})'
-            : '🚫 Ban risk: cannot send more than $kMaxUnitTypes unit types in one request (selected: ${toSend.length})',
-        color: AppTheme.red,
-      );
-      HapticFeedback.heavyImpact();
-      return;
+      return _snack(
+          S.isAr
+              ? '🚫 لا يمكن إرسال أكثر من $kMaxUnitTypes أنواع في طلب واحد (${toSend.length})'
+              : '🚫 Cannot send more than $kMaxUnitTypes types (${toSend.length})',
+          color: AppTheme.red);
     }
 
     final stationTime = int.tryParse(_timeCtrl.text) ?? 12;
@@ -327,7 +338,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     if (result.success) {
       _snack('✓ ${S.transferOk}', color: AppTheme.green);
       HapticFeedback.mediumImpact();
-
       setState(() {
         final sentMap = <int, int>{};
         for (var item in toSend) sentMap[item[0]] = item[1];
@@ -349,37 +359,16 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       if (errMsg == 'ALL_LORDS_BUSY') {
         errMsg = S.allLordsBusy;
       } else if (errMsg == 'UNIT_NOT_SENDABLE_91') {
-        errMsg = S.isAr
-            ? 'الوحدة دي مش قابلة للإرسال من القلعة دي — حدّث الشاشة وحاول تاني'
-            : 'This unit is not sendable from this castle — refresh and retry';
+        errMsg = 'وحدة مش قابلة للإرسال';
       } else if (errMsg == 'LORD_BUSY_218') {
-        errMsg = S.isAr
-            ? 'اللورد المختار مشغول — اختر لورد فاضي أو استنى رجوعه'
-            : 'Selected lord is busy — pick a free lord or wait';
+        errMsg = 'اللورد مشغول';
+        _loadCommanders();
       } else if (errMsg == 'LORD_UNAVAILABLE') {
-        errMsg = S.isAr
-            ? 'القائد المختار غير متاح — جرّب اللورد الرئيسي'
-            : 'Selected commander unavailable — try Main Lord';
+        errMsg = 'القائد غير متاح';
       } else if (errMsg.contains('Max kingdom army movements')) {
         errMsg = S.maxMovements;
-      } else if (errMsg.contains('CROSS_KINGDOM')) {
-        errMsg = S.isAr
-            ? 'المصدر والهدف في مملكتين مختلفتين'
-            : 'Source and target in different kingdoms';
-      } else if (errMsg.contains('Kingdom switch failed')) {
-        errMsg = S.isAr
-            ? 'فشل الانتقال لمملكة المصدر — حاول مرة أخرى'
-            : 'Failed to switch to source kingdom — retry';
-      } else if (errMsg.contains('(6)') || errMsg.contains('code 6')) {
-        errMsg = S.isAr
-            ? 'خطأ 6: القائد مش موجود في قلعة المصدر'
-            : 'Error 6: commander not at source castle';
       }
       _snack('${S.transferFail}: $errMsg', color: AppTheme.red);
-
-      if (result.error == 'LORD_BUSY_218') {
-        _loadCommanders();
-      }
     }
   }
 
@@ -405,9 +394,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
 
   @override
   void dispose() {
-    for (final c in _amtCtrl.values) {
-      c.dispose();
-    }
+    for (final c in _amtCtrl.values) c.dispose();
     _timeCtrl.dispose();
     super.dispose();
   }
@@ -433,30 +420,25 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                           _loadingCard(context)
                         else ...[
                           FadeSlideIn(
-                            delay: const Duration(milliseconds: 100),
-                            child: _sourcePicker(context),
-                          ),
+                              delay: const Duration(milliseconds: 100),
+                              child: _sourcePicker(context)),
                           const SizedBox(height: 14),
                           FadeSlideIn(
-                            delay: const Duration(milliseconds: 200),
-                            child: _membersSection(context),
-                          ),
+                              delay: const Duration(milliseconds: 200),
+                              child: _membersSection(context)),
                           if (_target != null && _targetCastle != null) ...[
                             const SizedBox(height: 14),
                             FadeSlideIn(
-                              delay: const Duration(milliseconds: 300),
-                              child: _lordPicker(context),
-                            ),
+                                delay: const Duration(milliseconds: 300),
+                                child: _lordPicker(context)),
                             const SizedBox(height: 14),
                             FadeSlideIn(
-                              delay: const Duration(milliseconds: 400),
-                              child: _timePicker(context),
-                            ),
+                                delay: const Duration(milliseconds: 400),
+                                child: _timePicker(context)),
                             const SizedBox(height: 14),
                             FadeSlideIn(
-                              delay: const Duration(milliseconds: 500),
-                              child: _unitsSection(context),
-                            ),
+                                delay: const Duration(milliseconds: 500),
+                                child: _unitsSection(context)),
                           ],
                         ],
                       ],
@@ -494,42 +476,34 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       child: Row(
         children: [
           AppIconBtn(
-            icon: Icons.arrow_back_rounded,
-            onTap: () => Navigator.pop(context),
-            size: 42,
-          ),
+              icon: Icons.arrow_back_rounded,
+              onTap: () => Navigator.pop(context),
+              size: 42),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  S.smuggleTroops,
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.textColor(context),
-                    letterSpacing: -0.3,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-                Text(
-                  '${_members.length} ${S.allianceMembers}',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: AppTheme.subTextColor(context),
-                    decoration: TextDecoration.none,
-                  ),
-                ),
+                Text(S.smuggleTroops,
+                    style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textColor(context),
+                        letterSpacing: -0.3,
+                        decoration: TextDecoration.none)),
+                Text('${_members.length} ${S.allianceMembers}',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: AppTheme.subTextColor(context),
+                        decoration: TextDecoration.none)),
               ],
             ),
           ),
           AppIconBtn(
-            icon: Icons.terminal_rounded,
-            onTap: _openLog,
-            color: AppTheme.orange,
-            size: 42,
-          ),
+              icon: Icons.terminal_rounded,
+              onTap: _openLog,
+              color: AppTheme.orange,
+              size: 42),
           const SizedBox(width: 8),
           AppIconBtn(
             icon: Icons.refresh_rounded,
@@ -550,58 +524,34 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(20),
-      child: Column(
-        children: [
-          Container(
+      child: Column(children: [
+        Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: AppTheme.red.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppTheme.red.withOpacity(0.3)),
-            ),
+                color: AppTheme.red.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppTheme.red.withOpacity(0.3))),
             child: const Icon(Icons.error_outline_rounded,
-                color: AppTheme.red, size: 36),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            _error!,
+                color: AppTheme.red, size: 36)),
+        const SizedBox(height: 16),
+        Text(_error!,
             textAlign: TextAlign.center,
             style: TextStyle(
                 color: AppTheme.textColor(context),
                 fontSize: 13,
                 height: 1.5,
-                decoration: TextDecoration.none),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              TextButton.icon(
-                onPressed: _loadMembers,
-                icon: const Icon(Icons.refresh_rounded,
-                    color: AppTheme.purple, size: 16),
-                label: Text(S.retry,
-                    style: const TextStyle(
-                        color: AppTheme.purple,
-                        fontWeight: FontWeight.bold,
-                        decoration: TextDecoration.none)),
-              ),
-              const SizedBox(width: 4),
-              TextButton.icon(
-                onPressed: _openLog,
-                icon: const Icon(Icons.terminal_rounded,
-                    color: AppTheme.orange, size: 16),
-                label: Text('Log',
-                    style: TextStyle(
-                        color: AppTheme.orange,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        decoration: TextDecoration.none)),
-              ),
-            ],
-          ),
-        ],
-      ),
+                decoration: TextDecoration.none)),
+        const SizedBox(height: 16),
+        TextButton.icon(
+            onPressed: _loadMembers,
+            icon: const Icon(Icons.refresh_rounded,
+                color: AppTheme.purple, size: 16),
+            label: Text(S.retry,
+                style: const TextStyle(
+                    color: AppTheme.purple,
+                    fontWeight: FontWeight.bold,
+                    decoration: TextDecoration.none))),
+      ]),
     );
   }
 
@@ -609,16 +559,14 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(32),
-      child: Column(
-        children: [
-          const CircularProgressIndicator(color: AppTheme.purple),
-          const SizedBox(height: 16),
-          Text(S.loadingMembers,
-              style: TextStyle(
-                  color: AppTheme.subTextColor(context),
-                  decoration: TextDecoration.none)),
-        ],
-      ),
+      child: Column(children: [
+        const CircularProgressIndicator(color: AppTheme.purple),
+        const SizedBox(height: 16),
+        Text(S.loadingMembers,
+            style: TextStyle(
+                color: AppTheme.subTextColor(context),
+                decoration: TextDecoration.none)),
+      ]),
     );
   }
 
@@ -626,103 +574,83 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
+      child: Row(children: [
+        Container(
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: AppTheme.teal.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.teal.withOpacity(0.3)),
-            ),
-            child: const Icon(Icons.castle_rounded,
-                color: AppTheme.teal, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  S.from,
+                color: AppTheme.teal.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.teal.withOpacity(0.3))),
+            child:
+                const Icon(Icons.castle_rounded, color: AppTheme.teal, size: 20)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(S.from,
                   style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.subTextColor(context),
-                    letterSpacing: 0.8,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                DropdownButtonHideUnderline(
-                  child: DropdownButton<OwnedCastle>(
-                    value: _source,
-                    isExpanded: true,
-                    isDense: true,
-                    dropdownColor: Theme.of(context).colorScheme.surface,
-                    borderRadius: BorderRadius.circular(14),
-                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.subTextColor(context),
+                      letterSpacing: 0.8,
+                      decoration: TextDecoration.none)),
+              const SizedBox(height: 2),
+              DropdownButtonHideUnderline(
+                child: DropdownButton<OwnedCastle>(
+                  value: _source,
+                  isExpanded: true,
+                  isDense: true,
+                  dropdownColor: Theme.of(context).colorScheme.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: AppTheme.textColor(context),
-                    ),
-                    items: _castles
-                        .map((c) => DropdownMenuItem(
-                              value: c,
-                              child: Text(c.fullLabel,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                      color: AppTheme.textColor(context),
-                                      fontSize: 13)),
-                            ))
-                        .toList(),
-                    onChanged: (v) {
-                      setState(() {
-                        _source = v;
-                        _units = [];
-                        _hiddenUnitsCount = 0;
-                        for (final c in _amtCtrl.values) {
-                          c.dispose();
-                        }
-                        _amtCtrl.clear();
-                      });
-                      if (_target != null && v != null) {
-                        final newTargetCastle = _target!.castleIn(v.kingdomId);
-                        if (newTargetCastle != null) {
-                          setState(() => _targetCastle = newTargetCastle);
-                          _loadUnits();
-                        } else {
-                          final name = _target?.name ?? '';
-                          setState(() {
-                            _target = null;
-                            _targetCastle = null;
-                          });
-                          _snack(
-                            S.isAr
-                                ? '$name ليس لديه قلعة في هذه المملكة'
-                                : 'No castle for $name in this kingdom',
-                            color: AppTheme.orange,
-                          );
-                        }
+                      color: AppTheme.textColor(context)),
+                  items: _castles
+                      .map((c) => DropdownMenuItem(
+                            value: c,
+                            child: Text(c.fullLabel,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    color: AppTheme.textColor(context),
+                                    fontSize: 13)),
+                          ))
+                      .toList(),
+                  onChanged: (v) {
+                    setState(() {
+                      _source = v;
+                      _units = [];
+                      _hiddenUnitsCount = 0;
+                      for (final c in _amtCtrl.values) c.dispose();
+                      _amtCtrl.clear();
+                    });
+                    if (_target != null && v != null) {
+                      final newTargetCastle = _target!.castleIn(v.kingdomId);
+                      if (newTargetCastle != null) {
+                        setState(() => _targetCastle = newTargetCastle);
+                        _loadUnits();
+                      } else {
+                        setState(() {
+                          _target = null;
+                          _targetCastle = null;
+                        });
                       }
-                    },
-                  ),
+                    }
+                  },
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ]),
     );
   }
 
   Widget _lordPicker(BuildContext context) {
-    final availableLords = _commanders
-        .where((c) => !c.isBusy)
-        .map((c) => c.lord)
-        .toList();
-
+    final availableLords =
+        _commanders.where((c) => !c.isBusy).map((c) => c.lord).toList();
     if (_selectedLord != null &&
         !availableLords.any((l) => l.id == _selectedLord!.id)) {
       _selectedLord = null;
@@ -741,59 +669,49 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       child: _loadingCommanders
           ? const Center(
               child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: AppTheme.purple),
-              ),
-            )
-          : Row(
-              children: [
-                Container(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: AppTheme.purple)))
+          : Row(children: [
+              Container(
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    color: AppTheme.orange.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(12),
-                    border:
-                        Border.all(color: AppTheme.orange.withOpacity(0.3)),
-                  ),
+                      color: AppTheme.orange.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                          color: AppTheme.orange.withOpacity(0.3))),
                   child: const Icon(Icons.person_rounded,
-                      color: AppTheme.orange, size: 20),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        S.selectLord,
+                      color: AppTheme.orange, size: 20)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(S.selectLord,
                         style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.subTextColor(context),
-                          letterSpacing: 0.8,
-                          decoration: TextDecoration.none,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      DropdownButtonHideUnderline(
-                        child: DropdownButton<Lord>(
-                          value: _selectedLord,
-                          isExpanded: true,
-                          isDense: true,
-                          dropdownColor:
-                              Theme.of(context).colorScheme.surface,
-                          borderRadius: BorderRadius.circular(14),
-                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.subTextColor(context),
+                            letterSpacing: 0.8,
+                            decoration: TextDecoration.none)),
+                    const SizedBox(height: 2),
+                    DropdownButtonHideUnderline(
+                      child: DropdownButton<Lord>(
+                        value: _selectedLord,
+                        isExpanded: true,
+                        isDense: true,
+                        dropdownColor: Theme.of(context).colorScheme.surface,
+                        borderRadius: BorderRadius.circular(14),
+                        style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
-                            color: AppTheme.textColor(context),
-                          ),
-                          items: availableLords
-                              .map((l) => DropdownMenuItem(
-                                    value: l,
-                                    child: Text(
+                            color: AppTheme.textColor(context)),
+                        items: availableLords
+                            .map((l) => DropdownMenuItem(
+                                  value: l,
+                                  child: Text(
                                       l.id == 0
                                           ? (S.isAr
                                               ? 'اللورد الرئيسي'
@@ -801,32 +719,25 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                                           : l.displayName,
                                       style: TextStyle(
                                           fontSize: 13,
-                                          color:
-                                              AppTheme.textColor(context)),
-                                    ),
-                                  ))
-                              .toList(),
-                          onChanged: (v) =>
-                              setState(() => _selectedLord = v),
-                        ),
+                                          color: AppTheme.textColor(context))),
+                                ))
+                            .toList(),
+                        onChanged: (v) => setState(() => _selectedLord = v),
                       ),
-                      if (availableLords.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: Text(
-                            S.allLordsBusy,
+                    ),
+                    if (availableLords.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(S.allLordsBusy,
                             style: TextStyle(
-                              color: AppTheme.orange,
-                              fontSize: 10,
-                              decoration: TextDecoration.none,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
+                                color: AppTheme.orange,
+                                fontSize: 10,
+                                decoration: TextDecoration.none)),
+                      ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ]),
     );
   }
 
@@ -834,112 +745,90 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
+      child: Row(children: [
+        Container(
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: AppTheme.blue.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.blue.withOpacity(0.3)),
-            ),
-            child: const Icon(Icons.timer_rounded,
-                color: AppTheme.blue, size: 20),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  S.stationTime,
+                color: AppTheme.blue.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.blue.withOpacity(0.3))),
+            child:
+                const Icon(Icons.timer_rounded, color: AppTheme.blue, size: 20)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(S.stationTime,
                   style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.subTextColor(context),
-                    letterSpacing: 0.8,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                TextField(
-                  controller: _timeCtrl,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.subTextColor(context),
+                      letterSpacing: 0.8,
+                      decoration: TextDecoration.none)),
+              const SizedBox(height: 2),
+              TextField(
+                controller: _timeCtrl,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                style: TextStyle(
                     color: AppTheme.textColor(context),
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
-                    decoration: TextDecoration.none,
-                  ),
-                  decoration: const InputDecoration(
+                    decoration: TextDecoration.none),
+                decoration: const InputDecoration(
                     isDense: true,
                     contentPadding: EdgeInsets.symmetric(vertical: 6),
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                  ),
-                ),
-              ],
-            ),
+                    focusedBorder: InputBorder.none),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ]),
     );
   }
 
   Widget _membersSection(BuildContext context) {
     final filtered = _filteredMembers;
-
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
+          Row(children: [
+            Container(
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: AppTheme.purple.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
+                    color: AppTheme.purple.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.group_rounded,
-                    color: AppTheme.purple, size: 18),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  S.allianceMembers,
-                  style: TextStyle(
-                    color: AppTheme.textColor(context),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-              ),
-              _smallChip(context, 'all', S.allMembers),
-              const SizedBox(width: 6),
-              _smallChip(context, 'peace', S.peaceOnly),
-            ],
-          ),
+                    color: AppTheme.purple, size: 18)),
+            const SizedBox(width: 10),
+            Expanded(
+                child: Text(S.allianceMembers,
+                    style: TextStyle(
+                        color: AppTheme.textColor(context),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        decoration: TextDecoration.none))),
+            _smallChip(context, 'all', S.allMembers),
+            const SizedBox(width: 6),
+            _smallChip(context, 'peace', S.peaceOnly),
+          ]),
           const SizedBox(height: 12),
           if (filtered.isEmpty)
             Padding(
-              padding: const EdgeInsets.all(20),
-              child: Center(
-                child: Text(
-                  S.noAllianceMembers,
-                  style: TextStyle(
-                      color: AppTheme.subTextColor(context),
-                      decoration: TextDecoration.none),
-                ),
-              ),
-            )
+                padding: const EdgeInsets.all(20),
+                child: Center(
+                    child: Text(S.noAllianceMembers,
+                        style: TextStyle(
+                            color: AppTheme.subTextColor(context),
+                            decoration: TextDecoration.none))))
           else
             ...filtered.map((m) => _memberTile(context, m)),
         ],
@@ -964,15 +853,12 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
               : Border.all(
                   color: AppTheme.subTextColor(context).withOpacity(0.1)),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: sel ? Colors.white : AppTheme.subTextColor(context),
-            fontSize: 10.5,
-            fontWeight: sel ? FontWeight.bold : FontWeight.w500,
-            decoration: TextDecoration.none,
-          ),
-        ),
+        child: Text(label,
+            style: TextStyle(
+                color: sel ? Colors.white : AppTheme.subTextColor(context),
+                fontSize: 10.5,
+                fontWeight: sel ? FontWeight.bold : FontWeight.w500,
+                decoration: TextDecoration.none)),
       ),
     );
   }
@@ -980,7 +866,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   Widget _memberTile(BuildContext context, AllyMember m) {
     final selected = _target?.playerId == m.playerId;
     final hasPeace = m.hasPeace;
-
     String distanceLabel = '';
     if (_source != null) {
       final d = m.closestDistance(_source!.kingdomId, _source!.x, _source!.y);
@@ -994,11 +879,10 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         final sameKingdom = m.castleIn(_source?.kingdomId ?? 0);
         if (sameKingdom == null) {
           _snack(
-            S.isAr
-                ? '${m.name} ليس لديه قلعة في مملكتك'
-                : '${m.name} has no castle in your kingdom',
-            color: AppTheme.orange,
-          );
+              S.isAr
+                  ? '${m.name} ليس لديه قلعة في مملكتك'
+                  : '${m.name} has no castle in your kingdom',
+              color: AppTheme.orange);
           return;
         }
         setState(() {
@@ -1006,9 +890,7 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           _targetCastle = sameKingdom;
           _units = [];
           _hiddenUnitsCount = 0;
-          for (final c in _amtCtrl.values) {
-            c.dispose();
-          }
+          for (final c in _amtCtrl.values) c.dispose();
           _amtCtrl.clear();
         });
         _loadUnits();
@@ -1025,139 +907,68 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
                   : Colors.black.withOpacity(0.02)),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: selected
-                ? Colors.transparent
-                : (hasPeace
-                    ? AppTheme.green.withOpacity(0.3)
-                    : AppTheme.subTextColor(context).withOpacity(0.1)),
-            width: 1.2,
-          ),
+              color: selected
+                  ? Colors.transparent
+                  : (hasPeace
+                      ? AppTheme.green.withOpacity(0.3)
+                      : AppTheme.subTextColor(context).withOpacity(0.1)),
+              width: 1.2),
         ),
-        child: Row(
-          children: [
-            Container(
+        child: Row(children: [
+          Container(
               width: 42,
               height: 42,
               decoration: BoxDecoration(
-                color: hasPeace
-                    ? (selected
-                        ? Colors.white.withOpacity(0.22)
-                        : AppTheme.green.withOpacity(0.18))
-                    : (selected
-                        ? Colors.white.withOpacity(0.12)
-                        : AppTheme.subTextColor(context).withOpacity(0.08)),
-                borderRadius: BorderRadius.circular(12),
-              ),
+                  color: hasPeace
+                      ? (selected
+                          ? Colors.white.withOpacity(0.22)
+                          : AppTheme.green.withOpacity(0.18))
+                      : (selected
+                          ? Colors.white.withOpacity(0.12)
+                          : AppTheme.subTextColor(context).withOpacity(0.08)),
+                  borderRadius: BorderRadius.circular(12)),
               child: Icon(
-                hasPeace ? Icons.shield_moon_rounded : Icons.shield_outlined,
-                color: selected
-                    ? Colors.white
-                    : (hasPeace
-                        ? AppTheme.green
-                        : AppTheme.subTextColor(context)),
-                size: 22,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          m.name,
-                          style: TextStyle(
-                            color: selected
-                                ? Colors.white
-                                : AppTheme.textColor(context),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13.5,
-                            decoration: TextDecoration.none,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: selected
-                              ? Colors.white.withOpacity(0.2)
-                              : AppTheme.subTextColor(context)
-                                  .withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          'Lv ${m.level}',
-                          style: TextStyle(
-                              color: selected
-                                  ? Colors.white
-                                  : AppTheme.subTextColor(context),
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                              decoration: TextDecoration.none),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  Row(
-                    children: [
-                      if (hasPeace) ...[
-                        Icon(Icons.verified_user_rounded,
-                            size: 11,
-                            color: selected ? Colors.white : AppTheme.green),
-                        const SizedBox(width: 3),
-                        Text(
-                          '${S.peaceActive} · ${m.peaceLabel}',
-                          style: TextStyle(
-                              color:
-                                  selected ? Colors.white : AppTheme.green,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              decoration: TextDecoration.none),
-                        ),
-                      ] else
-                        Text(
-                          S.noPeaceActive,
-                          style: TextStyle(
-                              color: selected
-                                  ? Colors.white70
-                                  : AppTheme.subTextColor(context),
-                              fontSize: 10,
-                              decoration: TextDecoration.none),
-                        ),
-                      const SizedBox(width: 10),
-                      if (distanceLabel.isNotEmpty) ...[
-                        Icon(Icons.place_rounded,
-                            size: 11,
-                            color: selected
-                                ? Colors.white70
+                  hasPeace ? Icons.shield_moon_rounded : Icons.shield_outlined,
+                  color: selected
+                      ? Colors.white
+                      : (hasPeace
+                          ? AppTheme.green
+                          : AppTheme.subTextColor(context)),
+                  size: 22)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(m.name,
+                    style: TextStyle(
+                        color: selected
+                            ? Colors.white
+                            : AppTheme.textColor(context),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13.5,
+                        decoration: TextDecoration.none),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 3),
+                Text(
+                    hasPeace
+                        ? '${S.peaceActive} · ${m.peaceLabel} · $distanceLabel'
+                        : '${S.noPeaceActive} · $distanceLabel',
+                    style: TextStyle(
+                        color: selected
+                            ? Colors.white70
+                            : (hasPeace
+                                ? AppTheme.green
                                 : AppTheme.subTextColor(context)),
-                        const SizedBox(width: 3),
-                        Text(
-                          distanceLabel,
-                          style: TextStyle(
-                              color: selected
-                                  ? Colors.white70
-                                  : AppTheme.subTextColor(context),
-                              fontSize: 10,
-                              decoration: TextDecoration.none),
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
+                        fontSize: 10,
+                        decoration: TextDecoration.none)),
+              ],
             ),
-            if (selected)
-              const Icon(Icons.check_circle_rounded,
-                  color: Colors.white, size: 22),
-          ],
-        ),
+          ),
+          if (selected)
+            const Icon(Icons.check_circle_rounded,
+                color: Colors.white, size: 22),
+        ]),
       ),
     );
   }
@@ -1171,10 +982,8 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
             child: CircularProgressIndicator(color: AppTheme.purple)),
       );
     }
-
     final typesCount = _selectedTypesCount;
     final atLimit = typesCount >= kMaxUnitTypes;
-    final overLimit = typesCount > kMaxUnitTypes;
 
     return AppTheme.glassCard(
       context: context,
@@ -1182,76 +991,56 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
+          Row(children: [
+            Container(
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: AppTheme.teal.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
+                    color: AppTheme.teal.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10)),
                 child: const Icon(Icons.groups_rounded,
-                    color: AppTheme.teal, size: 18),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${S.sendTo} ${_target?.name ?? ""}',
+                    color: AppTheme.teal, size: 18)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${S.sendTo} ${_target?.name ?? ""}',
                       style: TextStyle(
-                        color: AppTheme.textColor(context),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13.5,
-                        decoration: TextDecoration.none,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      '→ ${_targetCastle!.displayLabel}',
+                          color: AppTheme.textColor(context),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13.5,
+                          decoration: TextDecoration.none),
+                      overflow: TextOverflow.ellipsis),
+                  Text('→ ${_targetCastle!.displayLabel}',
                       style: TextStyle(
                           color: AppTheme.subTextColor(context),
                           fontSize: 10.5,
-                          decoration: TextDecoration.none),
-                    ),
-                  ],
-                ),
+                          decoration: TextDecoration.none)),
+                ],
               ),
-              // ✅ مؤشر X/10 لأنواع الجنود — أحمر عند الوصول للحد
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: overLimit
-                      ? AppTheme.red.withOpacity(0.15)
-                      : (atLimit
-                          ? AppTheme.orange.withOpacity(0.15)
-                          : AppTheme.teal.withOpacity(0.12)),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: overLimit
-                        ? AppTheme.red.withOpacity(0.4)
-                        : (atLimit
-                            ? AppTheme.orange.withOpacity(0.4)
-                            : AppTheme.teal.withOpacity(0.3)),
-                  ),
-                ),
-                child: Text(
-                  '$typesCount / $kMaxUnitTypes',
+            ),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: atLimit
+                    ? AppTheme.orange.withOpacity(0.15)
+                    : AppTheme.teal.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                    color: atLimit
+                        ? AppTheme.orange.withOpacity(0.4)
+                        : AppTheme.teal.withOpacity(0.3)),
+              ),
+              child: Text('$typesCount / $kMaxUnitTypes',
                   style: TextStyle(
-                    color: overLimit
-                        ? AppTheme.red
-                        : (atLimit ? AppTheme.orange : AppTheme.teal),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-              ),
-            ],
-          ),
+                      color: atLimit ? AppTheme.orange : AppTheme.teal,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                      decoration: TextDecoration.none)),
+            ),
+          ]),
           const SizedBox(height: 12),
           if (_hiddenUnitsCount > 0)
             Padding(
@@ -1259,114 +1048,69 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
               child: Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: AppTheme.orange.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
-                  border:
-                      Border.all(color: AppTheme.orange.withOpacity(0.3)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.info_outline_rounded,
-                        color: AppTheme.orange, size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(
+                    color: AppTheme.orange.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border:
+                        Border.all(color: AppTheme.orange.withOpacity(0.3))),
+                child: Row(children: [
+                  const Icon(Icons.info_outline_rounded,
+                      color: AppTheme.orange, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
                       child: Text(
-                        S.isAr
-                            ? '$_hiddenUnitsCount نوع وحدة دفاعية غير قابل للإرسال (مخفي)'
-                            : '$_hiddenUnitsCount defensive unit type(s) not sendable (hidden)',
-                        style: const TextStyle(
-                          color: AppTheme.orange,
-                          fontSize: 10.5,
-                          decoration: TextDecoration.none,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+                          S.isAr
+                              ? '$_hiddenUnitsCount نوع (أدوات/دفاع جدار) مخفي — غير قابل للإرسال'
+                              : '$_hiddenUnitsCount unit type(s) hidden (tools/walls)',
+                          style: const TextStyle(
+                              color: AppTheme.orange,
+                              fontSize: 10.5,
+                              decoration: TextDecoration.none))),
+                ]),
               ),
             ),
-          if (atLimit && !overLimit)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
+          Row(children: [
+            _unitChip(context, 'all', S.allUnits),
+            const SizedBox(width: 6),
+            _unitChip(context, 'offense', S.offenseOnly),
+            const SizedBox(width: 6),
+            _unitChip(context, 'defense', S.defenseOnly),
+            const Spacer(),
+            InkWell(
+              onTap: _selectAllUnits,
+              borderRadius: BorderRadius.circular(8),
               child: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppTheme.orange.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.warning_amber_rounded,
-                        color: AppTheme.orange, size: 16),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        S.isAr
-                            ? 'وصلت للحد الأقصى ($kMaxUnitTypes أنواع) — أي نوع إضافي سيرفضه السيرفر'
-                            : 'You reached the maximum ($kMaxUnitTypes types) — extra types will be rejected',
-                        style: const TextStyle(
-                          color: AppTheme.orange,
-                          fontSize: 10.5,
-                          decoration: TextDecoration.none,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          Row(
-            children: [
-              _unitChip(context, 'all', S.allUnits),
-              const SizedBox(width: 6),
-              _unitChip(context, 'offense', S.offenseOnly),
-              const SizedBox(width: 6),
-              _unitChip(context, 'defense', S.defenseOnly),
-              const Spacer(),
-              InkWell(
-                onTap: _selectAllUnits,
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: AppTheme.teal.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                      color: AppTheme.teal.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8)),
                   child: const Icon(Icons.done_all_rounded,
-                      color: AppTheme.teal, size: 16),
-                ),
-              ),
-              const SizedBox(width: 6),
-              InkWell(
-                onTap: _clearAllUnits,
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
+                      color: AppTheme.teal, size: 16)),
+            ),
+            const SizedBox(width: 6),
+            InkWell(
+              onTap: _clearAllUnits,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: AppTheme.subTextColor(context).withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                      color: AppTheme.subTextColor(context).withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(8)),
                   child: Icon(Icons.clear_all_rounded,
-                      color: AppTheme.subTextColor(context), size: 16),
-                ),
-              ),
-            ],
-          ),
+                      color: AppTheme.subTextColor(context), size: 16)),
+            ),
+          ]),
           const SizedBox(height: 10),
           if (_filteredUnits.isEmpty)
             Padding(
               padding: const EdgeInsets.all(20),
               child: Center(
-                child: Text(
-                  S.isAr
-                      ? 'لا توجد وحدات قابلة للإرسال في هذه القلعة'
-                      : 'No sendable units at this castle',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      color: AppTheme.subTextColor(context),
-                      decoration: TextDecoration.none),
-                ),
-              ),
+                  child: Text(
+                      S.isAr
+                          ? 'لا توجد وحدات قابلة للإرسال'
+                          : 'No sendable units',
+                      style: TextStyle(
+                          color: AppTheme.subTextColor(context),
+                          decoration: TextDecoration.none))),
             )
           else
             ..._filteredUnits.map((u) => _unitRow(context, u)),
@@ -1374,59 +1118,32 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              gradient: AppTheme.primaryGradient,
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: AppTheme.purple.withOpacity(0.3),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.calculate_rounded,
-                    color: Colors.white, size: 20),
-                const SizedBox(width: 10),
-                Text(
-                  S.total,
+                gradient: AppTheme.primaryGradient,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                      color: AppTheme.purple.withOpacity(0.3),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8))
+                ]),
+            child: Row(children: [
+              const Icon(Icons.calculate_rounded,
+                  color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              Text(S.total,
                   style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
                       fontSize: 13,
-                      decoration: TextDecoration.none),
-                ),
-                const Spacer(),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      '$_totalSelected',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 22,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                    Text(
-                      S.isAr
-                          ? '$typesCount / $kMaxUnitTypes أنواع'
-                          : '$typesCount / $kMaxUnitTypes types',
-                      style: TextStyle(
-                        color: overLimit
-                            ? const Color(0xFFFFCDD2)
-                            : Colors.white70,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+                      decoration: TextDecoration.none)),
+              const Spacer(),
+              Text('$_totalSelected',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 22,
+                      decoration: TextDecoration.none)),
+            ]),
           ),
         ],
       ),
@@ -1450,15 +1167,12 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
               : Border.all(
                   color: AppTheme.subTextColor(context).withOpacity(0.1)),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: sel ? Colors.white : AppTheme.subTextColor(context),
-            fontSize: 10.5,
-            fontWeight: sel ? FontWeight.bold : FontWeight.w500,
-            decoration: TextDecoration.none,
-          ),
-        ),
+        child: Text(label,
+            style: TextStyle(
+                color: sel ? Colors.white : AppTheme.subTextColor(context),
+                fontSize: 10.5,
+                fontWeight: sel ? FontWeight.bold : FontWeight.w500,
+                decoration: TextDecoration.none)),
       ),
     );
   }
@@ -1475,43 +1189,36 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: u.roleColor.withOpacity(0.2)),
       ),
-      child: Row(
-        children: [
-          Container(
+      child: Row(children: [
+        Container(
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-              color: u.roleColor.withOpacity(0.18),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: u.roleColor.withOpacity(0.4)),
-            ),
-            child: Icon(u.icon, color: u.roleColor, size: 20),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  S.unitName(u.displayName),
+                color: u.roleColor.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: u.roleColor.withOpacity(0.4))),
+            child: Icon(u.icon, color: u.roleColor, size: 20)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(S.unitName(u.displayName),
                   style: TextStyle(
                       color: AppTheme.textColor(context),
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
                       decoration: TextDecoration.none),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  '${S.available}: ${u.amount}',
+                  overflow: TextOverflow.ellipsis),
+              Text('${S.available}: ${u.amount}',
                   style: TextStyle(
                       color: AppTheme.subTextColor(context),
                       fontSize: 10,
-                      decoration: TextDecoration.none),
-                ),
-              ],
-            ),
+                      decoration: TextDecoration.none)),
+            ],
           ),
-          SizedBox(
+        ),
+        SizedBox(
             width: 70,
             height: 36,
             child: TextField(
@@ -1527,47 +1234,37 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
               decoration: InputDecoration(
                 contentPadding: const EdgeInsets.symmetric(vertical: 6),
                 hintText: '0',
-                hintStyle: TextStyle(
-                    color: AppTheme.subTextColor(context).withOpacity(0.5)),
                 enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                      color: AppTheme.subTextColor(context).withOpacity(0.1)),
-                ),
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                        color:
+                            AppTheme.subTextColor(context).withOpacity(0.1))),
               ),
               onChanged: (_) => setState(() {}),
-            ),
-          ),
-          const SizedBox(width: 4),
-          InkWell(
-            onTap: () {
-              _amtCtrl[u.wodId]?.text = u.amount.toString();
-              setState(() {});
-            },
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
+            )),
+        const SizedBox(width: 4),
+        InkWell(
+          onTap: () {
+            _amtCtrl[u.wodId]?.text = u.amount.toString();
+            setState(() {});
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
               width: 32,
               height: 32,
               decoration: BoxDecoration(
-                color: AppTheme.teal.withOpacity(0.18),
-                borderRadius: BorderRadius.circular(8),
-              ),
+                  color: AppTheme.teal.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(8)),
               child: const Icon(Icons.keyboard_double_arrow_up_rounded,
-                  color: AppTheme.teal, size: 16),
-            ),
-          ),
-        ],
-      ),
+                  color: AppTheme.teal, size: 16)),
+        ),
+      ]),
     );
   }
 }
 
-// ═════════════════════════════════════════════════════════════
-//  Traffic Log Bottom Sheet
-// ═════════════════════════════════════════════════════════════
 class _TrafficLogSheet extends StatefulWidget {
   const _TrafficLogSheet();
-
   @override
   State<_TrafficLogSheet> createState() => _TrafficLogSheetState();
 }
@@ -1591,11 +1288,6 @@ class _TrafficLogSheetState extends State<_TrafficLogSheet> {
         });
       }
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scroll.hasClients) {
-        _scroll.jumpTo(_scroll.position.maxScrollExtent);
-      }
-    });
   }
 
   @override
@@ -1608,206 +1300,132 @@ class _TrafficLogSheetState extends State<_TrafficLogSheet> {
   Future<void> _copyAll() async {
     await Clipboard.setData(ClipboardData(text: TrafficLog.dump()));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Copied ${TrafficLog.entries.length} entries ✓',
-            style: const TextStyle(decoration: TextDecoration.none)),
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: AppTheme.green,
-      ),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Copied ${TrafficLog.entries.length} entries ✓',
+          style: const TextStyle(decoration: TextDecoration.none)),
+      duration: const Duration(seconds: 2),
+      behavior: SnackBarBehavior.floating,
+      backgroundColor: AppTheme.green,
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
     final entries = TrafficLog.entries;
     final h = MediaQuery.of(context).size.height;
-
     return Container(
       height: h * 0.9,
       decoration: const BoxDecoration(
-        color: Color(0xFF0B0B14),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+          color: Color(0xFF0B0B14),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       child: SafeArea(
         top: false,
-        child: Column(
-          children: [
-            Container(
+        child: Column(children: [
+          Container(
               width: 44,
               height: 5,
               margin: const EdgeInsets.symmetric(vertical: 10),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(3),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(3))),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(children: [
+              Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
                       gradient: AppTheme.orangeGradient,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(Icons.terminal_rounded,
-                        color: Colors.white, size: 18),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Traffic Log',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                            decoration: TextDecoration.none,
-                          ),
-                        ),
-                        Text(
-                          '${entries.length} entries',
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.5),
-                            fontSize: 11,
-                            decoration: TextDecoration.none,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  _logBtn(
-                    icon: _autoScroll
-                        ? Icons.vertical_align_bottom_rounded
-                        : Icons.vertical_align_center_rounded,
-                    color: _autoScroll ? AppTheme.blue : Colors.grey,
-                    onTap: () => setState(() => _autoScroll = !_autoScroll),
-                  ),
-                  const SizedBox(width: 6),
-                  _logBtn(
-                    icon: Icons.content_copy_rounded,
-                    color: AppTheme.blue,
-                    onTap: _copyAll,
-                  ),
-                  const SizedBox(width: 6),
-                  _logBtn(
-                    icon: Icons.delete_sweep_rounded,
-                    color: AppTheme.red,
-                    onTap: () {
-                      TrafficLog.clear();
-                      setState(() {});
-                    },
-                  ),
-                  const SizedBox(width: 6),
-                  _logBtn(
-                    icon: Icons.close_rounded,
-                    color: Colors.white,
-                    onTap: () => Navigator.pop(context),
-                  ),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: const Icon(Icons.terminal_rounded,
+                      color: Colors.white, size: 18)),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Traffic Log',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                          decoration: TextDecoration.none)),
+                  Text('${entries.length} entries',
+                      style: TextStyle(
+                          color: Colors.white.withOpacity(0.5),
+                          fontSize: 11,
+                          decoration: TextDecoration.none)),
                 ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 12),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
+              )),
+              IconButton(
+                  icon: const Icon(Icons.close_rounded, color: Colors.white),
+                  onPressed: () => Navigator.pop(context)),
+            ]),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
                   color: Colors.black,
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
-                ),
-                child: entries.isEmpty
-                    ? const Center(
-                        child: Text(
-                          'No traffic yet.\nTry refreshing.',
-                          textAlign: TextAlign.center,
+                  border: Border.all(color: Colors.white.withOpacity(0.08))),
+              child: entries.isEmpty
+                  ? const Center(
+                      child: Text('No traffic yet.',
                           style: TextStyle(
                               color: Colors.grey,
                               fontFamily: 'monospace',
                               fontSize: 11,
-                              decoration: TextDecoration.none),
-                        ),
-                      )
-                    : ListView.builder(
-                        controller: _scroll,
-                        itemCount: entries.length,
-                        itemBuilder: (_, i) {
-                          final line = entries[i];
-                          Color color = AppTheme.green;
-                          if (line.contains('[RX]')) {
-                            color = AppTheme.blue;
-                          } else if (line.contains('[ST]')) {
-                            color = AppTheme.teal;
-                          } else if (line.contains('[ER]')) {
-                            color = AppTheme.red;
-                          }
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 1),
-                            child: SelectableText(
-                              line,
+                              decoration: TextDecoration.none)))
+                  : ListView.builder(
+                      controller: _scroll,
+                      itemCount: entries.length,
+                      itemBuilder: (_, i) {
+                        final line = entries[i];
+                        Color color = AppTheme.green;
+                        if (line.contains('[RX]')) {
+                          color = AppTheme.blue;
+                        } else if (line.contains('[ST]')) {
+                          color = AppTheme.teal;
+                        } else if (line.contains('[ER]')) {
+                          color = AppTheme.red;
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 1),
+                          child: SelectableText(line,
                               style: TextStyle(
-                                color: color,
-                                fontFamily: 'monospace',
-                                fontSize: 10,
-                                height: 1.4,
-                                decoration: TextDecoration.none,
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-              ),
+                                  color: color,
+                                  fontFamily: 'monospace',
+                                  fontSize: 10,
+                                  height: 1.4,
+                                  decoration: TextDecoration.none)),
+                        );
+                      },
+                    ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton.icon(
-                  onPressed: _copyAll,
-                  icon: const Icon(Icons.content_copy_rounded, size: 18),
-                  label: Text(
-                    'Copy All (${entries.length})',
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: _copyAll,
+                icon: const Icon(Icons.content_copy_rounded, size: 18),
+                label: Text('Copy All (${entries.length})',
                     style: const TextStyle(
                         fontWeight: FontWeight.bold,
-                        decoration: TextDecoration.none),
-                  ),
-                  style: ElevatedButton.styleFrom(
+                        decoration: TextDecoration.none)),
+                style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.blue,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                ),
+                        borderRadius: BorderRadius.circular(12))),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _logBtn({
-    required IconData icon,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(icon, color: color, size: 18),
+          ),
+        ]),
       ),
     );
   }
