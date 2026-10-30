@@ -380,6 +380,7 @@ class DesertAttackService {
     return kAttackPowerPerUnit;
   }
 
+  // ✅✅✅ متعتمدش على AS — اعتمد على عدد الوحدات فقط
   AttackViability analyzeAttack({
     required DesertSpyReport report,
     required int myUnitCount,
@@ -388,14 +389,13 @@ class DesertAttackService {
     final enemyUnits = report.totalEnemyUnits;
     final myStrength = myUnits.fold<int>(
         0, (s, e) => s + _unitStrength(e[0]) * e[1]);
-    final enemyStrength = report.defensiveStrength;
 
+    // ✅ نسبة عدد الوحدات فقط (AS مش موثوق)
     final unitRatio = enemyUnits > 0 ? myUnitCount / enemyUnits : 999.0;
-    final strengthRatio =
-        enemyStrength > 0 ? myStrength / enemyStrength : 999.0;
+    final strengthRatio = 999.0;
 
-    final likelyWin = unitRatio >= 1.5 && strengthRatio >= 1.0;
-    final guaranteed = unitRatio >= 2.0 && strengthRatio >= 1.5;
+    final likelyWin = unitRatio >= 1.3;
+    final guaranteed = unitRatio >= 2.0;
 
     String message;
     String hint;
@@ -405,13 +405,18 @@ class DesertAttackService {
       hint = 'نسبة ${unitRatio.toStringAsFixed(1)}x — آمن';
     } else if (likelyWin) {
       message = '⚠️ الهجوم ممكن ينجح';
-      hint = 'يفضل ترسل وحدات أكتر للضمان';
+      hint = 'وحداتك: $myUnitCount · مدافعين: $enemyUnits '
+          '(نسبة ${unitRatio.toStringAsFixed(1)}x)';
     } else if (myUnitCount < 20) {
       message = '🚨 وحداتك قليلة جداً';
       hint = 'تحتاج على الأقل 20 وحدة';
+    } else if (unitRatio >= 1.0) {
+      message = '⚠️ نسبة ضعيفة';
+      hint = 'وحداتك: $myUnitCount · مدافعين: $enemyUnits '
+          '(نسبة ${unitRatio.toStringAsFixed(1)}x)';
     } else {
-      message = '❌ الهجوم هيغلب يفشل';
-      hint = 'تحتاج ${(enemyUnits * 1.5).ceil()} وحدة على الأقل';
+      message = '❌ وحداتك أقل من المدافعين';
+      hint = 'المدافعين: $enemyUnits · عندك: $myUnitCount';
     }
 
     return AttackViability(
@@ -420,7 +425,7 @@ class DesertAttackService {
       myUnitCount: myUnitCount,
       enemyUnitCount: enemyUnits,
       myStrength: myStrength,
-      enemyStrength: enemyStrength,
+      enemyStrength: report.defensiveStrength,
       message: message,
       hint: hint,
     );
@@ -547,7 +552,7 @@ class DesertAttackService {
           'HBW': -1, 'KID': tower.kid, 'PTT': 1, 'SD': 0,
         }),
         responseCmd: 'csm', timeoutMs: 25000, isAction: true,
-        // ✅ فلترة: نتأكد إن الرد بتاع البرج ده (بمطابقة TX/TY)
+        // ✅ فلترة: نتأكد إن الرد بتاع البرج ده
         predicate: (m) {
           if (m.payload == null) return true;
           try {
@@ -793,7 +798,7 @@ class DesertAttackService {
       final resp = await conn.sendXtAndWait(
         'cra', jsonEncode(payload),
         responseCmd: 'cra', timeoutMs: 25000, isAction: true,
-        // ✅✅✅ فلترة: نتأكد إن الرد بتاع هجمتنا (بمطابقة TA)
+        // ✅ فلترة: نتأكد إن الرد بتاع هجمتنا (بمطابقة TA)
         predicate: (m) {
           if (m.payload == null) return true;
           try {
@@ -830,9 +835,9 @@ class DesertAttackService {
       if (resp.resultCode == 218) return DesertAttackResult.fail('LORD_BUSY_218');
       if (resp.resultCode == 181) return DesertAttackResult.fail('MAX_MOVEMENTS_181');
       if (resp.resultCode == 100) return DesertAttackResult.fail('CRA_100');
-      // ✅✅✅ 313 = TOO_MANY_UNITS (مش Already gone)
+      // ✅ 313 = TOO_MANY_UNITS
       if (resp.resultCode == 313) {
-        return DesertAttackResult.fail('TOO_MANY_UNITS_313 (وحدات كتير على البرج)');
+        return DesertAttackResult.fail('TOO_MANY_UNITS_313');
       }
       return DesertAttackResult.fail('CRA ${resp.resultCode}');
     } catch (e) {
@@ -853,6 +858,7 @@ class DesertAttackService {
     }
   }
 
+  // ✅✅✅ 1.1x بدل 1.5x + cap 110 وحدة
   UnitSuggestion suggestCounter({
     required List<CastleUnit> available,
     required DefenderSummary defenders,
@@ -913,9 +919,10 @@ class DesertAttackService {
 
       final wingShare = totalDefForWing / totalDef;
 
+      // ✅✅✅ 1.1x بدل 1.5x
       int target;
-      if (totalAvail >= totalDef * 1.5) {
-        target = (totalDefForWing * 1.5).round();
+      if (totalAvail >= totalDef * 1.1) {
+        target = (totalDefForWing * 1.1).round();
       } else {
         target = (totalAvail * wingShare).round();
       }
@@ -999,9 +1006,18 @@ class DesertAttackService {
       return out;
     }
 
-    final left = allocateWing(defMelee: defenders.leftMelee, defRanged: defenders.leftRanged, maxSlots: 2);
-    final middle = allocateWing(defMelee: defenders.middleMelee, defRanged: defenders.middleRanged, maxSlots: 5);
-    final right = allocateWing(defMelee: defenders.rightMelee, defRanged: defenders.rightRanged, maxSlots: 2);
+    final left = allocateWing(
+        defMelee: defenders.leftMelee,
+        defRanged: defenders.leftRanged,
+        maxSlots: 2);
+    final middle = allocateWing(
+        defMelee: defenders.middleMelee,
+        defRanged: defenders.middleRanged,
+        maxSlots: 5);
+    final right = allocateWing(
+        defMelee: defenders.rightMelee,
+        defRanged: defenders.rightRanged,
+        maxSlots: 2);
 
     List<List<int>> clean(List<List<int>> l) =>
         l.where((e) => e.length >= 2 && e[0] > 0 && e[1] > 0).toList();
@@ -1026,10 +1042,31 @@ class DesertAttackService {
     while (typeCount() > maxTypes && rightOut.isNotEmpty) rightOut.removeLast();
     while (typeCount() > maxTypes && leftOut.isNotEmpty) leftOut.removeLast();
 
-    final lTotal = leftOut.fold<int>(0, (s, e) => s + e[1]);
-    final mTotal = middleOut.fold<int>(0, (s, e) => s + e[1]);
-    final rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
-    final total = lTotal + mTotal + rTotal;
+    var lTotal = leftOut.fold<int>(0, (s, e) => s + e[1]);
+    var mTotal = middleOut.fold<int>(0, (s, e) => s + e[1]);
+    var rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
+    var total = lTotal + mTotal + rTotal;
+
+    // ✅✅✅ Cap إجمالي الوحدات عند 110 (حد أمان للبرج)
+    const int kMaxUnitsCap = 110;
+    if (total > kMaxUnitsCap) {
+      while (total > kMaxUnitsCap && middleOut.isNotEmpty) {
+        final removed = middleOut.removeLast();
+        total -= removed[1];
+      }
+      while (total > kMaxUnitsCap && rightOut.isNotEmpty) {
+        final removed = rightOut.removeLast();
+        total -= removed[1];
+      }
+      while (total > kMaxUnitsCap && leftOut.isNotEmpty) {
+        final removed = leftOut.removeLast();
+        total -= removed[1];
+      }
+      lTotal = leftOut.fold<int>(0, (s, e) => s + e[1]);
+      mTotal = middleOut.fold<int>(0, (s, e) => s + e[1]);
+      rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
+      total = lTotal + mTotal + rTotal;
+    }
 
     int mCount = 0, rCount = 0;
     for (final e in [...leftOut, ...middleOut, ...rightOut]) {
