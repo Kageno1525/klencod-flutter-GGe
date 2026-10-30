@@ -380,7 +380,6 @@ class DesertAttackService {
     return kAttackPowerPerUnit;
   }
 
-  // ✅✅✅ متعتمدش على AS — اعتمد على عدد الوحدات فقط
   AttackViability analyzeAttack({
     required DesertSpyReport report,
     required int myUnitCount,
@@ -853,61 +852,13 @@ class DesertAttackService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  //  🎲 Fallback داخلي: توزيع عشوائي عندما يفشل الـ smart allocation
-  //  (نسخة داخلية من `_fillWaveRandom` اللي في auto.dart)
+  //  ✅ suggestCounter جديدة — توزيع 20/60/20 + maxTotal
   // ═══════════════════════════════════════════════════════════
-  UnitSuggestion _buildFallbackWave(
-    List<CastleUnit> available,
-    String reason,
-  ) {
-    final total = available.fold<int>(0, (s, u) => s + u.amount);
-    final target = total.clamp(0, 90);
-    if (target <= 0) {
-      return UnitSuggestion(left: [], middle: [], right: [], reason: reason);
-    }
-
-    final chosen = available
-        .where((u) => u.amount > 0)
-        .take(10)
-        .map((u) => [
-              u.wodId,
-              (u.amount * target / total).round().clamp(1, u.amount),
-            ])
-        .where((e) => e[1] > 0)
-        .toList();
-
-    final left = <List<int>>[];
-    final middle = <List<int>>[];
-    final right = <List<int>>[];
-
-    for (int i = 0; i < chosen.length; i++) {
-      final unit = chosen[i];
-      final slot = i % 3;
-      if (slot == 0 && left.length < 2) {
-        left.add(unit);
-      } else if (slot == 1 && middle.length < 5) {
-        middle.add(unit);
-      } else if (slot == 2 && right.length < 2) {
-        right.add(unit);
-      } else if (middle.length < 5) {
-        middle.add(unit);
-      } else if (left.length < 2) {
-        left.add(unit);
-      } else if (right.length < 2) {
-        right.add(unit);
-      }
-    }
-
-    return UnitSuggestion(
-      left: left, middle: middle, right: right, reason: reason,
-    );
-  }
-
-  // ✅✅✅ 1.1x بدل 1.5x + cap 110 وحدة + fallback داخلي
   UnitSuggestion suggestCounter({
     required List<CastleUnit> available,
     required DefenderSummary defenders,
     int maxTypes = 10,
+    int maxTotal = 85,
   }) {
     final combat = available
         .where((u) => u.isCombat && u.amount > 0)
@@ -933,81 +884,36 @@ class DesertAttackService {
       ..sort((a, b) => b.amount.compareTo(a.amount));
 
     final remaining = <int, int>{};
-    for (final u in combat) {
-      remaining[u.wodId] = u.amount;
-    }
+    for (final u in combat) remaining[u.wodId] = u.amount;
 
     final meleeIds = melee.map((u) => u.wodId).toSet();
     bool isMeleeType(int wodId) => meleeIds.contains(wodId);
 
-    final leftDef = defenders.leftMelee + defenders.leftRanged;
-    final middleDef = defenders.middleMelee + defenders.middleRanged;
-    final rightDef = defenders.rightMelee + defenders.rightRanged;
-    final totalDef = leftDef + middleDef + rightDef;
-
-    if (totalDef == 0) {
-      // ✅ Fallback داخلي بدل ما نرجع فاضي
-      final fb = _buildFallbackWave(combat, '🎲 fallback (totalDef=0)');
-      if (fb.totalUnits > 0) return fb;
-      return UnitSuggestion(
-        left: [], middle: [], right: [],
-        reason: '⚠️ الدفاعات صفر — تخطي',
-      );
-    }
-
-    final totalAvail = combat.fold<int>(0, (s, u) => s + u.amount);
+    // ✅ توزيع 20/60/20
+    final flankMax = (maxTotal * 0.2).round();
+    final middleMax = maxTotal - 2 * flankMax;
 
     List<List<int>> allocateWing({
-      required int defMelee,
-      required int defRanged,
+      required int maxUnits,
       required int maxSlots,
+      required double meleeRatio,
     }) {
-      final totalDefForWing = defMelee + defRanged;
-      if (totalDefForWing <= 0) return [];
-
-      final wingShare = totalDefForWing / totalDef;
-
-      int target;
-      if (totalAvail >= totalDef * 1.1) {
-        target = (totalDefForWing * 1.1).round();
-      } else {
-        target = (totalAvail * wingShare).round();
-      }
-      if (target == 0) target = 1;
-
-      double meleeRatio = 0.5;
-      if (ranged.isEmpty) meleeRatio = 1.0;
-      else if (melee.isEmpty) meleeRatio = 0.0;
-      else if (defRanged > defMelee) meleeRatio = 0.7;
-      else if (defMelee > defRanged) meleeRatio = 0.3;
-
-      int meleeTarget = (target * meleeRatio).round();
-      int rangedTarget = target - meleeTarget;
-
-      int meleeSlots = 0;
-      int rangedSlots = 0;
-      if (meleeTarget > 0 && rangedTarget > 0) {
-        meleeSlots = (maxSlots + 1) ~/ 2;
-        rangedSlots = maxSlots - meleeSlots;
-      } else if (meleeTarget > 0) {
-        meleeSlots = maxSlots;
-      } else if (rangedTarget > 0) {
-        rangedSlots = maxSlots;
-      }
-
+      final meleeTarget = (maxUnits * meleeRatio).round();
+      final rangedTarget = maxUnits - meleeTarget;
       final out = <List<int>>[];
       int meleeAlloc = 0;
       int rangedAlloc = 0;
+      final meleeSlots = (maxSlots + 1) ~/ 2;
+      final rangedSlots = maxSlots - meleeSlots;
 
       for (final u in melee) {
         if (meleeAlloc >= meleeTarget) break;
-        if (out.length >= meleeSlots + rangedSlots) break;
-        final currentMelee = out.where((e) => isMeleeType(e[0])).length;
-        if (currentMelee >= meleeSlots) break;
+        if (out.where((e) => isMeleeType(e[0])).length >= meleeSlots) break;
         final rem = remaining[u.wodId] ?? 0;
         if (rem <= 0) continue;
-        final need = meleeTarget - meleeAlloc;
-        final take = need < rem ? need : rem;
+        final take = meleeTarget - meleeAlloc < rem
+            ? meleeTarget - meleeAlloc
+            : rem;
         if (take <= 0) continue;
         out.add([u.wodId, take]);
         remaining[u.wodId] = rem - take;
@@ -1016,13 +922,12 @@ class DesertAttackService {
 
       for (final u in ranged) {
         if (rangedAlloc >= rangedTarget) break;
-        if (out.length >= meleeSlots + rangedSlots) break;
-        final currentRanged = out.where((e) => !isMeleeType(e[0])).length;
-        if (currentRanged >= rangedSlots) break;
+        if (out.where((e) => !isMeleeType(e[0])).length >= rangedSlots) break;
         final rem = remaining[u.wodId] ?? 0;
         if (rem <= 0) continue;
-        final need = rangedTarget - rangedAlloc;
-        final take = need < rem ? need : rem;
+        final take = rangedTarget - rangedAlloc < rem
+            ? rangedTarget - rangedAlloc
+            : rem;
         if (take <= 0) continue;
         out.add([u.wodId, take]);
         remaining[u.wodId] = rem - take;
@@ -1030,41 +935,37 @@ class DesertAttackService {
       }
 
       if (out.isEmpty) {
-        for (final u in melee) {
+        for (final u in [...melee, ...ranged]) {
           final rem = remaining[u.wodId] ?? 0;
           if (rem > 0) {
-            out.add([u.wodId, 1]);
-            remaining[u.wodId] = rem - 1;
+            out.add([u.wodId, rem < maxUnits ? rem : maxUnits]);
             break;
           }
         }
       }
-      if (out.isEmpty) {
-        for (final u in ranged) {
-          final rem = remaining[u.wodId] ?? 0;
-          if (rem > 0) {
-            out.add([u.wodId, 1]);
-            remaining[u.wodId] = rem - 1;
-            break;
-          }
-        }
-      }
-
       return out;
     }
 
+    double ratio(int defMelee, int defRanged) {
+      if (ranged.isEmpty) return 1.0;
+      if (melee.isEmpty) return 0.0;
+      if (defRanged > defMelee) return 0.7;
+      if (defMelee > defRanged) return 0.3;
+      return 0.5;
+    }
+
     final left = allocateWing(
-        defMelee: defenders.leftMelee,
-        defRanged: defenders.leftRanged,
-        maxSlots: 2);
+      maxUnits: flankMax, maxSlots: 2,
+      meleeRatio: ratio(defenders.leftMelee, defenders.leftRanged),
+    );
     final middle = allocateWing(
-        defMelee: defenders.middleMelee,
-        defRanged: defenders.middleRanged,
-        maxSlots: 5);
+      maxUnits: middleMax, maxSlots: 6,
+      meleeRatio: ratio(defenders.middleMelee, defenders.middleRanged),
+    );
     final right = allocateWing(
-        defMelee: defenders.rightMelee,
-        defRanged: defenders.rightRanged,
-        maxSlots: 2);
+      maxUnits: flankMax, maxSlots: 2,
+      meleeRatio: ratio(defenders.rightMelee, defenders.rightRanged),
+    );
 
     List<List<int>> clean(List<List<int>> l) =>
         l.where((e) => e.length >= 2 && e[0] > 0 && e[1] > 0).toList();
@@ -1072,16 +973,6 @@ class DesertAttackService {
     var leftOut = clean(left);
     var middleOut = clean(middle);
     var rightOut = clean(right);
-
-    if (leftOut.isEmpty && middleOut.isEmpty && rightOut.isEmpty) {
-      // ✅ Fallback داخلي بدل ما نرجع فاضي
-      final fb = _buildFallbackWave(combat, '🎲 fallback (allocation failed)');
-      if (fb.totalUnits > 0) return fb;
-      return UnitSuggestion(
-        left: [], middle: [], right: [],
-        reason: '⚠️ لم يتم توزيع أي وحدات',
-      );
-    }
 
     int typeCount() {
       final s = <int>{};
@@ -1092,45 +983,28 @@ class DesertAttackService {
     while (typeCount() > maxTypes && rightOut.isNotEmpty) rightOut.removeLast();
     while (typeCount() > maxTypes && leftOut.isNotEmpty) leftOut.removeLast();
 
-    var lTotal = leftOut.fold<int>(0, (s, e) => s + e[1]);
-    var mTotal = middleOut.fold<int>(0, (s, e) => s + e[1]);
-    var rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
-    var total = lTotal + mTotal + rTotal;
+    int total() =>
+        leftOut.fold<int>(0, (s, e) => s + e[1]) +
+        middleOut.fold<int>(0, (s, e) => s + e[1]) +
+        rightOut.fold<int>(0, (s, e) => s + e[1]);
 
-    const int kMaxUnitsCap = 110;
-    if (total > kMaxUnitsCap) {
-      while (total > kMaxUnitsCap && middleOut.isNotEmpty) {
-        final removed = middleOut.removeLast();
-        total -= removed[1];
-      }
-      while (total > kMaxUnitsCap && rightOut.isNotEmpty) {
-        final removed = rightOut.removeLast();
-        total -= removed[1];
-      }
-      while (total > kMaxUnitsCap && leftOut.isNotEmpty) {
-        final removed = leftOut.removeLast();
-        total -= removed[1];
-      }
-      lTotal = leftOut.fold<int>(0, (s, e) => s + e[1]);
-      mTotal = middleOut.fold<int>(0, (s, e) => s + e[1]);
-      rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
-      total = lTotal + mTotal + rTotal;
+    while (total() > maxTotal && middleOut.isNotEmpty) {
+      middleOut.removeLast();
     }
+    while (total() > maxTotal && rightOut.isNotEmpty) rightOut.removeLast();
+    while (total() > maxTotal && leftOut.isNotEmpty) leftOut.removeLast();
 
+    final finalTotal = total();
     int mCount = 0, rCount = 0;
     for (final e in [...leftOut, ...middleOut, ...rightOut]) {
-      if (isMeleeType(e[0])) {
-        mCount += e[1];
-      } else {
-        rCount += e[1];
-      }
+      if (isMeleeType(e[0])) { mCount += e[1]; } else { rCount += e[1]; }
     }
 
     return UnitSuggestion(
       left: leftOut, middle: middleOut, right: rightOut,
-      reason: total > 0
-          ? 'ذكي: $total (M:$mCount · R:$rCount)'
-          : '⚠️ الدفاعات صفر — ادخل أرقام الدفاعات',
+      reason: finalTotal > 0
+          ? '20/60/20 · $finalTotal (M:$mCount · R:$rCount)'
+          : '⚠️ لم يتم توزيع أي وحدات',
     );
   }
 

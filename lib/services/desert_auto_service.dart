@@ -26,17 +26,11 @@ class DesertAutoService {
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 30;
+  static const int kFailedCooldownMin = 5;
 
-  /// ✅ سقف آمن لمنع 313
-  /// من اللوج: 96 نجح على برج 87 مدافع، 104 فشل على برج 94 مدافع
-  /// (سقف البرج حوالي 100) → 85 وحدة تحت السقف بأمان
-  static const int kMaxAttackUnits = 85;
-
-  /// ✅ 15 دقيقة بدل 5 — البرج الفاشل يرتاح فترة كافية
-  static const int kFailedCooldownMin = 15;
-
-  /// تأخير بين الهجمات الناجحة (يمنع rate limit لو ده سبب 313)
+  // ✅ أضف السطرين دول
   static const int kInterAttackDelaySec = 3;
+  static const int kTowerCapInitial = 85;
 
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<AutoStatusEntry> _history = [];
@@ -54,6 +48,12 @@ class DesertAutoService {
   List<DesertTower> get towers => List.unmodifiable(_towers);
 
   final Map<String, DateTime> _failedTowers = {};
+
+  // ✅ السقف المتكيف لكل برج
+  final Map<String, int> _towerCaps = {};
+
+  int _getCapFor(DesertTower t) =>
+      _towerCaps[t.key] ?? kTowerCapInitial;
 
   Future<void>? _activeTick;
   final Set<String> _attackingNow = {};
@@ -210,7 +210,6 @@ class DesertAutoService {
   }
 
   /// ✅ الأصل: نتخطى البرج لو مسجّل failed ولم يمضِ kFailedCooldownMin
-  /// (كان فيه نسخة سابقة بترجع false دايماً — اتشالت عشان ما تعملش loop)
   bool _shouldSkipTower(DesertTower t, {int minutes = kFailedCooldownMin}) {
     final at = _failedTowers[t.key];
     if (at == null) return false;
@@ -393,12 +392,10 @@ class DesertAutoService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  //  ⚔️ حلقة الهجوم
-  //   • هجمة واحدة فقط لكل برج — لا يوجد retry على 313
-  //   • Cap على 85 وحدة (kMaxAttackUnits) — يمنع 313
-  //   • _shouldSkipTower مفعّل — البرج الفاشل يرتاح kFailedCooldownMin
-  //   • أي فشل → mark failed + _attackedThisTick.add (منع التكرار في نفس الـ tick)
-  //   • maxSpyAttempts = 30 (كان 100)
+  //  ⚔️ _tryAttackTowers — السقف المتكيف لكل برج
+  //   • cap يبدأ من 85 (kTowerCapInitial) وينزل 30% عند 313
+  //   • عند النجاح، بيسجل الـ used كـ cap دائم (لو أعلى من السابق)
+  //   • أي فشل → mark failed + _attackedThisTick.add (منع التكرار)
   // ═══════════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
@@ -419,7 +416,7 @@ class DesertAutoService {
 
       int attacksThisTick = 0;
       int spyAttempts = 0;
-      const int maxSpyAttempts = 30;
+      const int maxSpyAttempts = 20;
 
       while (_running && spyAttempts < maxSpyAttempts) {
         final freshUnits = await _client!.getCastleUnits(
@@ -431,8 +428,7 @@ class DesertAutoService {
             sendable.fold<int>(0, (s, u) => s + u.amount);
 
         if (totalUnits < kMinUnitsToAttack) {
-          _setStatus(
-              '💤 Idle — units: $totalUnits (< $kMinUnitsToAttack)');
+          _setStatus('💤 Idle — units: $totalUnits (< $kMinUnitsToAttack)');
           return;
         }
 
@@ -453,7 +449,7 @@ class DesertAutoService {
 
         final candidates = _towers
             .where((t) => !_svc!.isTowerInCooldown(t))
-            .where((t) => !_shouldSkipTower(t)) // ✅ مفعّل
+            .where((t) => !_shouldSkipTower(t))
             .where((t) => !_attackedThisTick.contains(t.key))
             .where((t) => !_attackingNow.contains(t.key))
             .toList()
@@ -478,7 +474,7 @@ class DesertAutoService {
           if (!spyOk) {
             _setStatus('❌ Spy failed for ${tower.coordsLabel}');
             _markTowerFailed(tower);
-            _attackedThisTick.add(tower.key);
+            _attackedThisTick.add(tower.key); // ← منع التكرار
             continue;
           }
 
@@ -498,33 +494,15 @@ class DesertAutoService {
             continue;
           }
 
-          // ✅ الاقتراح الذكي
-          var suggestion = _svc!.suggestCounter(
+          // ✅ السقف المتكيف (يبدأ 85 وينزل لو فيه 313 سابق)
+          final cap = _getCapFor(tower);
+
+          // ✅ توزيع 20/60/20
+          final suggestion = _svc!.suggestCounter(
             available: sendable,
             defenders: report.toDefenderSummary(),
+            maxTotal: cap,
           );
-
-          // ✅ Cap على 85 وحدة لضمان عدم 313
-          if (suggestion.totalUnits > kMaxAttackUnits) {
-            final before = suggestion.totalUnits;
-            suggestion = _capSuggestion(
-                suggestion,
-                maxTotal: kMaxAttackUnits);
-            TrafficLog.add('ST',
-                '[Desert-Auto] ✂️ capped $before → ${suggestion.totalUnits} units (${tower.coordsLabel})');
-          }
-
-          // ✅ Fallback: لو الاقتراح فاضي → توزيع عشوائي
-          final bool suggestionEmpty = suggestion.totalUnits <= 0 ||
-              (suggestion.left.isEmpty &&
-                  suggestion.middle.isEmpty &&
-                  suggestion.right.isEmpty);
-
-          if (suggestionEmpty) {
-            suggestion = _fillWaveRandom(sendable);
-            TrafficLog.add('ST',
-                '[Desert-Auto] 🎲 fallback wave ${suggestion.totalUnits} for ${tower.coordsLabel}');
-          }
 
           if (suggestion.totalUnits <= 0 ||
               (suggestion.left.isEmpty &&
@@ -535,6 +513,8 @@ class DesertAutoService {
             _attackedThisTick.add(tower.key);
             continue;
           }
+
+          // ⚠️ تم حذف فلتر analyzeAttack نهائياً
 
           Lord lord;
           try {
@@ -559,12 +539,19 @@ class DesertAutoService {
             attacksThisTick++;
             attacksThisSession++;
             _attackedThisTick.add(tower.key);
+
+            // ✅ تعلّم السقف
+            final used = suggestion.totalUnits;
+            final prev = _towerCaps[tower.key];
+            if (prev == null || used > prev) {
+              _towerCaps[tower.key] = used;
+            }
+
             TrafficLog.add('ST',
                 '[Desert-Auto] ✅ HIT ${tower.coordsLabel} '
-                'mid=${result.movementId} units=${suggestion.totalUnits} '
+                'mid=${result.movementId} units=$used '
                 '($attacksThisTick this tick, $attacksThisSession session)');
-            _setStatus(
-                '✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
+            _setStatus('✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
 
             await Future.delayed(
                 const Duration(seconds: kInterAttackDelaySec));
@@ -572,12 +559,24 @@ class DesertAutoService {
             continue;
           }
 
-          // ❌ أي فشل → سجّل التفاصيل، mark failed، وامنع التكرار في نفس الـ tick
+          // ❌ فشل
+          final is313 = result.error?.contains('313') == true;
+          if (is313) {
+            // ✅ قلل السقف، مفيش retry
+            final newCap = (cap * 0.7).round();
+            _towerCaps[tower.key] = newCap > 15 ? newCap : 15;
+            TrafficLog.add('ST',
+                '[Desert-Auto] 📉 313 on ${tower.coordsLabel} — cap → ${_towerCaps[tower.key]}');
+            _setStatus('📉 ${tower.coordsLabel}: cap → ${_towerCaps[tower.key]}');
+            _attackedThisTick.add(tower.key);
+            continue;
+          }
+
           TrafficLog.add('ER',
               '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
-          _setStatus('❌ ${tower.coordsLabel}: ${result.error}');
+          _setStatus('❌ ${tower.coordsLabel} failed');
           _markTowerFailed(tower);
-          _attackedThisTick.add(tower.key); // ← أهم إصلاح: منع التكرار في نفس الـ tick
+          _attackedThisTick.add(tower.key);
           continue;
         } finally {
           _attackingNow.remove(tower.key);
@@ -645,97 +644,3 @@ class DesertAutoService {
     return true;
   }
 }
-
-// ═══════════════════════════════════════════════════════════
-//  🎲 Helper: توزيع عشوائي للوحدات على الـ 3 wings
-//  (fallback عندما يرجع suggestCounter اقتراحاً فارغاً)
-//  داخلياً بيحدد target = min(total, 85) — متوافق مع kMaxAttackUnits
-// ═══════════════════════════════════════════════════════════
-UnitSuggestion _fillWaveRandom(List<CastleUnit> sendable) {
-  final total = sendable.fold<int>(0, (s, u) => s + u.amount);
-  final target = total.clamp(0, DesertAutoService.kMaxAttackUnits);
-  if (target <= 0) {
-    return UnitSuggestion(left: [], middle: [], right: [], reason: 'fallback');
-  }
-
-  final chosen = sendable
-      .where((u) => u.amount > 0)
-      .take(10)
-      .map((u) => [
-            u.wodId,
-            (u.amount * target / total).round().clamp(1, u.amount),
-          ])
-      .where((e) => e[1] > 0)
-      .toList();
-
-  final left = <List<int>>[];
-  final middle = <List<int>>[];
-  final right = <List<int>>[];
-
-  for (int i = 0; i < chosen.length; i++) {
-    final unit = chosen[i];
-    final slot = i % 3;
-    if (slot == 0 && left.length < 2) {
-      left.add(unit);
-    } else if (slot == 1 && middle.length < 5) {
-      middle.add(unit);
-    } else if (slot == 2 && right.length < 2) {
-      right.add(unit);
-    } else if (middle.length < 5) {
-      middle.add(unit);
-    } else if (left.length < 2) {
-      left.add(unit);
-    } else if (right.length < 2) {
-      right.add(unit);
-    }
-  }
-
-  return UnitSuggestion(
-    left: left,
-    middle: middle,
-    right: right,
-    reason: 'fallback',
-  );
-}
-
-// ═══════════════════════════════════════════════════════════
-//  ✂️ Helper: Cap الـ suggestion على maxTotal وحدة
-//  (يقلل من الـ wings بالترتيب: middle → right → left)
-// ═══════════════════════════════════════════════════════════
-UnitSuggestion _capSuggestion(UnitSuggestion s, {required int maxTotal}) {
-  if (s.totalUnits <= maxTotal) return s;
-
-  final left = s.left.map((e) => List<int>.from(e)).toList();
-  final middle = s.middle.map((e) => List<int>.from(e)).toList();
-  final right = s.right.map((e) => List<int>.from(e)).toList();
-
-  int total = _sum(left) + _sum(middle) + _sum(right);
-
-  void trim(List<List<int>> units) {
-    while (total > maxTotal && units.isNotEmpty) {
-      final last = units.last;
-      final excess = total - maxTotal;
-      if (last[1] <= excess) {
-        units.removeLast();
-        total -= last[1];
-      } else {
-        last[1] -= excess;
-        total -= excess;
-      }
-    }
-  }
-
-  trim(middle);
-  trim(right);
-  trim(left);
-
-  return UnitSuggestion(
-    left: left,
-    middle: middle,
-    right: right,
-    reason: s.reason,
-  );
-}
-
-int _sum(List<List<int>> units) =>
-    units.fold<int>(0, (a, b) => a + b[1]);
