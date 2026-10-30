@@ -26,14 +26,14 @@ class DesertAutoService {
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 30;
-  static const int kFailedCooldownMin = 5;
+  static const int kFailedCooldownMin = 300;
   static const int kInterAttackDelaySec = 3;
 
   // ✅ الـ Caps الديناميكية (عشان نتجنب cpa > 170 و 313)
-  static const int kCapStart = 204;    // البداية آمنة
-  static const int kCapMin = 112;       // أقل عدد
-  static const int kCapMax = 300;      // أقصى عدد (تحت 170 عشان نمنع cpa)
-  static const int kCapGrowStep = 10;  // زيادة 10 كل نجاح
+  static const int kCapStart = 250;    // البداية آمنة
+  static const int kCapMin = 250;       // أقل عدد
+  static const int kCapMax = 250;      // أقصى عدد (تحت 170 عشان نمنع cpa)
+  static const int kCapGrowStep = 0;  // زيادة 10 كل نجاح
 
   static const _kCapsSuccessKey = 'desert_cap_ok_v3';
   static const _kCapsFailKey = 'desert_cap_fail_v3';

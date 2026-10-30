@@ -9,7 +9,7 @@ const int kDesertRadiusMin = 5;
 const int kDesertRadiusMax = 100;
 const int kDesertRadiusStep = 5;
 const int kDesertChunkSize = 13;
-const int kDefaultTowerCooldownMinutes = 5;
+const int kDefaultTowerCooldownMinutes = 200;
 const int kAttackPowerPerUnit = 10;
 
 // ═══════════════════════════════════════════════════════════
