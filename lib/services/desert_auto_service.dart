@@ -25,19 +25,11 @@ class DesertAutoService {
   static const _kTransferUnitIds = 'desert_auto_transfer_unit_ids';
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
-  static const int kMinUnitsToAttack = 100;
-  static const int kFailedCooldownMin = 240;
+  static const int kMinUnitsToAttack = 30;
+  static const int kFailedCooldownMin = 5;
 
-  // ✅ مدد الفشل حسب السبب (بدل 240 دقيقة لكل حاجة)
-  static const int kSpyFailMin = 10; // التجسس فشل / التقرير ماوصلش
-  static const int kWeakArmyMin = 20; // جنودي مش كفاية دلوقتي
-  static const int kGenericFailMin = 30; // أي خطأ تاني
-
-  // ✅ أقل نسبة مسموحة لكل جناح (عدد المهاجمين ÷ عدد المدافعين)
-  static const double kMinWingRatio = 1.05;
-
-  // ✅ أقصى عدد أبراج في الـ tick الواحد (بدل 10)
-  static const int kMaxTowersPerTick = 60;
+  /// تأخير بين الهجمات الناجحة (يمنع rate limit لو ده سبب 313)
+  static const int kInterAttackDelaySec = 3;
 
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<AutoStatusEntry> _history = [];
@@ -47,7 +39,6 @@ class DesertAutoService {
   int towersScanned = 0;
 
   Timer? _timer;
-  Timer? _fastTimer;
   StreamSubscription? _xtSub;
   bool _running = false;
   DesertAttackService? _svc;
@@ -57,17 +48,10 @@ class DesertAutoService {
 
   final Map<String, DateTime> _failedTowers = {};
 
-  // ✅ Locks
   Future<void>? _activeTick;
   final Set<String> _attackingNow = {};
   final Set<String> _attackedThisTick = {};
   bool _scanInProgress = false;
-
-  // ✅ تقارير التجسس اللي اتستخدمت قبل كده (عشان ماناخدش تقرير قديم بالغلط)
-  final Set<int> _usedReportIds = {};
-
-  // ✅ لو اتحط، الـ tick اللي بعد كده يشتغل بعد المدة دي بدل ما يستنى 30 ثانية
-  Duration? _nextTickDelay;
 
   Future<bool> isEnabled() async {
     final p = await SharedPreferences.getInstance();
@@ -146,7 +130,6 @@ class DesertAutoService {
     await p.setString(_kFailedTowers, jsonEncode(data));
   }
 
-  // ✅ start ينتظر أي tick قديمة قبل ما يبدأ
   Future<void> start(GgeClient client, {int? sourceAreaId}) async {
     if (_running) return;
 
@@ -161,11 +144,7 @@ class DesertAutoService {
 
     _attackingNow.clear();
     _attackedThisTick.clear();
-    _usedReportIds.clear();
     _scanInProgress = false;
-    _nextTickDelay = null;
-    _fastTimer?.cancel();
-    _fastTimer = null;
 
     _client = client;
     _svc = DesertAttackService(client);
@@ -212,9 +191,6 @@ class DesertAutoService {
     _xtSub = null;
     _timer?.cancel();
     _timer = null;
-    _fastTimer?.cancel();
-    _fastTimer = null;
-    _nextTickDelay = null;
     _running = false;
     _setStatus('🛑 Stopped');
   }
@@ -226,31 +202,23 @@ class DesertAutoService {
     TrafficLog.add('ST', '[Desert-Auto] $s');
   }
 
-  // ✅✅✅ إصلاح: القيمة المخزنة هي "وقت انتهاء الحظر" مش وقت الفشل
-  // (الكود القديم كان بيقارن غلط فالبرج كان بيفضل متحظر ~8 ساعات)
-  bool _shouldSkipTower(DesertTower t) {
-    final until = _failedTowers[t.key];
-    if (until == null) return false;
-    if (!DateTime.now().isBefore(until)) {
-      _failedTowers.remove(t.key);
-      _saveFailedTowers();
-      return false;
-    }
-    return true;
+  // ✅ معطّل: لا نتخطى أي برج بناءً على cooldown الداخلي.
+  // نعتمد فقط على isTowerInCooldown (cooldown اللعبة الحقيقي).
+  bool _shouldSkipTower(DesertTower t, {int minutes = kFailedCooldownMin}) {
+    return false;
   }
 
-  void _markTowerFailed(DesertTower t, {int minutes = kFailedCooldownMin}) {
-    _failedTowers[t.key] = DateTime.now().add(Duration(minutes: minutes));
+  void _markTowerFailed(DesertTower t) {
+    _failedTowers[t.key] =
+        DateTime.now().add(Duration(minutes: kFailedCooldownMin));
     _saveFailedTowers();
     TrafficLog.add('ST',
-        '[Desert-Auto] ⏸️ marked ${t.coordsLabel} failed ($minutes min)');
+        '[Desert-Auto] ⏸️ marked ${t.coordsLabel} failed ($kFailedCooldownMin min)');
   }
 
-  // ✅ tick مع قفل حقيقي + إعادة تشغيل سريعة لو لسه فيه شغل
   Future<void> _tick() async {
     if (!_running) return;
     if (_activeTick != null) return;
-    _nextTickDelay = null;
     _activeTick = _doTick();
     try {
       await _activeTick;
@@ -258,15 +226,6 @@ class DesertAutoService {
       TrafficLog.add('ER', '[Desert-Auto] tick error: $e');
     } finally {
       _activeTick = null;
-    }
-
-    final delay = _nextTickDelay;
-    _nextTickDelay = null;
-    if (_running && delay != null) {
-      _fastTimer?.cancel();
-      _fastTimer = Timer(delay, () {
-        if (_running) _tick();
-      });
     }
   }
 
@@ -419,74 +378,14 @@ class DesertAutoService {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  ✅ التحقق من الجيش قبل الإرسال — الهجمة الغلط ماتتبعتش
-  //  بيرجع null لو الجيش كفاية، أو رسالة السبب لو لأ.
-  // ═══════════════════════════════════════════════════════
-  int _requiredFor(int enemy) {
-    if (enemy <= 0) return 0;
-    final scaled = (enemy * kMinWingRatio).round();
-    return scaled > enemy ? scaled : enemy;
-  }
-
-  int _sumUnits(List<List<int>> l) =>
-      l.fold<int>(0, (s, e) => e.length >= 2 ? s + e[1] : s);
-
-  String? _validateArmy({
-    required DesertSpyReport report,
-    required List<List<int>> left,
-    required List<List<int>> middle,
-    required List<List<int>> right,
-  }) {
-    final lSent = _sumUnits(left);
-    final mSent = _sumUnits(middle);
-    final rSent = _sumUnits(right);
-
-    final lReq = _requiredFor(report.left.total);
-    final mReq = _requiredFor(report.middle.total);
-    final rReq = _requiredFor(report.right.total);
-
-    if (lSent < lReq) return 'يسار $lSent < $lReq';
-    if (mSent < mReq) return 'أمام $mSent < $mReq';
-    if (rSent < rReq) return 'يمين $rSent < $rReq';
-
-    final total = lSent + mSent + rSent;
-    if (total <= 0) return 'جيش فاضي';
-    return null;
-  }
-
-  // ✅ بيحاول يبعت الهجمة بالقائد الأول، ولو مشغول (218) ينقل فورًا للي بعده
-  // من غير ما يتجسس تاني ومن غير ما يحظر البرج.
-  Future<DesertAttackResult> _attackWithLordFallback({
-    required DesertTower tower,
-    required OwnedCastle desert,
-    required List<Lord> lords,
-    required List<List<int>> left,
-    required List<List<int>> middle,
-    required List<List<int>> right,
-  }) async {
-    DesertAttackResult? last;
-    for (final lord in lords.take(4)) {
-      if (!_running) break;
-      final res = await _svc!.attack(
-        tower: tower,
-        source: desert,
-        lordId: lord.id,
-        leftUnits: left,
-        middleUnits: middle,
-        rightUnits: right,
-      );
-      last = res;
-      if (res.success) return res;
-      final busy = res.error?.contains('218') ?? false;
-      if (!busy) return res;
-      TrafficLog.add('ST',
-          '[Desert-Auto] 🔁 lord ${lord.id} busy (218) → next lord');
-    }
-    return last ?? DesertAttackResult.fail('NO_LORD');
-  }
-
-  // ✅✅✅ حلقة الهجوم: تجسس → تحقق → هجوم → فورًا البرج اللي بعده
+  // ═══════════════════════════════════════════════════════════
+  //  ⚔️ حلقة الهجوم
+  //   • هجمة واحدة فقط لكل برج — لا يوجد retry على 313
+  //   • suggestCounter معدّل يبعت 1.5x المدافعين (كافي للفوز)
+  //   • لو suggestion فاضي → fallback: توزيع عشوائي (fillWaveRandom)
+  //   • _shouldSkipTower معطّل — نعتمد فقط على cooldown اللعبة
+  //   • تأخير 3 ثواني بين الهجمات لمنع rate limit
+  // ═══════════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
 
@@ -505,15 +404,18 @@ class DesertAutoService {
       final catalog = await _client!.loadCatalog();
 
       int attacksThisTick = 0;
-      int towersTried = 0;
+      int spyAttempts = 0;
+      const int maxSpyAttempts = 100;
 
-      while (_running && towersTried < kMaxTowersPerTick) {
-        // ── جنودي الحاليين (fresh بعد كل هجمة) ──
+      while (_running && spyAttempts < maxSpyAttempts) {
+        // نحدث الوحدات كل لفة
         final freshUnits = await _client!.getCastleUnits(
             desert.kingdomId, desert.areaId, catalog);
-        final sendable =
-            freshUnits.where((u) => u.isCombat && u.amount > 0).toList();
-        final totalUnits = sendable.fold<int>(0, (s, u) => s + u.amount);
+        final sendable = freshUnits
+            .where((u) => u.isCombat && u.amount > 0)
+            .toList();
+        final totalUnits =
+            sendable.fold<int>(0, (s, u) => s + u.amount);
 
         if (totalUnits < kMinUnitsToAttack) {
           _setStatus(
@@ -521,7 +423,6 @@ class DesertAutoService {
           return;
         }
 
-        // ── القواد الفاضيين ──
         final cmds = await _client!.getCommanders();
         var freeLords = cmds.where((c) => !c.isBusy).toList();
         final selectedCommanderIds = await getCommanderIds();
@@ -534,20 +435,12 @@ class DesertAutoService {
           _setStatus(selectedCommanderIds.isEmpty
               ? '💤 Idle — no free commanders'
               : '💤 Idle — no free selected commanders');
-          // ✅ لو لسه فيه أبراج، افحص تاني بعد 10 ثواني بدل 30
-          _nextTickDelay = const Duration(seconds: 10);
           return;
         }
 
-        // القواد غير الرئيسي الأول، والرئيسي آخر واحد
-        final orderedLords = <Lord>[
-          ...freeLords.where((c) => c.lord.id != 0).map((c) => c.lord),
-          ...freeLords.where((c) => c.lord.id == 0).map((c) => c.lord),
-        ];
-
-        // ── اختيار البرج ──
         final candidates = _towers
             .where((t) => !_svc!.isTowerInCooldown(t))
+            // _shouldSkipTower معطّل (يرجع false دايماً)
             .where((t) => !_shouldSkipTower(t))
             .where((t) => !_attackedThisTick.contains(t.key))
             .where((t) => !_attackingNow.contains(t.key))
@@ -556,99 +449,87 @@ class DesertAutoService {
               a.distanceFromSource.compareTo(b.distanceFromSource));
 
         if (candidates.isEmpty) {
-          _setStatus('⏳ No candidate towers (all cooldown/failed)');
+          _setStatus('⏳ No candidate towers (all cooldown)');
           return;
         }
 
         final tower = candidates.first;
         _attackingNow.add(tower.key);
-        towersTried++;
 
         try {
-          // ── تجسس ──
           _setStatus('🔍 Spying ${tower.coordsLabel}...');
-          await _spyAndFetch(tower, desert, catalog);
+          spyAttempts++;
+
+          final spyOk = await _spyAndFetch(tower, desert, catalog);
           if (!_running) return;
 
-          final report = _svc!.getCachedReport(tower);
-          if (report == null ||
-              !report.matches(tower) ||
-              _usedReportIds.contains(report.messageId)) {
+          if (!spyOk) {
             _setStatus('❌ Spy failed for ${tower.coordsLabel}');
-            _markTowerFailed(tower, minutes: kSpyFailMin);
+            _markTowerFailed(tower);
             continue;
           }
-          _usedReportIds.add(report.messageId);
-          if (_usedReportIds.length > 300) {
-            _usedReportIds.remove(_usedReportIds.first);
+
+          final report = _svc!.getCachedReport(tower);
+          if (report == null || !report.matches(tower)) {
+            _setStatus('❌ Report mismatch for ${tower.coordsLabel}');
+            _markTowerFailed(tower);
+            continue;
           }
 
           if (report.isDead) {
             _setStatus(
                 '💀 ${tower.coordsLabel} dead (respawn in ${report.rs}s)');
-            final mins = ((report.rs / 60).ceil() + 1).clamp(2, 240).toInt();
-            _markTowerFailed(tower, minutes: mins);
+            _markTowerFailed(tower);
             continue;
           }
 
-          if (report.totalEnemyUnits <= 0) {
-            _setStatus('⚠️ ${tower.coordsLabel} empty report');
-            _markTowerFailed(tower, minutes: kSpyFailMin);
-            continue;
-          }
-
-          // ── تقدير مبدئي ──
-          final viable = _svc!.analyzeAttack(
-            report: report,
-            myUnitCount: totalUnits,
-            myUnits: sendable.map((u) => [u.wodId, u.amount]).toList(),
-          );
-          if (!viable.likelyWin) {
-            _setStatus('⏭️ Skip ${tower.coordsLabel}: ${viable.hint}');
-            _markTowerFailed(tower, minutes: kWeakArmyMin);
-            continue;
-          }
-
-          // ── توزيع الجيش ──
+          // ✅ نبني الهجمة بحجم 1.5x (جاي من suggestCounter المعدّل)
           final suggestion = _svc!.suggestCounter(
             available: sendable,
             defenders: report.toDefenderSummary(),
           );
 
-          if (suggestion.totalUnits <= 0 ||
+          // ✅ Fallback: لو الـ suggestion فاضي → توزيع عشوائي
+          final bool suggestionEmpty = suggestion.totalUnits <= 0 ||
               (suggestion.left.isEmpty &&
                   suggestion.middle.isEmpty &&
-                  suggestion.right.isEmpty)) {
+                  suggestion.right.isEmpty);
+
+          final UnitSuggestion finalSuggestion =
+              suggestionEmpty ? _fillWaveRandom(sendable) : suggestion;
+
+          if (finalSuggestion.totalUnits <= 0 ||
+              (finalSuggestion.left.isEmpty &&
+                  finalSuggestion.middle.isEmpty &&
+                  finalSuggestion.right.isEmpty)) {
             _setStatus('⚠️ Empty suggestion for ${tower.coordsLabel}');
-            _markTowerFailed(tower, minutes: kWeakArmyMin);
+            _markTowerFailed(tower);
             continue;
           }
 
-          // ✅✅✅ الفحص الأهم: كل جناح لازم يكون أقوى من مدافعيه
-          final problem = _validateArmy(
-            report: report,
-            left: suggestion.left,
-            middle: suggestion.middle,
-            right: suggestion.right,
-          );
-          if (problem != null) {
-            _setStatus(
-                '🛡️ Skip ${tower.coordsLabel}: الجيش مش كفاية ($problem)');
-            _markTowerFailed(tower, minutes: kWeakArmyMin);
-            continue;
+          if (suggestionEmpty) {
+            TrafficLog.add('ST',
+                '[Desert-Auto] 🎲 fallback fillWaveRandom for ${tower.coordsLabel} (${finalSuggestion.totalUnits} units)');
           }
 
-          // ── إرسال فوري ──
+          Lord lord;
+          try {
+            lord = freeLords.firstWhere((c) => c.lord.id != 0).lord;
+          } catch (_) {
+            lord = freeLords.first.lord;
+          }
+
+          // ⚔️ هجمة واحدة فقط — بدون أي retry
           _setStatus(
-              '⚔️ Attacking ${tower.coordsLabel} (${suggestion.totalUnits})...');
+              '⚔️ Attacking ${tower.coordsLabel} (${finalSuggestion.totalUnits})...');
 
-          var result = await _attackWithLordFallback(
+          final result = await _svc!.attack(
             tower: tower,
-            desert: desert,
-            lords: orderedLords,
-            left: suggestion.left,
-            middle: suggestion.middle,
-            right: suggestion.right,
+            source: desert,
+            lordId: lord.id,
+            leftUnits: finalSuggestion.left,
+            middleUnits: finalSuggestion.middle,
+            rightUnits: finalSuggestion.right,
           );
 
           if (result.success) {
@@ -656,127 +537,50 @@ class DesertAutoService {
             attacksThisSession++;
             _attackedThisTick.add(tower.key);
             TrafficLog.add('ST',
-                '[Desert-Auto] ✅ HIT ${tower.coordsLabel} mid=${result.movementId} '
+                '[Desert-Auto] ✅ HIT ${tower.coordsLabel} '
+                'mid=${result.movementId} units=${finalSuggestion.totalUnits} '
                 '($attacksThisTick this tick, $attacksThisSession session)');
-            _setStatus('✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
+            _setStatus(
+                '✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
+
+            // تأخير أطول بين الهجمات — يمنع rate limit لو ده سبب 313
+            await Future.delayed(
+                const Duration(seconds: kInterAttackDelaySec));
             if (!_running) return;
-            // ✅ من غير أي انتظار — على طول البرج اللي بعده
             continue;
           }
 
-          final err = result.error ?? '';
-
-          // ── 181: وصلنا أقصى عدد حركات — مفيش فايدة نكمل ──
-          if (err.contains('181')) {
-            _setStatus('⏸️ Max movements reached (181)');
-            _nextTickDelay = const Duration(seconds: 20);
-            return;
-          }
-
-          // ── 218: كل القواد اللي جربناهم مشغولين — البرج سليم ──
-          if (err.contains('218')) {
-            _setStatus('⏳ Lords busy — retry soon');
-            _nextTickDelay = const Duration(seconds: 8);
-            return;
-          }
-
-          // ── 313: تقليل الوحدات — بس لو لسه كفاية ──
-          if (err.contains('313')) {
-            TrafficLog.add('ST',
-                '[Desert-Auto] ⚠️ 313 on ${tower.coordsLabel} — try reduced army');
-            _setStatus('⚠️ 313 — retry with fewer units...');
-
-            List<List<int>> reduce(List<List<int>> units, double f) {
-              final out = <List<int>>[];
-              for (final u in units) {
-                if (u.length < 2) continue;
-                final newAmt = (u[1] * f).round();
-                if (newAmt > 0) out.add([u[0], newAmt]);
-              }
-              return out;
-            }
-
-            bool retried = false;
-            for (final f in const [0.85, 0.7]) {
-              final rl = reduce(suggestion.left, f);
-              final rm = reduce(suggestion.middle, f);
-              final rr = reduce(suggestion.right, f);
-
-              // ✅ لو التقليل خلّى أي جناح أضعف من مدافعيه → مانبعتش
-              final bad = _validateArmy(
-                  report: report, left: rl, middle: rm, right: rr);
-              if (bad != null) {
-                TrafficLog.add('ST',
-                    '[Desert-Auto] ⛔ reduced army ($f) too weak: $bad');
-                break;
-              }
-
-              retried = true;
-              final retryTotal = _sumUnits(rl) + _sumUnits(rm) + _sumUnits(rr);
-              TrafficLog.add('ST',
-                  '[Desert-Auto] 🔁 Retry ${tower.coordsLabel} x$f = $retryTotal units');
-              result = await _attackWithLordFallback(
-                tower: tower,
-                desert: desert,
-                lords: orderedLords,
-                left: rl,
-                middle: rm,
-                right: rr,
-              );
-              if (result.success) {
-                attacksThisTick++;
-                attacksThisSession++;
-                _attackedThisTick.add(tower.key);
-                TrafficLog.add('ST',
-                    '[Desert-Auto] ✅ HIT (retry) ${tower.coordsLabel} with $retryTotal units');
-                _setStatus('✅ Hit ${tower.coordsLabel} (retry)');
-                break;
-              }
-              if (!(result.error?.contains('313') ?? false)) break;
-            }
-
-            if (result.success) {
-              if (!_running) return;
-              continue;
-            }
-
-            _setStatus(retried
-                ? '❌ ${tower.coordsLabel}: 313 (tower full)'
-                : '❌ ${tower.coordsLabel}: 313 — الجيش المخفّض ضعيف');
-            _markTowerFailed(tower, minutes: kGenericFailMin);
-            continue;
-          }
-
-          // ── أي خطأ تاني ──
-          TrafficLog.add(
-              'ER', '[Desert-Auto] ❌ ${tower.coordsLabel}: $err');
-          _setStatus('❌ ${tower.coordsLabel}: $err');
-          _markTowerFailed(tower, minutes: kGenericFailMin);
+          // ❌ أي فشل → سجّل التفاصيل، أظهر رسالة عامة، skip البرج
+          TrafficLog.add('ER',
+              '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
+          _setStatus('❌ ${tower.coordsLabel} failed');
+          _markTowerFailed(tower);
           continue;
         } finally {
           _attackingNow.remove(tower.key);
         }
       }
 
-      if (towersTried >= kMaxTowersPerTick) {
-        _setStatus('🔁 Tried $towersTried towers, continuing...');
-      }
-      // ✅ لو لسه فيه شغل بعد الحلقة (عملنا هجمات) — كمّل بعد ثانية
-      if (attacksThisTick > 0) {
-        _nextTickDelay = const Duration(seconds: 1);
+      if (spyAttempts >= maxSpyAttempts) {
+        _setStatus('🔁 Tried $spyAttempts towers, will continue next tick');
       }
     } catch (e) {
       _setStatus('❌ Attack loop error: $e');
     }
   }
 
-  // ✅ تجسس + انتظار التقرير (بنفحص كل 250ms بدل 2 ثانية)
-  Future<void> _spyAndFetch(
+  List<List<int>> _flattenSuggestion(UnitSuggestion s) => [
+        ...s.left.where((u) => u.length >= 2 && u[0] > 0 && u[1] > 0),
+        ...s.middle.where((u) => u.length >= 2 && u[0] > 0 && u[1] > 0),
+        ...s.right.where((u) => u.length >= 2 && u[0] > 0 && u[1] > 0),
+      ];
+
+  Future<bool> _spyAndFetch(
     DesertTower tower,
     OwnedCastle desert,
     Map<int, UnitCatalogEntry> catalog,
   ) async {
-    if (_svc == null) return;
+    if (_svc == null) return false;
 
     _svc!.latestSpyMessageId = null;
     _svc!.latestSpyMessageIdAt = null;
@@ -784,31 +588,22 @@ class DesertAutoService {
     final spyRes = await _svc!.spy(tower: tower, source: desert);
     if (!spyRes.success) {
       _setStatus('❌ Spy failed: ${spyRes.error}');
-      return;
+      return false;
     }
 
     _setStatus('⏳ Waiting for report...');
 
     int? msgId;
-    const pollMs = 250;
-    const maxPolls = 30000 ~/ pollMs; // 30 ثانية
-    for (int i = 0; i < maxPolls; i++) {
-      await Future.delayed(const Duration(milliseconds: pollMs));
-      if (!_running) return;
-      final candidate = _svc!.latestSpyMessageId;
-      if (candidate == null) continue;
-      // ✅ تقرير اتستخدم قبل كده؟ تجاهله وكمّل انتظار
-      if (_usedReportIds.contains(candidate)) {
-        _svc!.latestSpyMessageId = null;
-        continue;
-      }
-      msgId = candidate;
-      break;
+    for (int i = 0; i < 15; i++) {
+      await Future.delayed(const Duration(seconds: 2));
+      if (!_running) return false;
+      msgId = _svc!.latestSpyMessageId;
+      if (msgId != null) break;
     }
 
     if (msgId == null) {
       _setStatus('⚠️ sne didn\'t arrive (30s timeout)');
-      return;
+      return false;
     }
 
     _setStatus('📥 Fetching report msgId=$msgId...');
@@ -820,9 +615,58 @@ class DesertAutoService {
 
     if (report == null) {
       _setStatus('❌ bsd parse failed');
-    } else {
-      _setStatus(
-          '✓ Report: ${report.totalEnemyUnits} units, RS=${report.rs}');
+      return false;
+    }
+
+    _setStatus('✓ Report: ${report.totalEnemyUnits} units, RS=${report.rs}');
+    return true;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  🎲 Helper: توزيع عشوائي للوحدات على الـ 3 wings
+//  يُستخدم كـ fallback عندما يرجع suggestCounter اقتراحاً فارغاً
+// ═══════════════════════════════════════════════════════════
+UnitSuggestion _fillWaveRandom(List<CastleUnit> sendable) {
+  final total = sendable.fold<int>(0, (s, u) => s + u.amount);
+  final target = total.clamp(0, 90);
+
+  // خد أول 10 أنواع (حد الـ wave = 10 slots)
+  final chosen = sendable
+      .where((u) => u.amount > 0)
+      .take(10)
+      .map((u) =>
+          [u.wodId, (u.amount * target / total).round().clamp(1, u.amount)])
+      .where((e) => e[1] > 0)
+      .toList();
+
+  // وزّع على 3 wings
+  final left = <List<int>>[];
+  final middle = <List<int>>[];
+  final right = <List<int>>[];
+
+  for (int i = 0; i < chosen.length; i++) {
+    final unit = chosen[i];
+    final slot = i % 3;
+    if (slot == 0 && left.length < 2) {
+      left.add(unit);
+    } else if (slot == 1 && middle.length < 5) {
+      middle.add(unit);
+    } else if (slot == 2 && right.length < 2) {
+      right.add(unit);
+    } else if (middle.length < 5) {
+      middle.add(unit);
+    } else if (left.length < 2) {
+      left.add(unit);
+    } else if (right.length < 2) {
+      right.add(unit);
     }
   }
+
+  return UnitSuggestion(
+    left: left,
+    middle: middle,
+    right: right,
+    reason: 'fallback',
+  );
 }

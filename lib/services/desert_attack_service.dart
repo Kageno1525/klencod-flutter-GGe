@@ -9,7 +9,7 @@ const int kDesertRadiusMin = 5;
 const int kDesertRadiusMax = 100;
 const int kDesertRadiusStep = 5;
 const int kDesertChunkSize = 13;
-const int kDefaultTowerCooldownMinutes = 240;
+const int kDefaultTowerCooldownMinutes = 5;
 const int kAttackPowerPerUnit = 10;
 
 // ═══════════════════════════════════════════════════════════
@@ -302,7 +302,7 @@ class DesertAttackService {
   int? _currentKid;
   DateTime? _lastJcaAt;
   DateTime? _lastScanAt;
-  static const _scanCooldown = Duration(seconds: 30);
+  static const _scanCooldown = Duration(seconds: 10);
 
   int? latestSpyMessageId;
   DateTime? latestSpyMessageIdAt;
@@ -390,9 +390,7 @@ class DesertAttackService {
     final myStrength = myUnits.fold<int>(
         0, (s, e) => s + _unitStrength(e[0]) * e[1]);
 
-    // ✅ نسبة عدد الوحدات فقط (AS مش موثوق)
     final unitRatio = enemyUnits > 0 ? myUnitCount / enemyUnits : 999.0;
-    final strengthRatio = 999.0;
 
     final likelyWin = unitRatio >= 1.3;
     final guaranteed = unitRatio >= 2.0;
@@ -552,7 +550,6 @@ class DesertAttackService {
           'HBW': -1, 'KID': tower.kid, 'PTT': 1, 'SD': 0,
         }),
         responseCmd: 'csm', timeoutMs: 25000, isAction: true,
-        // ✅ فلترة: نتأكد إن الرد بتاع البرج ده
         predicate: (m) {
           if (m.payload == null) return true;
           try {
@@ -771,7 +768,6 @@ class DesertAttackService {
 
     await _ensureKingdom(tower.kid);
     try {
-      // ✅ WT: 0، PTT: 1 (الريشة)
       final payload = {
         'SX': source.x, 'SY': source.y,
         'TX': tower.x, 'TY': tower.y,
@@ -798,7 +794,6 @@ class DesertAttackService {
       final resp = await conn.sendXtAndWait(
         'cra', jsonEncode(payload),
         responseCmd: 'cra', timeoutMs: 25000, isAction: true,
-        // ✅ فلترة: نتأكد إن الرد بتاع هجمتنا (بمطابقة TA)
         predicate: (m) {
           if (m.payload == null) return true;
           try {
@@ -835,7 +830,6 @@ class DesertAttackService {
       if (resp.resultCode == 218) return DesertAttackResult.fail('LORD_BUSY_218');
       if (resp.resultCode == 181) return DesertAttackResult.fail('MAX_MOVEMENTS_181');
       if (resp.resultCode == 100) return DesertAttackResult.fail('CRA_100');
-      // ✅ 313 = TOO_MANY_UNITS
       if (resp.resultCode == 313) {
         return DesertAttackResult.fail('TOO_MANY_UNITS_313');
       }
@@ -858,7 +852,58 @@ class DesertAttackService {
     }
   }
 
-  // ✅✅✅ 1.1x بدل 1.5x + cap 110 وحدة
+  // ═══════════════════════════════════════════════════════════
+  //  🎲 Fallback داخلي: توزيع عشوائي عندما يفشل الـ smart allocation
+  //  (نسخة داخلية من `_fillWaveRandom` اللي في auto.dart)
+  // ═══════════════════════════════════════════════════════════
+  UnitSuggestion _buildFallbackWave(
+    List<CastleUnit> available,
+    String reason,
+  ) {
+    final total = available.fold<int>(0, (s, u) => s + u.amount);
+    final target = total.clamp(0, 90);
+    if (target <= 0) {
+      return UnitSuggestion(left: [], middle: [], right: [], reason: reason);
+    }
+
+    final chosen = available
+        .where((u) => u.amount > 0)
+        .take(10)
+        .map((u) => [
+              u.wodId,
+              (u.amount * target / total).round().clamp(1, u.amount),
+            ])
+        .where((e) => e[1] > 0)
+        .toList();
+
+    final left = <List<int>>[];
+    final middle = <List<int>>[];
+    final right = <List<int>>[];
+
+    for (int i = 0; i < chosen.length; i++) {
+      final unit = chosen[i];
+      final slot = i % 3;
+      if (slot == 0 && left.length < 2) {
+        left.add(unit);
+      } else if (slot == 1 && middle.length < 5) {
+        middle.add(unit);
+      } else if (slot == 2 && right.length < 2) {
+        right.add(unit);
+      } else if (middle.length < 5) {
+        middle.add(unit);
+      } else if (left.length < 2) {
+        left.add(unit);
+      } else if (right.length < 2) {
+        right.add(unit);
+      }
+    }
+
+    return UnitSuggestion(
+      left: left, middle: middle, right: right, reason: reason,
+    );
+  }
+
+  // ✅✅✅ 1.1x بدل 1.5x + cap 110 وحدة + fallback داخلي
   UnitSuggestion suggestCounter({
     required List<CastleUnit> available,
     required DefenderSummary defenders,
@@ -901,6 +946,9 @@ class DesertAttackService {
     final totalDef = leftDef + middleDef + rightDef;
 
     if (totalDef == 0) {
+      // ✅ Fallback داخلي بدل ما نرجع فاضي
+      final fb = _buildFallbackWave(combat, '🎲 fallback (totalDef=0)');
+      if (fb.totalUnits > 0) return fb;
       return UnitSuggestion(
         left: [], middle: [], right: [],
         reason: '⚠️ الدفاعات صفر — تخطي',
@@ -919,7 +967,6 @@ class DesertAttackService {
 
       final wingShare = totalDefForWing / totalDef;
 
-      // ✅✅✅ 1.1x بدل 1.5x
       int target;
       if (totalAvail >= totalDef * 1.1) {
         target = (totalDefForWing * 1.1).round();
@@ -1027,6 +1074,9 @@ class DesertAttackService {
     var rightOut = clean(right);
 
     if (leftOut.isEmpty && middleOut.isEmpty && rightOut.isEmpty) {
+      // ✅ Fallback داخلي بدل ما نرجع فاضي
+      final fb = _buildFallbackWave(combat, '🎲 fallback (allocation failed)');
+      if (fb.totalUnits > 0) return fb;
       return UnitSuggestion(
         left: [], middle: [], right: [],
         reason: '⚠️ لم يتم توزيع أي وحدات',
@@ -1047,7 +1097,6 @@ class DesertAttackService {
     var rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
     var total = lTotal + mTotal + rTotal;
 
-    // ✅✅✅ Cap إجمالي الوحدات عند 110 (حد أمان للبرج)
     const int kMaxUnitsCap = 110;
     if (total > kMaxUnitsCap) {
       while (total > kMaxUnitsCap && middleOut.isNotEmpty) {
