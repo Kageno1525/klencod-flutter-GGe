@@ -26,9 +26,17 @@ class DesertAutoService {
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 30;
-  static const int kFailedCooldownMin = 15; // كان 5 — البرج الفاشل يرتاح 15 دقيقة
+
+  /// ✅ سقف آمن لمنع 313
+  /// من اللوج: 96 نجح على برج 87 مدافع، 104 فشل على برج 94 مدافع
+  /// (سقف البرج حوالي 100) → 85 وحدة تحت السقف بأمان
+  static const int kMaxAttackUnits = 85;
+
+  /// ✅ 15 دقيقة بدل 5 — البرج الفاشل يرتاح فترة كافية
+  static const int kFailedCooldownMin = 15;
+
+  /// تأخير بين الهجمات الناجحة (يمنع rate limit لو ده سبب 313)
   static const int kInterAttackDelaySec = 3;
-  static const int kMaxSafeUnitsPerAttack = 90; // سقف آمن لمنع 313
 
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<AutoStatusEntry> _history = [];
@@ -201,7 +209,8 @@ class DesertAutoService {
     TrafficLog.add('ST', '[Desert-Auto] $s');
   }
 
-  /// ✅ الأصل: نتخطى البرج لو مسجّل failed ولم يمضِ kFailedCooldownMin.
+  /// ✅ الأصل: نتخطى البرج لو مسجّل failed ولم يمضِ kFailedCooldownMin
+  /// (كان فيه نسخة سابقة بترجع false دايماً — اتشالت عشان ما تعملش loop)
   bool _shouldSkipTower(DesertTower t, {int minutes = kFailedCooldownMin}) {
     final at = _failedTowers[t.key];
     if (at == null) return false;
@@ -386,8 +395,8 @@ class DesertAutoService {
   // ═══════════════════════════════════════════════════════════
   //  ⚔️ حلقة الهجوم
   //   • هجمة واحدة فقط لكل برج — لا يوجد retry على 313
-  //   • Cap على 90 وحدة لضمان عدم 313
-  //   • _shouldSkipTower مفعّل — البرج الفاشل يتخطاه kFailedCooldownMin
+  //   • Cap على 85 وحدة (kMaxAttackUnits) — يمنع 313
+  //   • _shouldSkipTower مفعّل — البرج الفاشل يرتاح kFailedCooldownMin
   //   • أي فشل → mark failed + _attackedThisTick.add (منع التكرار في نفس الـ tick)
   //   • maxSpyAttempts = 30 (كان 100)
   // ═══════════════════════════════════════════════════════════
@@ -410,7 +419,7 @@ class DesertAutoService {
 
       int attacksThisTick = 0;
       int spyAttempts = 0;
-      const int maxSpyAttempts = 30; // كان 100 — 30 كفاية لتغطية الأبراج المتاحة
+      const int maxSpyAttempts = 30;
 
       while (_running && spyAttempts < maxSpyAttempts) {
         final freshUnits = await _client!.getCastleUnits(
@@ -469,6 +478,7 @@ class DesertAutoService {
           if (!spyOk) {
             _setStatus('❌ Spy failed for ${tower.coordsLabel}');
             _markTowerFailed(tower);
+            _attackedThisTick.add(tower.key);
             continue;
           }
 
@@ -476,6 +486,7 @@ class DesertAutoService {
           if (report == null || !report.matches(tower)) {
             _setStatus('❌ Report mismatch for ${tower.coordsLabel}');
             _markTowerFailed(tower);
+            _attackedThisTick.add(tower.key);
             continue;
           }
 
@@ -483,21 +494,22 @@ class DesertAutoService {
             _setStatus(
                 '💀 ${tower.coordsLabel} dead (respawn in ${report.rs}s)');
             _markTowerFailed(tower);
+            _attackedThisTick.add(tower.key);
             continue;
           }
 
-          // ✅ نبني الاقتراح الذكي
+          // ✅ الاقتراح الذكي
           var suggestion = _svc!.suggestCounter(
             available: sendable,
             defenders: report.toDefenderSummary(),
           );
 
-          // ✅ Cap على 90 وحدة لضمان عدم 313
-          if (suggestion.totalUnits > kMaxSafeUnitsPerAttack) {
+          // ✅ Cap على 85 وحدة لضمان عدم 313
+          if (suggestion.totalUnits > kMaxAttackUnits) {
             final before = suggestion.totalUnits;
             suggestion = _capSuggestion(
                 suggestion,
-                maxTotal: kMaxSafeUnitsPerAttack);
+                maxTotal: kMaxAttackUnits);
             TrafficLog.add('ST',
                 '[Desert-Auto] ✂️ capped $before → ${suggestion.totalUnits} units (${tower.coordsLabel})');
           }
@@ -520,6 +532,7 @@ class DesertAutoService {
                   suggestion.right.isEmpty)) {
             _setStatus('⚠️ Empty suggestion for ${tower.coordsLabel}');
             _markTowerFailed(tower);
+            _attackedThisTick.add(tower.key);
             continue;
           }
 
@@ -562,7 +575,7 @@ class DesertAutoService {
           // ❌ أي فشل → سجّل التفاصيل، mark failed، وامنع التكرار في نفس الـ tick
           TrafficLog.add('ER',
               '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
-          _setStatus('❌ ${tower.coordsLabel} failed');
+          _setStatus('❌ ${tower.coordsLabel}: ${result.error}');
           _markTowerFailed(tower);
           _attackedThisTick.add(tower.key); // ← أهم إصلاح: منع التكرار في نفس الـ tick
           continue;
@@ -636,11 +649,14 @@ class DesertAutoService {
 // ═══════════════════════════════════════════════════════════
 //  🎲 Helper: توزيع عشوائي للوحدات على الـ 3 wings
 //  (fallback عندما يرجع suggestCounter اقتراحاً فارغاً)
-//  داخلياً بيحدد target = min(total, 90)
+//  داخلياً بيحدد target = min(total, 85) — متوافق مع kMaxAttackUnits
 // ═══════════════════════════════════════════════════════════
 UnitSuggestion _fillWaveRandom(List<CastleUnit> sendable) {
   final total = sendable.fold<int>(0, (s, u) => s + u.amount);
-  final target = total.clamp(0, 90);
+  final target = total.clamp(0, DesertAutoService.kMaxAttackUnits);
+  if (target <= 0) {
+    return UnitSuggestion(left: [], middle: [], right: [], reason: 'fallback');
+  }
 
   final chosen = sendable
       .where((u) => u.amount > 0)
