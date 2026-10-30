@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
 import '../models.dart';
+import 'attack_planner.dart';
 
 const int kDesertRadiusMin = 5;
 const int kDesertRadiusMax = 100;
@@ -227,6 +228,8 @@ class AttackViability {
   final int enemyStrength;
   final String message;
   final String hint;
+  final bool shortOfUnits; // ناقصك جنود (مش البرج اللي قوي)
+  final bool overCap; // دفاع البرج أكبر من حد الجناح/الأمام
 
   AttackViability({
     required this.likelyWin,
@@ -237,6 +240,8 @@ class AttackViability {
     required this.enemyStrength,
     required this.message,
     required this.hint,
+    this.shortOfUnits = false,
+    this.overCap = false,
   });
 }
 
@@ -319,6 +324,8 @@ class DesertAttackService {
   }
 
   Future<void> loadCooldowns() async {
+    await PlannerConfig.load();
+    await UnitPower.load();
     final p = await SharedPreferences.getInstance();
     final raw = p.getString(_kCooldowns);
     if (raw == null || raw.isEmpty) return;
@@ -372,62 +379,139 @@ class DesertAttackService {
         '[Desert] ⏳ tower ${tower.coordsLabel} cooldown $minutes min');
   }
 
-  int _unitStrength(int wodId) {
-    if (wodId >= 611 && wodId <= 620) return 20;
-    if (wodId >= 631 && wodId <= 640) return 16;
-    if (wodId >= 601 && wodId <= 610) return 12;
-    if (wodId >= 621 && wodId <= 630) return 10;
-    return kAttackPowerPerUnit;
+  // ═══════════════════════════════════════════════════════
+  //  Planner helpers
+  // ═══════════════════════════════════════════════════════
+  static const String _kUnitMeta = 'desert_bg_unit_meta_v1';
+  static const String _kSrcInfo = 'desert_src_info_v1';
+
+  bool _isRangedUnit(CastleUnit u) {
+    final r = u.info?.role;
+    if (r == 'ranged') return true;
+    if (r == 'melee') return false;
+    return _isRangedWodId(u.wodId, const <int, UnitCatalogEntry>{});
   }
 
-  // ✅✅✅ متعتمدش على AS — اعتمد على عدد الوحدات فقط
+  List<List<PlanDef>> _defsFromReport(DesertSpyReport report) {
+    List<PlanDef> wing(DefenderWing w) {
+      final out = <PlanDef>[];
+      for (final u in w.units) {
+        if (u.length < 2 || u[0] <= 0 || u[1] <= 0) continue;
+        out.add(PlanDef(
+          id: u[0],
+          count: u[1],
+          ranged: _isRangedWodId(u[0], const <int, UnitCatalogEntry>{}),
+        ));
+      }
+      if (out.isEmpty && w.total > 0) {
+        if (w.melee > 0) out.add(PlanDef(id: 0, count: w.melee));
+        if (w.ranged > 0) {
+          out.add(PlanDef(id: 0, count: w.ranged, ranged: true));
+        }
+      }
+      return out;
+    }
+
+    return [wing(report.left), wing(report.middle), wing(report.right)];
+  }
+
+  List<List<PlanDef>> _defsFromSummary(DefenderSummary d) {
+    List<PlanDef> wing(int melee, int ranged) => [
+          if (melee > 0) PlanDef(id: 0, count: melee),
+          if (ranged > 0) PlanDef(id: 0, count: ranged, ranged: true),
+        ];
+    return [
+      wing(d.leftMelee, d.leftRanged),
+      wing(d.middleMelee, d.middleRanged),
+      wing(d.rightMelee, d.rightRanged),
+    ];
+  }
+
+  /// بيحفظ معلومات الوحدات (قتالية؟ دفاعية؟ رماية/اشتباك) عشان الخدمة
+  /// اللي شغالة في الخلفية تستخدمها.
+  Future<void> syncUnitMeta(List<CastleUnit> units) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      Map<String, dynamic> cur = {};
+      final raw = p.getString(_kUnitMeta);
+      if (raw != null && raw.isNotEmpty) {
+        cur = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      }
+      for (final u in units) {
+        cur['${u.wodId}'] = {
+          'c': u.isCombat,
+          'd': u.isDefensive,
+          'r': (u.info?.role ?? '').toString(),
+        };
+      }
+      await p.setString(_kUnitMeta, jsonEncode(cur));
+    } catch (_) {}
+  }
+
+  Future<void> _saveSourceInfo(OwnedCastle source) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(
+        _kSrcInfo,
+        jsonEncode({
+          'areaId': source.areaId,
+          'x': source.x,
+          'y': source.y,
+          'kid': source.kingdomId,
+        }),
+      );
+    } catch (_) {}
+  }
+
+  // ✅✅✅ التحليل بقى على أساس نفس المخطط اللي بيبني الهجوم
   AttackViability analyzeAttack({
     required DesertSpyReport report,
     required int myUnitCount,
     required List<List<int>> myUnits,
   }) {
+    final stock = <PlanUnit>[];
+    for (final e in myUnits) {
+      if (e.length < 2 || e[0] <= 0 || e[1] <= 0) continue;
+      stock.add(PlanUnit(
+        id: e[0],
+        stock: e[1],
+        ranged: _isRangedWodId(e[0], const <int, UnitCatalogEntry>{}),
+      ));
+    }
+    final plan = AttackPlanner.plan(
+      stock: stock,
+      defenders: _defsFromReport(report),
+    );
     final enemyUnits = report.totalEnemyUnits;
-    final myStrength = myUnits.fold<int>(
-        0, (s, e) => s + _unitStrength(e[0]) * e[1]);
-
-    // ✅ نسبة عدد الوحدات فقط (AS مش موثوق)
-    final unitRatio = enemyUnits > 0 ? myUnitCount / enemyUnits : 999.0;
-    final strengthRatio = 999.0;
-
-    final likelyWin = unitRatio >= 1.3;
-    final guaranteed = unitRatio >= 2.0;
+    final planned = plan.total;
 
     String message;
     String hint;
-
-    if (guaranteed) {
+    if (plan.guaranteed) {
       message = '✅ الهجوم مضمون';
-      hint = 'نسبة ${unitRatio.toStringAsFixed(1)}x — آمن';
-    } else if (likelyWin) {
+      hint = 'هيتبعت $planned جندي · ${plan.reason}';
+    } else if (plan.viable) {
       message = '⚠️ الهجوم ممكن ينجح';
-      hint = 'وحداتك: $myUnitCount · مدافعين: $enemyUnits '
-          '(نسبة ${unitRatio.toStringAsFixed(1)}x)';
-    } else if (myUnitCount < 20) {
-      message = '🚨 وحداتك قليلة جداً';
-      hint = 'تحتاج على الأقل 20 وحدة';
-    } else if (unitRatio >= 1.0) {
-      message = '⚠️ نسبة ضعيفة';
-      hint = 'وحداتك: $myUnitCount · مدافعين: $enemyUnits '
-          '(نسبة ${unitRatio.toStringAsFixed(1)}x)';
+      hint = 'هيتبعت $planned جندي (مدافعين: $enemyUnits) · ${plan.reason}';
+    } else if (plan.overCap) {
+      message = '🚫 البرج أقوى من حد الموجة الواحدة';
+      hint = plan.reason;
     } else {
-      message = '❌ وحداتك أقل من المدافعين';
-      hint = 'المدافعين: $enemyUnits · عندك: $myUnitCount';
+      message = '❌ وحداتك مش كفاية';
+      hint = 'عندك: $myUnitCount · المدافعين: $enemyUnits · ${plan.reason}';
     }
 
     return AttackViability(
-      likelyWin: likelyWin,
-      guaranteed: guaranteed,
+      likelyWin: plan.viable,
+      guaranteed: plan.guaranteed,
       myUnitCount: myUnitCount,
       enemyUnitCount: enemyUnits,
-      myStrength: myStrength,
+      myStrength: planned,
       enemyStrength: report.defensiveStrength,
       message: message,
       hint: hint,
+      shortOfUnits: plan.shortOfUnits,
+      overCap: plan.overCap,
     );
   }
 
@@ -458,6 +542,7 @@ class DesertAttackService {
       throw Exception('SCAN_COOLDOWN: انتظر قبل مسح جديد');
     }
     _lastScanAt = DateTime.now();
+    await _saveSourceInfo(source);
     await _ensureKingdom(source.kingdomId);
 
     final cx = source.x, cy = source.y;
@@ -837,6 +922,15 @@ class DesertAttackService {
       if (resp.resultCode == 100) return DesertAttackResult.fail('CRA_100');
       // ✅ 313 = TOO_MANY_UNITS
       if (resp.resultCode == 313) {
+        int sum(List<List<int>> l) =>
+            l.fold<int>(0, (s, e) => s + (e.length >= 2 ? e[1] : 0));
+        await PlannerConfig.current.learnTooManyUnits(
+          flankSent: max(sum(leftUnits), sum(rightUnits)),
+          middleSent: sum(middleUnits),
+        );
+        TrafficLog.add('ST',
+            '[Desert-Attack] 313 → caps now flank=${PlannerConfig.current.flankCap} '
+            'middle=${PlannerConfig.current.middleCap}');
         return DesertAttackResult.fail('TOO_MANY_UNITS_313');
       }
       return DesertAttackResult.fail('CRA ${resp.resultCode}');
@@ -858,230 +952,53 @@ class DesertAttackService {
     }
   }
 
-  // ✅✅✅ 1.1x بدل 1.5x + cap 110 وحدة
+  // ✅✅✅ التوزيع الذكي: موجة واحدة، جناح 46/2 أنواع، أمام 112/6 أنواع
   UnitSuggestion suggestCounter({
     required List<CastleUnit> available,
     required DefenderSummary defenders,
     int maxTypes = 10,
+    DesertSpyReport? report,
   }) {
-    final combat = available
-        .where((u) => u.isCombat && u.amount > 0)
-        .toList();
+    final stock = <PlanUnit>[];
+    for (final u in available) {
+      if (!u.isCombat || u.amount <= 0) continue;
+      stock.add(PlanUnit(
+        id: u.wodId,
+        stock: u.amount,
+        ranged: _isRangedUnit(u),
+        defensive: u.isDefensive,
+      ));
+    }
 
-    if (combat.isEmpty) {
+    if (stock.isEmpty) {
       return UnitSuggestion(
         left: [], middle: [], right: [],
         reason: 'لا توجد وحدات قتالية',
       );
     }
 
-    bool isMeleeUnit(CastleUnit u) {
-      final r = u.info?.role;
-      if (r == 'melee') return true;
-      if (r == 'ranged') return false;
-      return u.wodId >= 601 && u.wodId <= 620;
-    }
+    final defs = report != null
+        ? _defsFromReport(report)
+        : _defsFromSummary(defenders);
 
-    final melee = combat.where(isMeleeUnit).toList()
-      ..sort((a, b) => b.amount.compareTo(a.amount));
-    final ranged = combat.where((u) => !isMeleeUnit(u)).toList()
-      ..sort((a, b) => b.amount.compareTo(a.amount));
+    final plan = AttackPlanner.plan(
+      stock: stock,
+      defenders: defs,
+      maxTypes: maxTypes,
+    );
 
-    final remaining = <int, int>{};
-    for (final u in combat) {
-      remaining[u.wodId] = u.amount;
-    }
-
-    final meleeIds = melee.map((u) => u.wodId).toSet();
-    bool isMeleeType(int wodId) => meleeIds.contains(wodId);
-
-    final leftDef = defenders.leftMelee + defenders.leftRanged;
-    final middleDef = defenders.middleMelee + defenders.middleRanged;
-    final rightDef = defenders.rightMelee + defenders.rightRanged;
-    final totalDef = leftDef + middleDef + rightDef;
-
-    if (totalDef == 0) {
+    if (plan.total <= 0) {
       return UnitSuggestion(
         left: [], middle: [], right: [],
-        reason: '⚠️ الدفاعات صفر — تخطي',
+        reason: plan.reason,
       );
-    }
-
-    final totalAvail = combat.fold<int>(0, (s, u) => s + u.amount);
-
-    List<List<int>> allocateWing({
-      required int defMelee,
-      required int defRanged,
-      required int maxSlots,
-    }) {
-      final totalDefForWing = defMelee + defRanged;
-      if (totalDefForWing <= 0) return [];
-
-      final wingShare = totalDefForWing / totalDef;
-
-      // ✅✅✅ 1.1x بدل 1.5x
-      int target;
-      if (totalAvail >= totalDef * 1.1) {
-        target = (totalDefForWing * 1.1).round();
-      } else {
-        target = (totalAvail * wingShare).round();
-      }
-      if (target == 0) target = 1;
-
-      double meleeRatio = 0.5;
-      if (ranged.isEmpty) meleeRatio = 1.0;
-      else if (melee.isEmpty) meleeRatio = 0.0;
-      else if (defRanged > defMelee) meleeRatio = 0.7;
-      else if (defMelee > defRanged) meleeRatio = 0.3;
-
-      int meleeTarget = (target * meleeRatio).round();
-      int rangedTarget = target - meleeTarget;
-
-      int meleeSlots = 0;
-      int rangedSlots = 0;
-      if (meleeTarget > 0 && rangedTarget > 0) {
-        meleeSlots = (maxSlots + 1) ~/ 2;
-        rangedSlots = maxSlots - meleeSlots;
-      } else if (meleeTarget > 0) {
-        meleeSlots = maxSlots;
-      } else if (rangedTarget > 0) {
-        rangedSlots = maxSlots;
-      }
-
-      final out = <List<int>>[];
-      int meleeAlloc = 0;
-      int rangedAlloc = 0;
-
-      for (final u in melee) {
-        if (meleeAlloc >= meleeTarget) break;
-        if (out.length >= meleeSlots + rangedSlots) break;
-        final currentMelee = out.where((e) => isMeleeType(e[0])).length;
-        if (currentMelee >= meleeSlots) break;
-        final rem = remaining[u.wodId] ?? 0;
-        if (rem <= 0) continue;
-        final need = meleeTarget - meleeAlloc;
-        final take = need < rem ? need : rem;
-        if (take <= 0) continue;
-        out.add([u.wodId, take]);
-        remaining[u.wodId] = rem - take;
-        meleeAlloc += take;
-      }
-
-      for (final u in ranged) {
-        if (rangedAlloc >= rangedTarget) break;
-        if (out.length >= meleeSlots + rangedSlots) break;
-        final currentRanged = out.where((e) => !isMeleeType(e[0])).length;
-        if (currentRanged >= rangedSlots) break;
-        final rem = remaining[u.wodId] ?? 0;
-        if (rem <= 0) continue;
-        final need = rangedTarget - rangedAlloc;
-        final take = need < rem ? need : rem;
-        if (take <= 0) continue;
-        out.add([u.wodId, take]);
-        remaining[u.wodId] = rem - take;
-        rangedAlloc += take;
-      }
-
-      if (out.isEmpty) {
-        for (final u in melee) {
-          final rem = remaining[u.wodId] ?? 0;
-          if (rem > 0) {
-            out.add([u.wodId, 1]);
-            remaining[u.wodId] = rem - 1;
-            break;
-          }
-        }
-      }
-      if (out.isEmpty) {
-        for (final u in ranged) {
-          final rem = remaining[u.wodId] ?? 0;
-          if (rem > 0) {
-            out.add([u.wodId, 1]);
-            remaining[u.wodId] = rem - 1;
-            break;
-          }
-        }
-      }
-
-      return out;
-    }
-
-    final left = allocateWing(
-        defMelee: defenders.leftMelee,
-        defRanged: defenders.leftRanged,
-        maxSlots: 2);
-    final middle = allocateWing(
-        defMelee: defenders.middleMelee,
-        defRanged: defenders.middleRanged,
-        maxSlots: 5);
-    final right = allocateWing(
-        defMelee: defenders.rightMelee,
-        defRanged: defenders.rightRanged,
-        maxSlots: 2);
-
-    List<List<int>> clean(List<List<int>> l) =>
-        l.where((e) => e.length >= 2 && e[0] > 0 && e[1] > 0).toList();
-
-    var leftOut = clean(left);
-    var middleOut = clean(middle);
-    var rightOut = clean(right);
-
-    if (leftOut.isEmpty && middleOut.isEmpty && rightOut.isEmpty) {
-      return UnitSuggestion(
-        left: [], middle: [], right: [],
-        reason: '⚠️ لم يتم توزيع أي وحدات',
-      );
-    }
-
-    int typeCount() {
-      final s = <int>{};
-      for (final e in [...leftOut, ...middleOut, ...rightOut]) s.add(e[0]);
-      return s.length;
-    }
-    while (typeCount() > maxTypes && middleOut.isNotEmpty) middleOut.removeLast();
-    while (typeCount() > maxTypes && rightOut.isNotEmpty) rightOut.removeLast();
-    while (typeCount() > maxTypes && leftOut.isNotEmpty) leftOut.removeLast();
-
-    var lTotal = leftOut.fold<int>(0, (s, e) => s + e[1]);
-    var mTotal = middleOut.fold<int>(0, (s, e) => s + e[1]);
-    var rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
-    var total = lTotal + mTotal + rTotal;
-
-    // ✅✅✅ Cap إجمالي الوحدات عند 110 (حد أمان للبرج)
-    const int kMaxUnitsCap = 110;
-    if (total > kMaxUnitsCap) {
-      while (total > kMaxUnitsCap && middleOut.isNotEmpty) {
-        final removed = middleOut.removeLast();
-        total -= removed[1];
-      }
-      while (total > kMaxUnitsCap && rightOut.isNotEmpty) {
-        final removed = rightOut.removeLast();
-        total -= removed[1];
-      }
-      while (total > kMaxUnitsCap && leftOut.isNotEmpty) {
-        final removed = leftOut.removeLast();
-        total -= removed[1];
-      }
-      lTotal = leftOut.fold<int>(0, (s, e) => s + e[1]);
-      mTotal = middleOut.fold<int>(0, (s, e) => s + e[1]);
-      rTotal = rightOut.fold<int>(0, (s, e) => s + e[1]);
-      total = lTotal + mTotal + rTotal;
-    }
-
-    int mCount = 0, rCount = 0;
-    for (final e in [...leftOut, ...middleOut, ...rightOut]) {
-      if (isMeleeType(e[0])) {
-        mCount += e[1];
-      } else {
-        rCount += e[1];
-      }
     }
 
     return UnitSuggestion(
-      left: leftOut, middle: middleOut, right: rightOut,
-      reason: total > 0
-          ? 'ذكي: $total (M:$mCount · R:$rCount)'
-          : '⚠️ الدفاعات صفر — ادخل أرقام الدفاعات',
+      left: plan.left,
+      middle: plan.middle,
+      right: plan.right,
+      reason: plan.reason,
     );
   }
 

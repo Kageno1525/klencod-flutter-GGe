@@ -411,6 +411,7 @@ class DesertAutoService {
         final sendable = freshUnits
             .where((u) => u.isCombat && u.amount > 0)
             .toList();
+        await _svc!.syncUnitMeta(freshUnits);
         final totalUnits =
             sendable.fold<int>(0, (s, u) => s + u.amount);
 
@@ -479,6 +480,11 @@ class DesertAutoService {
           );
 
           if (!viable.likelyWin) {
+            if (viable.shortOfUnits) {
+              // ناقصك جنود — مش ذنب البرج، منعلّمش البرج فاشل
+              _setStatus('💤 وحدات مش كفاية لـ ${tower.coordsLabel}: ${viable.hint}');
+              return;
+            }
             _setStatus('⏭️ Skip ${tower.coordsLabel}: ${viable.hint}');
             _markTowerFailed(tower);
             continue;
@@ -487,6 +493,7 @@ class DesertAutoService {
           final suggestion = _svc!.suggestCounter(
             available: sendable,
             defenders: report.toDefenderSummary(),
+            report: report,
           );
 
           if (suggestion.totalUnits <= 0 ||
@@ -535,26 +542,19 @@ class DesertAutoService {
           final is313 = result.error?.contains('313') ?? false;
           if (is313) {
             TrafficLog.add('ST',
-                '[Desert-Auto] ⚠️ 313 on ${tower.coordsLabel} — retry with 60% units');
-            _setStatus('⚠️ 313 — retry with fewer units...');
+                '[Desert-Auto] ⚠️ 313 on ${tower.coordsLabel} — re-plan with learned caps');
+            _setStatus('⚠️ 313 — re-planning with lower caps...');
 
-            List<List<int>> reduce(List<List<int>> units) {
-              final out = <List<int>>[];
-              for (final u in units) {
-                if (u.length < 2) continue;
-                final newAmt = (u[1] * 0.6).round();
-                if (newAmt > 0) out.add([u[0], newAmt]);
-              }
-              return out;
-            }
-
-            final retryLeft = reduce(suggestion.left);
-            final retryMiddle = reduce(suggestion.middle);
-            final retryRight = reduce(suggestion.right);
-            final retryTotal =
-                retryLeft.fold<int>(0, (s, e) => s + e[1]) +
-                    retryMiddle.fold<int>(0, (s, e) => s + e[1]) +
-                    retryRight.fold<int>(0, (s, e) => s + e[1]);
+            // attack() اتعلّم الحد الجديد (PlannerConfig) — نعيد التخطيط بيه
+            final replanned = _svc!.suggestCounter(
+              available: sendable,
+              defenders: report.toDefenderSummary(),
+              report: report,
+            );
+            final retryLeft = replanned.left;
+            final retryMiddle = replanned.middle;
+            final retryRight = replanned.right;
+            final retryTotal = replanned.totalUnits;
 
             if (retryTotal > 0) {
               await Future.delayed(const Duration(seconds: 2));

@@ -239,6 +239,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
 
         mainUnits = await widget.client.getCastleUnits(
             main.kingdomId, main.areaId, catalog);
+        await _svc.syncUnitMeta(mainUnits);
       }
 
       final savedCmds = await DesertAutoService.instance.getCommanderIds();
@@ -1880,6 +1881,7 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
       final sendable = units
           .where((u) => u.isCombat && u.amount > 0)
           .toList();
+      await widget.svc.syncUnitMeta(units);
       final cmds = await widget.client.getCommanders();
 
       final cached = await widget.svc.loadCachedDefenders(widget.tower);
@@ -1982,6 +1984,9 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
       available: _units,
       defenders: defs,
       maxTypes: _maxTypes,
+      report: (_lastReport != null && _lastReport!.totalEnemyUnits == defs.total)
+          ? _lastReport
+          : null,
     );
     _applySuggestion(s);
     _snack(s.reason, color: kDesertSand);
@@ -2034,6 +2039,9 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
       available: _units,
       defenders: defs,
       maxTypes: _maxTypes,
+      report: (_lastReport != null && _lastReport!.totalEnemyUnits == defs.total)
+          ? _lastReport
+          : null,
     );
     _applySuggestion(s);
     await Future.delayed(const Duration(milliseconds: 300));

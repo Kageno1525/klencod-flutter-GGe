@@ -8,6 +8,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
+import 'account_snapshot.dart';
+import 'attack_planner.dart';
 
 // ═══════════════════════════════════════════════════════════
 //  Desert Model Classes (local, لتجنب dependencies في الـ isolate)
@@ -22,7 +24,8 @@ class _DesertTower {
 
 class _DefenderWing {
   final int melee, ranged;
-  _DefenderWing({required this.melee, required this.ranged});
+  final List<List<int>> units; // [wodId, amount]
+  _DefenderWing({required this.melee, required this.ranged, this.units = const []});
   int get total => melee + ranged;
 }
 
@@ -46,12 +49,6 @@ class _XtMsg {
   final int result;
   final String? payload;
   _XtMsg(this.cmd, this.result, this.payload);
-}
-
-class _BgArmy {
-  final List<List<int>> left, middle, right;
-  final int total;
-  _BgArmy({required this.left, required this.middle, required this.right, required this.total});
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -96,6 +93,13 @@ class _GgeTaskHandler extends TaskHandler {
   String _attacksDate = '';
   Set<int> _rangedUnitIds = {};
   bool _runningDesert = false;
+
+  // ═══ Planner / source / snapshot state ═══
+  Map<int, Map<String, dynamic>> _unitMeta = {};
+  int? _knownSrcX, _knownSrcY, _knownSrcKid;
+  bool _stopTick = false;
+  bool _needRescan = false;
+  DateTime? _lastSnapshotAt;
 
   // ═══ Anti-ban ═══
   DateTime _lastActionTime = DateTime.now();
@@ -474,6 +478,7 @@ class _GgeTaskHandler extends TaskHandler {
     Future.delayed(const Duration(seconds: 5), () => _sendXt('asc', '{}'));
     Future.delayed(const Duration(seconds: 6), () => _sendXt('sie', '{}'));
     Future.delayed(const Duration(seconds: 7), () => _sendXt('ffi', '{"FIDS":[1]}'));
+    Future.delayed(const Duration(seconds: 12), () => _refreshAccountSnapshot());
 
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 60), (_) {
@@ -556,7 +561,9 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   Future<void> _desertTick() async {
-    if (!_loggedIn || !_desertEnabled) return;
+    if (!_loggedIn) return;
+    await _refreshPlanInputs();
+    if (!_desertEnabled) return;
     if (_sourceAreaId == null || _sourceAreaId == 0) return;
 
     // Reset daily counter if date changed
@@ -578,7 +585,14 @@ class _GgeTaskHandler extends TaskHandler {
     }
 
     _runningDesert = true;
+    _stopTick = false;
     try {
+      // Snapshot كامل للحساب كل 30 دقيقة (dcl)
+      if (_lastSnapshotAt == null ||
+          DateTime.now().difference(_lastSnapshotAt!).inMinutes >= 30) {
+        await _refreshAccountSnapshot();
+      }
+
       // Switch to source kingdom
       final kid = await _ensureKingdom();
       if (kid == null) {
@@ -590,8 +604,10 @@ class _GgeTaskHandler extends TaskHandler {
           extra: 'يومي: $_attacksToday/$_maxAttacksDay · جلسة: $_attacksThisSession/$_maxAttacksSession');
 
       // Scan if needed
-      if (_towers.isEmpty ||
+      if (_needRescan ||
+          _towers.isEmpty ||
           (_lastScanAt != null && DateTime.now().difference(_lastScanAt!).inMinutes > 60)) {
+        _needRescan = false;
         await _scanTowers(kid);
       }
       if (_towers.isEmpty) return;
@@ -600,6 +616,7 @@ class _GgeTaskHandler extends TaskHandler {
 
       int attempts = 0;
       for (final tower in _towers) {
+        if (_stopTick) break;
         if (attempts >= 5) break;
         if (_maxAttacksDay > 0 && _attacksToday >= _maxAttacksDay) break;
         if (_maxAttacksSession > 0 && _attacksThisSession >= _maxAttacksSession) break;
@@ -623,26 +640,56 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   Future<int?> _ensureKingdom() async {
+    final kid = _knownSrcKid ?? 1;
     try {
       final resp = await _sendXtAndWaitAsync(
         'jca',
-        jsonEncode({'CID': -1, 'KID': 1}),
+        jsonEncode({'CID': -1, 'KID': kid}),
         responseCmd: 'jaa',
         timeoutMs: 8000,
         isAction: false,
       );
-      if (resp.result == 0 && resp.payload != null) {
-        final data = jsonDecode(resp.payload!) as Map;
-        final gca = data['gca'] as Map?;
-        if (gca != null) {
-          final a = gca['A'] as List?;
-          if (a != null && a.length > 3) {
-            _sourceX = int.tryParse(a[1].toString());
-            _sourceY = int.tryParse(a[2].toString());
-            _sourceKid = 1;
-            return 1;
-          }
+      if (resp.result == 0) {
+        int? jx, jy;
+        if (resp.payload != null) {
+          try {
+            final data = jsonDecode(resp.payload!) as Map;
+            final gca = data['gca'] as Map?;
+            final a = gca?['A'] as List?;
+            if (a != null && a.length > 3) {
+              // A = [type, x, y, areaId, ...] — نثق فيها بس لو areaId = قلعة المصدر
+              final jArea = int.tryParse(a[3].toString());
+              if (jArea == _sourceAreaId) {
+                jx = int.tryParse(a[1].toString());
+                jy = int.tryParse(a[2].toString());
+              } else {
+                _log('jca joined area $jArea (not source $_sourceAreaId) — ignoring its coords');
+              }
+            }
+          } catch (_) {}
         }
+
+        final oldX = _sourceX, oldY = _sourceY;
+        if (_knownSrcX != null && _knownSrcY != null) {
+          // ✅ إحداثيات قلعة الصحراء الحقيقية (اللي اتحفظت من الشاشة/المسح)
+          _sourceX = _knownSrcX;
+          _sourceY = _knownSrcY;
+          if (jx != null && (jx != _sourceX || jy != _sourceY)) {
+            _log('jca coords ($jx,$jy) != source ($_sourceX,$_sourceY) — using source');
+          }
+        } else if (jx != null && jy != null) {
+          _sourceX = jx;
+          _sourceY = jy;
+          _log('source coords from jca (area matches source)');
+        } else {
+          _log('No source coords yet — افتح شاشة الصحراء واعمل مسح مرة عشان تتحفظ');
+          return null;
+        }
+        _sourceKid = kid;
+        if (oldX != null && (oldX != _sourceX || oldY != _sourceY)) {
+          _needRescan = true;
+        }
+        return kid;
       }
     } catch (e) { _log('jca: $e'); }
     return null;
@@ -668,6 +715,124 @@ class _GgeTaskHandler extends TaskHandler {
 
   void _markTowerAttacked(_DesertTower t, {int minutes = 240}) {
     _cooldowns[t.key] = DateTime.now().add(Duration(minutes: minutes));
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Refresh inputs from prefs (SharedPreferences بتتخزّن في كل isolate لوحده → reload)
+  // ═══════════════════════════════════════════════════════
+  Future<void> _refreshPlanInputs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      await PlannerConfig.load();
+      await UnitPower.load();
+
+      final enabled = prefs.getBool('desert_auto_enabled') ?? _desertEnabled;
+      final radius = prefs.getInt('desert_radius_v2') ?? _radiusTiles;
+      final src = prefs.getInt('desert_source_v2') ?? _sourceAreaId ?? 0;
+      if (radius != _radiusTiles || (src != 0 && src != _sourceAreaId)) {
+        _needRescan = true;
+        _towers.clear();
+      }
+      _desertEnabled = enabled;
+      _radiusTiles = radius;
+      _sourceAreaId = src;
+      _maxAttacksDay = prefs.getInt('desert_bg_max_attacks_day') ?? _maxAttacksDay;
+      _maxAttacksSession = prefs.getInt('desert_bg_max_attacks_session') ?? _maxAttacksSession;
+      _breakEvery = prefs.getInt('desert_bg_break_every') ?? _breakEvery;
+      _breakMinutes = prefs.getInt('desert_bg_break_minutes') ?? _breakMinutes;
+
+      // unit meta (قتالية؟ دفاعية؟ رماية/اشتباك)
+      final rawMeta = prefs.getString('desert_bg_unit_meta_v1');
+      if (rawMeta != null && rawMeta.isNotEmpty) {
+        final m = jsonDecode(rawMeta) as Map;
+        final out = <int, Map<String, dynamic>>{};
+        for (final e in m.entries) {
+          final id = int.tryParse(e.key.toString());
+          if (id != null && e.value is Map) {
+            out[id] = Map<String, dynamic>.from(e.value as Map);
+          }
+        }
+        _unitMeta = out;
+        for (final e in out.entries) {
+          final r = (e.value['r'] ?? '').toString();
+          if (r == 'ranged') _rangedUnitIds.add(e.key);
+          if (r == 'melee') _rangedUnitIds.remove(e.key);
+        }
+      }
+
+      // إحداثيات قلعة المصدر الحقيقية
+      final rawSrc = prefs.getString('desert_src_info_v1');
+      if (rawSrc != null && rawSrc.isNotEmpty) {
+        final m = jsonDecode(rawSrc) as Map;
+        final area = (m['areaId'] as num?)?.toInt();
+        if (area != null && area == _sourceAreaId) {
+          _knownSrcX = (m['x'] as num?)?.toInt();
+          _knownSrcY = (m['y'] as num?)?.toInt();
+          _knownSrcKid = (m['kid'] as num?)?.toInt();
+        }
+      }
+    } catch (e) { _log('refresh inputs: $e'); }
+  }
+
+  Future<void> _persistSourceInfo() async {
+    try {
+      if (_sourceAreaId == null || _sourceX == null || _sourceY == null) return;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('desert_src_info_v1', jsonEncode({
+        'areaId': _sourceAreaId,
+        'x': _sourceX,
+        'y': _sourceY,
+        'kid': _sourceKid ?? _knownSrcKid ?? 1,
+      }));
+    } catch (_) {}
+  }
+
+  /// رد csm فيه SA = [type, x, y, areaId, ...] = قلعة المصدر الحقيقية.
+  void _learnSourceFromCsm(String payload) {
+    try {
+      final data = jsonDecode(payload) as Map;
+      final a = data['A'] as Map?;
+      final m = a?['M'] as Map?;
+      final sa = m?['SA'] as List?;
+      if (sa == null || sa.length < 4) return;
+      final x = int.tryParse(sa[1].toString());
+      final y = int.tryParse(sa[2].toString());
+      final area = int.tryParse(sa[3].toString());
+      if (x == null || y == null || area != _sourceAreaId) return;
+      if (x != _sourceX || y != _sourceY) {
+        _log('Source corrected from csm: ($_sourceX,$_sourceY) → ($x,$y)');
+        _sourceX = x;
+        _sourceY = y;
+        _knownSrcX = x;
+        _knownSrcY = y;
+        _needRescan = true; // الترتيب كان محسوب من مركز غلط → نعيد المسح
+        _persistSourceInfo();
+      }
+    } catch (_) {}
+  }
+
+  // ═══════════════════════════════════════════════════════
+  //  Account snapshot (dcl)
+  // ═══════════════════════════════════════════════════════
+  Future<void> _refreshAccountSnapshot() async {
+    if (!_loggedIn) return;
+    _lastSnapshotAt = DateTime.now();
+    try {
+      final resp = await _sendXtAndWaitAsync(
+        'dcl', '{"CD":1}',
+        responseCmd: 'dcl', timeoutMs: 20000, isAction: false,
+      );
+      if (resp.result != 0 || resp.payload == null) {
+        _log('dcl failed: ${resp.result}');
+        return;
+      }
+      final snap = AccountSnapshot.parseDcl(resp.payload!);
+      if (snap == null) { _log('dcl parse failed'); return; }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('account_snapshot_v1', jsonEncode(snap.toJson()));
+      _log('Account snapshot: ${snap.summaryLine()}');
+    } catch (e) { _log('dcl: $e'); }
   }
 
   // ═══════════════════════════════════════════════════════
@@ -758,6 +923,7 @@ class _GgeTaskHandler extends TaskHandler {
         isAction: true,
       );
       if (resp.result != 0) { _log('Spy failed: ${resp.result}'); return null; }
+      if (resp.payload != null) _learnSourceFromCsm(resp.payload!);
     } catch (e) { _log('Spy: $e'); return null; }
 
     int? msgId;
@@ -788,17 +954,19 @@ class _GgeTaskHandler extends TaskHandler {
 
       _DefenderWing parseWing(dynamic w) {
         int melee = 0, ranged = 0;
+        final units = <List<int>>[];
         if (w is List) {
           for (final u in w) {
             if (u is! List || u.length < 2) continue;
             final id = int.tryParse(u[0].toString()) ?? 0;
             final amt = int.tryParse(u[1].toString()) ?? 0;
             if (id <= 0 || amt <= 0) continue;
+            units.add([id, amt]);
             if (_rangedUnitIds.contains(id)) ranged += amt;
             else melee += amt;
           }
         }
-        return _DefenderWing(melee: melee, ranged: ranged);
+        return _DefenderWing(melee: melee, ranged: ranged, units: units);
       }
 
       return _DesertSpyReport(
@@ -816,68 +984,132 @@ class _GgeTaskHandler extends TaskHandler {
   // ═══════════════════════════════════════════════════════
   //  Attack
   // ═══════════════════════════════════════════════════════
+  List<PlanUnit> _buildStock(Map<int, int> units) {
+    final stock = <PlanUnit>[];
+    for (final e in units.entries) {
+      final meta = _unitMeta[e.key];
+      if (meta != null && meta['c'] == false) continue; // مش وحدة قتالية
+      stock.add(PlanUnit(
+        id: e.key,
+        stock: e.value,
+        ranged: _rangedUnitIds.contains(e.key),
+        defensive: meta != null && meta['d'] == true,
+      ));
+    }
+    return stock;
+  }
+
+  AttackPlan _planAttack(Map<int, int> units, _DesertSpyReport report) {
+    List<PlanDef> wing(_DefenderWing w) {
+      final out = <PlanDef>[];
+      for (final u in w.units) {
+        out.add(PlanDef(id: u[0], count: u[1], ranged: _rangedUnitIds.contains(u[0])));
+      }
+      if (out.isEmpty && w.total > 0) {
+        if (w.melee > 0) out.add(PlanDef(id: 0, count: w.melee));
+        if (w.ranged > 0) out.add(PlanDef(id: 0, count: w.ranged, ranged: true));
+      }
+      return out;
+    }
+
+    return AttackPlanner.plan(
+      stock: _buildStock(units),
+      defenders: [wing(report.left), wing(report.middle), wing(report.right)],
+    );
+  }
+
   Future<bool> _tryAttackTower(_DesertTower tower) async {
     _log('Trying ${tower.coordsLabel}');
-    await _saveStatus('SPYING', extra: tower.coordsLabel);
 
+    // نتأكد إن عندنا جنود كفاية قبل ما نصرف تجسس
+    var units = await _fetchUnits();
+    if (units.isEmpty) {
+      _log('no units');
+      _stopTick = true;
+      return false;
+    }
+    final totalNow = _buildStock(units).fold<int>(0, (s, u) => s + u.stock);
+    if (totalNow < PlannerConfig.current.minPerWing * 3) {
+      _log('too few units ($totalNow)');
+      await _saveStatus('NO_UNITS', extra: '$totalNow');
+      _stopTick = true;
+      return false;
+    }
+
+    await _saveStatus('SPYING', extra: tower.coordsLabel);
     final report = await _spyAndFetch(tower);
     if (report == null) { _markTowerFailed(tower); return false; }
     if (report.isDead) { _log('dead RS=${report.rs}'); _markTowerFailed(tower); return false; }
     if (report.totalEnemyUnits == 0) { _log('empty'); _markTowerFailed(tower); return false; }
-    if (report.totalEnemyUnits > 30) {
-      _log('too strong (${report.totalEnemyUnits})');
-      _markTowerFailed(tower);
-      return false;
-    }
 
-    final units = await _fetchUnits();
-    if (units.isEmpty) { _log('no units'); return false; }
+    // محاولتين: التانية بعد ما نتعلم حد أقل لو السيرفر رجّع 313
+    for (int attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) units = await _fetchUnits();
+      final plan = _planAttack(units, report);
+      _log('Plan ${tower.coordsLabel} (def ${report.totalEnemyUnits}): ${plan.reason}');
 
-    final army = _buildArmy(units, report);
-    if (army == null || army.total <= 0) {
-      _log('army build failed');
-      _markTowerFailed(tower);
-      return false;
-    }
-
-    try {
-      final payload = {
-        'SX': _sourceX, 'SY': _sourceY,
-        'TX': tower.x, 'TY': tower.y,
-        'KID': tower.kid, 'LID': 0,
-        'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
-        'LP': 0, 'FC': 0, 'PTT': 1, 'SD': 0, 'ICA': 0, 'CD': 99,
-        'A': [{
-          'L': {'T': [[-1, 0], [-1, 0]], 'U': _fill(army.left, 2)},
-          'R': {'T': [[-1, 0], [-1, 0]], 'U': _fill(army.right, 2)},
-          'M': {'T': [[-1, 0], [-1, 0], [-1, 0]], 'U': _fill(army.middle, 6)},
-        }],
-        'BKS': [], 'AST': [-1, -1, -1],
-        'RW': List.generate(8, (_) => [-1, 0]),
-        'ASCT': 0,
-      };
-      final resp = await _sendXtAndWaitAsync(
-        'cra', jsonEncode(payload),
-        responseCmd: 'cra', timeoutMs: 25000, isAction: true,
-      );
-      if (resp.result == 0) {
-        _log('✅ HIT ${tower.coordsLabel} (${army.total})');
-        _markTowerAttacked(tower);
-        return true;
-      }
-      _log('Attack failed: ${resp.result}');
-      if (resp.result == 218) {
-        // Lord busy — retry later, don't mark failed
-        _log('Lord busy, skip this tick');
+      if (!plan.viable) {
+        if (plan.shortOfUnits) {
+          // ناقصك جنود — مش ذنب البرج
+          await _saveStatus('NO_UNITS', extra: plan.reason);
+          _stopTick = true;
+          return false;
+        }
+        _markTowerFailed(tower, minutes: 120);
         return false;
       }
-      _markTowerFailed(tower);
-      return false;
-    } catch (e) {
-      _log('Attack: $e');
-      _markTowerFailed(tower);
-      return false;
+
+      try {
+        final payload = {
+          'SX': _sourceX, 'SY': _sourceY,
+          'TX': tower.x, 'TY': tower.y,
+          'KID': tower.kid, 'LID': 0,
+          'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
+          'LP': 0, 'FC': 0, 'PTT': 1, 'SD': 0, 'ICA': 0, 'CD': 99,
+          'A': [{
+            'L': {'T': [[-1, 0], [-1, 0]], 'U': _fill(plan.left, 2)},
+            'R': {'T': [[-1, 0], [-1, 0]], 'U': _fill(plan.right, 2)},
+            'M': {'T': [[-1, 0], [-1, 0], [-1, 0]], 'U': _fill(plan.middle, 6)},
+          }],
+          'BKS': [], 'AST': [-1, -1, -1],
+          'RW': List.generate(8, (_) => [-1, 0]),
+          'ASCT': 0,
+        };
+        final resp = await _sendXtAndWaitAsync(
+          'cra', jsonEncode(payload),
+          responseCmd: 'cra', timeoutMs: 25000, isAction: true,
+        );
+        if (resp.result == 0) {
+          _log('✅ HIT ${tower.coordsLabel} (${plan.total}: '
+               'L${plan.leftTotal}/M${plan.middleTotal}/R${plan.rightTotal})');
+          _markTowerAttacked(tower);
+          return true;
+        }
+        _log('Attack failed: ${resp.result}');
+        if (resp.result == 313 && attempt == 0) {
+          await PlannerConfig.current.learnTooManyUnits(
+            flankSent: max(plan.leftTotal, plan.rightTotal),
+            middleSent: plan.middleTotal,
+          );
+          _log('313 → caps flank=${PlannerConfig.current.flankCap} '
+               'middle=${PlannerConfig.current.middleCap}, re-planning');
+          continue;
+        }
+        if (resp.result == 218 || resp.result == 181) {
+          // القائد مشغول / وصلنا حد الحركات — نوقف التيك ونكمّل بعدين
+          _log('Lord busy / max movements, stop this tick');
+          _stopTick = true;
+          return false;
+        }
+        _markTowerFailed(tower);
+        return false;
+      } catch (e) {
+        _log('Attack: $e');
+        _markTowerFailed(tower);
+        return false;
+      }
     }
+    return false;
   }
 
   Future<Map<int, int>> _fetchUnits() async {
@@ -903,44 +1135,6 @@ class _GgeTaskHandler extends TaskHandler {
       }
     } catch (e) { _log('gui: $e'); }
     return {};
-  }
-
-  _BgArmy? _buildArmy(Map<int, int> available, _DesertSpyReport report) {
-    final leftDef = report.left.total;
-    final middleDef = report.middle.total;
-    final rightDef = report.right.total;
-
-    final sorted = available.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final remaining = Map<int, int>.from(available);
-
-    List<List<int>> alloc(int def, {int maxSlots = 2}) {
-      if (def <= 0) return [];
-      final target = (def * 2.0).round();
-      final out = <List<int>>[];
-      int got = 0;
-      for (final e in sorted) {
-        if (got >= target || out.length >= maxSlots) break;
-        final rem = remaining[e.key] ?? 0;
-        if (rem <= 0) continue;
-        final need = target - got;
-        final take = need < rem ? need : rem;
-        if (take <= 0) continue;
-        out.add([e.key, take]);
-        remaining[e.key] = rem - take;
-        got += take;
-      }
-      return out;
-    }
-
-    final left = alloc(leftDef);
-    final middle = alloc(middleDef, maxSlots: 5);
-    final right = alloc(rightDef);
-    final total = left.fold<int>(0, (s, e) => s + e[1]) +
-        middle.fold<int>(0, (s, e) => s + e[1]) +
-        right.fold<int>(0, (s, e) => s + e[1]);
-    if (total == 0) return null;
-    return _BgArmy(left: left, middle: middle, right: right, total: total);
   }
 
   List<List<int>> _fill(List<List<int>> units, int count) {
