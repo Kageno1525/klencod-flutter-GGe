@@ -29,11 +29,11 @@ class DesertAutoService {
   static const int kFailedCooldownMin = 5;
   static const int kInterAttackDelaySec = 3;
 
-  // ✅ الـ caps الديناميكية
-  static const int kCapStart = 190;    // ← الحد الأدنى لبرج level 35 (~183)
-  static const int kCapMin = 50;       // لو برج صغير (نادر)
-  static const int kCapMax = 320;      // الحد الأقصى للـ wave
-  static const int kCapGrowStep = 20;  // ينمو 20 كل نجاح
+  // ✅ الـ Caps الديناميكية (عشان نتجنب cpa > 170 و 313)
+  static const int kCapStart = 100;    // البداية آمنة
+  static const int kCapMin = 30;       // أقل عدد
+  static const int kCapMax = 160;      // أقصى عدد (تحت 170 عشان نمنع cpa)
+  static const int kCapGrowStep = 10;  // زيادة 10 كل نجاح
 
   static const _kCapsSuccessKey = 'desert_cap_ok_v3';
   static const _kCapsFailKey = 'desert_cap_fail_v3';
