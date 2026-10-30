@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
@@ -26,15 +27,18 @@ class DesertAutoService {
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 30;
-  static const int kFailedCooldownMin = 30; // 30 دقيقة للبرج اللي يفشل
-  static const int kInterAttackDelaySec = 3;
+  
+  // ✅ وقت الفشل 30 دقيقة عشان ميرجعش للبرج المدمر بسرعة
+  static const int kFailedCooldownMin = 30; 
+  
+  // ✅ وقت التأخير الأساسي بين الهجمات (هنزود عليه عشوائي في الكود)
+  static const int kInterAttackDelaySec = 20; 
 
-  // ✅ المفاتيح دي هنستخدمها في الشاشة عشان نغير الأرقام (204)
+  // ✅ مفاتيح الأرقام اللي هتتحكم فيها من الشاشة (204)
   static const String kCapStartKey = 'desert_auto_cap_start';
   static const String kCapMinKey = 'desert_auto_cap_min';
   static const String kCapMaxKey = 'desert_auto_cap_max';
 
-  // القيم الافتراضية
   static const int kDefaultCapStart = 204;
   static const int kDefaultCapMin = 204;
   static const int kDefaultCapMax = 204;
@@ -266,6 +270,7 @@ class DesertAutoService {
   void _markTowerFailed(DesertTower t) {
     _failedTowers[t.key] = DateTime.now().add(Duration(minutes: kFailedCooldownMin));
     _saveFailedTowers();
+    TrafficLog.add('ST', '[Desert-Auto] ⏸️ marked ${t.coordsLabel} failed ($kFailedCooldownMin min)');
   }
 
   Future<void> _tick() async {
@@ -415,9 +420,6 @@ class DesertAutoService {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // ⚔️ الهجوم التلقائي (بدون تجسس + يتخطى الأبراج المدمرة)
-  // ═══════════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
 
@@ -425,7 +427,6 @@ class DesertAutoService {
     final desertArea = p.getInt(_kSourceAreaId) ?? 0;
     if (desertArea == 0) return;
 
-    // ✅ قراءة الأرقام اللي المستخدم حطها في الشاشة (الافتراضي 204)
     final startCap = p.getInt(DesertAutoService.kCapStartKey) ?? kDefaultCapStart;
     final minCap = p.getInt(DesertAutoService.kCapMinKey) ?? kDefaultCapMin;
     final maxCap = p.getInt(DesertAutoService.kCapMaxKey) ?? kDefaultCapMax;
@@ -442,7 +443,9 @@ class DesertAutoService {
 
       int attacksThisTick = 0;
       int attempts = 0;
-      const int maxAttempts = 20;
+      
+      // ✅ قللنا المحاولات لـ 5 عشان ميعملش سبام هجمات
+      const int maxAttempts = 5; 
 
       while (_running && attempts < maxAttempts) {
         final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog);
@@ -465,7 +468,7 @@ class DesertAutoService {
           return;
         }
 
-        // ✅ ضفنا .where((t) => !t.isDead) عشان يتخطى الأبراج المدمرة
+        // ✅ السطر ده هو اللي بيتخطى الأبراج المدمرة
         final candidates = _towers
             .where((t) => !t.isDead) 
             .where((t) => !_svc!.isTowerInCooldown(t))
@@ -476,7 +479,7 @@ class DesertAutoService {
           ..sort((a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
 
         if (candidates.isEmpty) {
-          _setStatus('⏳ No candidate towers (all dead/cooldown/failed)');
+          _setStatus('⏳ No candidate towers (all cooldown/dead/failed)');
           return;
         }
 
@@ -489,7 +492,6 @@ class DesertAutoService {
 
           final cap = _capFor(tower, startCap, minCap, maxCap);
 
-          // ✅ هجوم مباشر (بنباصي DefenderSummary فاضي عشان نوزع الـ 204)
           final suggestion = _svc!.suggestCounter(
             available: sendable,
             defenders: DefenderSummary(), 
@@ -530,7 +532,11 @@ class DesertAutoService {
             TrafficLog.add('ST', '[Desert-Auto] ✅ HIT ${tower.coordsLabel} units=${suggestion.totalUnits}');
             _setStatus('✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
 
-            await Future.delayed(const Duration(seconds: kInterAttackDelaySec));
+            // ✅ تأخير عشوائي بين 20 لـ 35 ثانية (عشان نمنع البان)
+            final delaySec = kInterAttackDelaySec + Random().nextInt(15);
+            TrafficLog.add('ST', '[Desert-Auto] ⏳ waiting $delaySec sec to avoid ban');
+            await Future.delayed(Duration(seconds: delaySec));
+            
             if (!_running) return;
             continue;
           }
@@ -541,11 +547,12 @@ class DesertAutoService {
             final newCap = _capFor(tower, startCap, minCap, maxCap);
             _setStatus('📉 ${tower.coordsLabel}: cap→$newCap');
             _attackedThisTick.add(tower.key);
-            await Future.delayed(const Duration(milliseconds: 800));
+            
+            // ✅ تأخير عشوائي بين 5 لـ 10 ثواني بعد الـ 313
+            await Future.delayed(Duration(seconds: 5 + Random().nextInt(5)));
             continue;
           }
 
-          // لو البرج ميت أو أي فشل تاني (هيتخطاه عشان ضافه للـ failed لمدة 30 دقيقة)
           TrafficLog.add('ER', '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel} failed');
           _markTowerFailed(tower);
