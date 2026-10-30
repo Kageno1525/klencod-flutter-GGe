@@ -30,9 +30,9 @@ class DesertAutoService {
   static const int kInterAttackDelaySec = 3;
 
   // ✅ الـ Caps الديناميكية (عشان نتجنب cpa > 170 و 313)
-  static const int kCapStart = 100;    // البداية آمنة
-  static const int kCapMin = 30;       // أقل عدد
-  static const int kCapMax = 160;      // أقصى عدد (تحت 170 عشان نمنع cpa)
+  static const int kCapStart = 204;    // البداية آمنة
+  static const int kCapMin = 112;       // أقل عدد
+  static const int kCapMax = 300;      // أقصى عدد (تحت 170 عشان نمنع cpa)
   static const int kCapGrowStep = 10;  // زيادة 10 كل نجاح
 
   static const _kCapsSuccessKey = 'desert_cap_ok_v3';
