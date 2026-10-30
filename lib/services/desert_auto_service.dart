@@ -27,10 +27,14 @@ class DesertAutoService {
 
   static const int kMinUnitsToAttack = 30;
   static const int kFailedCooldownMin = 5;
-
-  // ✅ أضف السطرين دول
   static const int kInterAttackDelaySec = 3;
-  static const int kTowerCapInitial = 85;
+
+  // ✅ الـ Caps الديناميكية
+  static const int kCapDefault = 80;    // أول محاولة لأي برج
+  static const int kCapMax = 95;        // الحد الأقصى (تحت الـ 100 الآمنة)
+  static const int kCapMin = 25;        // الحد الأدنى
+  static const int kCapStepUp = 5;      // زيادة عند النجاح
+  static const int kCapStepDown = 15;   // نقصان عند 313
 
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<AutoStatusEntry> _history = [];
@@ -49,11 +53,11 @@ class DesertAutoService {
 
   final Map<String, DateTime> _failedTowers = {};
 
-  // ✅ السقف المتكيف لكل برج
+  // ✅ حقول الـ Caps
   final Map<String, int> _towerCaps = {};
+  final Map<String, int> _lastFailCaps = {};
 
-  int _getCapFor(DesertTower t) =>
-      _towerCaps[t.key] ?? kTowerCapInitial;
+  int _capFor(DesertTower t) => _towerCaps[t.key] ?? kCapDefault;
 
   Future<void>? _activeTick;
   final Set<String> _attackingNow = {};
@@ -137,6 +141,62 @@ class DesertAutoService {
     await p.setString(_kFailedTowers, jsonEncode(data));
   }
 
+  // ═══════════════════════════════════════════════════════════
+  //  ✅ حفظ/تحميل الـ Caps
+  // ═══════════════════════════════════════════════════════════
+  static const _kCapsPrefsKey = 'desert_tower_caps_v2';
+  static const _kFailCapsPrefsKey = 'desert_tower_lastfail_v2';
+
+  Future<void> _loadCaps() async {
+    final p = await SharedPreferences.getInstance();
+    try {
+      final rawCaps = p.getString(_kCapsPrefsKey);
+      if (rawCaps != null) {
+        final data = jsonDecode(rawCaps) as Map<String, dynamic>;
+        _towerCaps.clear();
+        for (final e in data.entries) {
+          _towerCaps[e.key] = (e.value as num).toInt();
+        }
+      }
+      final rawFails = p.getString(_kFailCapsPrefsKey);
+      if (rawFails != null) {
+        final data = jsonDecode(rawFails) as Map<String, dynamic>;
+        _lastFailCaps.clear();
+        for (final e in data.entries) {
+          _lastFailCaps[e.key] = (e.value as num).toInt();
+        }
+      }
+      TrafficLog.add('ST',
+          '[Desert-Auto] 📚 loaded ${_towerCaps.length} tower caps');
+    } catch (e) {
+      TrafficLog.add('ER', '[Desert-Auto] load caps error: $e');
+    }
+  }
+
+  Future<void> _saveCaps() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(_kCapsPrefsKey, jsonEncode(_towerCaps));
+    await p.setString(_kFailCapsPrefsKey, jsonEncode(_lastFailCaps));
+  }
+
+  void _onAttackSuccess(DesertTower t, int usedCap) {
+    final lastFail = _lastFailCaps[t.key] ?? 999;
+    final nextCap = usedCap + kCapStepUp;
+    if (nextCap < lastFail) {
+      _towerCaps[t.key] = nextCap.clamp(kCapMin, kCapMax);
+    } else {
+      _towerCaps[t.key] = usedCap;  // استقر على القيمة الحالية
+    }
+    _saveCaps();
+  }
+
+  void _onAttack313(DesertTower t, int attemptedCap) {
+    _lastFailCaps[t.key] = attemptedCap;
+    _towerCaps[t.key] =
+        (attemptedCap - kCapStepDown).clamp(kCapMin, kCapMax);
+    _saveCaps();
+  }
+
   Future<void> start(GgeClient client, {int? sourceAreaId}) async {
     if (_running) return;
 
@@ -157,6 +217,7 @@ class DesertAutoService {
     _svc = DesertAttackService(client);
     await _svc!.loadCooldowns();
     await _loadFailedTowers();
+    await _loadCaps();   // ← السطر الجديد
 
     attacksThisSession = 0;
     towersScanned = 0;
@@ -209,7 +270,6 @@ class DesertAutoService {
     TrafficLog.add('ST', '[Desert-Auto] $s');
   }
 
-  /// ✅ الأصل: نتخطى البرج لو مسجّل failed ولم يمضِ kFailedCooldownMin
   bool _shouldSkipTower(DesertTower t, {int minutes = kFailedCooldownMin}) {
     final at = _failedTowers[t.key];
     if (at == null) return false;
@@ -392,10 +452,11 @@ class DesertAutoService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  //  ⚔️ _tryAttackTowers — السقف المتكيف لكل برج
-  //   • cap يبدأ من 85 (kTowerCapInitial) وينزل 30% عند 313
-  //   • عند النجاح، بيسجل الـ used كـ cap دائم (لو أعلى من السابق)
-  //   • أي فشل → mark failed + _attackedThisTick.add (منع التكرار)
+  //  ⚔️ _tryAttackTowers — السقف الديناميكي المتعلّم لكل برج
+  //   • cap يبدأ من 80 (kCapDefault)
+  //   • عند 313 → ينزل 15 (kCapStepDown) بحد أدنى 25
+  //   • عند النجاح → يزيد 5 (kCapStepUp) بشرط ما يعديش آخر 313
+  //   • الـ caps بتتحفظ في SharedPreferences (تستمر بعد إعادة التشغيل)
   // ═══════════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
@@ -474,7 +535,7 @@ class DesertAutoService {
           if (!spyOk) {
             _setStatus('❌ Spy failed for ${tower.coordsLabel}');
             _markTowerFailed(tower);
-            _attackedThisTick.add(tower.key); // ← منع التكرار
+            _attackedThisTick.add(tower.key);
             continue;
           }
 
@@ -494,10 +555,12 @@ class DesertAutoService {
             continue;
           }
 
-          // ✅ السقف المتكيف (يبدأ 85 وينزل لو فيه 313 سابق)
-          final cap = _getCapFor(tower);
+          // ✅ Cap متعلم لكل برج
+          final cap = _capFor(tower);
+          _setStatus(
+              '⚔️ Preparing ${tower.coordsLabel} (cap=$cap)...');
 
-          // ✅ توزيع 20/60/20
+          // ✅ توزيع 20/60/20 تحت السقف
           final suggestion = _svc!.suggestCounter(
             available: sendable,
             defenders: report.toDefenderSummary(),
@@ -514,8 +577,6 @@ class DesertAutoService {
             continue;
           }
 
-          // ⚠️ تم حذف فلتر analyzeAttack نهائياً
-
           Lord lord;
           try {
             lord = freeLords.firstWhere((c) => c.lord.id != 0).lord;
@@ -523,8 +584,8 @@ class DesertAutoService {
             lord = freeLords.first.lord;
           }
 
-          _setStatus(
-              '⚔️ Attacking ${tower.coordsLabel} (${suggestion.totalUnits})...');
+          _setStatus('⚔️ Attacking ${tower.coordsLabel} '
+              '(${suggestion.totalUnits}/cap=$cap)...');
 
           final result = await _svc!.attack(
             tower: tower,
@@ -535,22 +596,18 @@ class DesertAutoService {
             rightUnits: suggestion.right,
           );
 
+          // ✅ نجاح
           if (result.success) {
             attacksThisTick++;
             attacksThisSession++;
             _attackedThisTick.add(tower.key);
 
-            // ✅ تعلّم السقف
             final used = suggestion.totalUnits;
-            final prev = _towerCaps[tower.key];
-            if (prev == null || used > prev) {
-              _towerCaps[tower.key] = used;
-            }
+            _onAttackSuccess(tower, used);
 
             TrafficLog.add('ST',
                 '[Desert-Auto] ✅ HIT ${tower.coordsLabel} '
-                'mid=${result.movementId} units=$used '
-                '($attacksThisTick this tick, $attacksThisSession session)');
+                'mid=${result.movementId} units=$used cap→${_capFor(tower)}');
             _setStatus('✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
 
             await Future.delayed(
@@ -559,19 +616,21 @@ class DesertAutoService {
             continue;
           }
 
-          // ❌ فشل
+          // ❌ 313 — قلل الـ cap، مفيش retry، البرج اللي بعده
           final is313 = result.error?.contains('313') == true;
           if (is313) {
-            // ✅ قلل السقف، مفيش retry
-            final newCap = (cap * 0.7).round();
-            _towerCaps[tower.key] = newCap > 15 ? newCap : 15;
+            _onAttack313(tower, cap);
+            final newCap = _capFor(tower);
             TrafficLog.add('ST',
-                '[Desert-Auto] 📉 313 on ${tower.coordsLabel} — cap → ${_towerCaps[tower.key]}');
-            _setStatus('📉 ${tower.coordsLabel}: cap → ${_towerCaps[tower.key]}');
+                '[Desert-Auto] 📉 313 on ${tower.coordsLabel} — cap $cap → $newCap');
+            _setStatus('📉 ${tower.coordsLabel}: cap→$newCap');
+
             _attackedThisTick.add(tower.key);
+            await Future.delayed(const Duration(milliseconds: 800));
             continue;
           }
 
+          // ❌ أي فشل تاني (91, 218, 181, ...)
           TrafficLog.add('ER',
               '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel} failed');

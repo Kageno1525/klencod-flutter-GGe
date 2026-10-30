@@ -852,13 +852,13 @@ class DesertAttackService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  //  ✅ suggestCounter جديدة — توزيع 20/60/20 + maxTotal
+  //  ✅ suggestCounter جديدة — توزيع 20/60/20 + maxTotal (default 80)
   // ═══════════════════════════════════════════════════════════
   UnitSuggestion suggestCounter({
     required List<CastleUnit> available,
     required DefenderSummary defenders,
     int maxTypes = 10,
-    int maxTotal = 85,
+    int maxTotal = 80,
   }) {
     final combat = available
         .where((u) => u.isCombat && u.amount > 0)
@@ -889,7 +889,7 @@ class DesertAttackService {
     final meleeIds = melee.map((u) => u.wodId).toSet();
     bool isMeleeType(int wodId) => meleeIds.contains(wodId);
 
-    // ✅ توزيع 20/60/20
+    // ✅ توزيع 20% / 60% / 20%
     final flankMax = (maxTotal * 0.2).round();
     final middleMax = maxTotal - 2 * flankMax;
 
@@ -898,6 +898,8 @@ class DesertAttackService {
       required int maxSlots,
       required double meleeRatio,
     }) {
+      if (maxUnits <= 0 || maxSlots <= 0) return [];
+
       final meleeTarget = (maxUnits * meleeRatio).round();
       final rangedTarget = maxUnits - meleeTarget;
       final out = <List<int>>[];
@@ -911,9 +913,8 @@ class DesertAttackService {
         if (out.where((e) => isMeleeType(e[0])).length >= meleeSlots) break;
         final rem = remaining[u.wodId] ?? 0;
         if (rem <= 0) continue;
-        final take = meleeTarget - meleeAlloc < rem
-            ? meleeTarget - meleeAlloc
-            : rem;
+        final need = meleeTarget - meleeAlloc;
+        final take = need < rem ? need : rem;
         if (take <= 0) continue;
         out.add([u.wodId, take]);
         remaining[u.wodId] = rem - take;
@@ -925,20 +926,22 @@ class DesertAttackService {
         if (out.where((e) => !isMeleeType(e[0])).length >= rangedSlots) break;
         final rem = remaining[u.wodId] ?? 0;
         if (rem <= 0) continue;
-        final take = rangedTarget - rangedAlloc < rem
-            ? rangedTarget - rangedAlloc
-            : rem;
+        final need = rangedTarget - rangedAlloc;
+        final take = need < rem ? need : rem;
         if (take <= 0) continue;
         out.add([u.wodId, take]);
         remaining[u.wodId] = rem - take;
         rangedAlloc += take;
       }
 
+      // fallback لو مفيش أي حاجة
       if (out.isEmpty) {
         for (final u in [...melee, ...ranged]) {
           final rem = remaining[u.wodId] ?? 0;
           if (rem > 0) {
-            out.add([u.wodId, rem < maxUnits ? rem : maxUnits]);
+            final take = rem < maxUnits ? rem : maxUnits;
+            out.add([u.wodId, take]);
+            remaining[u.wodId] = rem - take;
             break;
           }
         }
@@ -954,15 +957,15 @@ class DesertAttackService {
       return 0.5;
     }
 
-    final left = allocateWing(
+    var leftOut = allocateWing(
       maxUnits: flankMax, maxSlots: 2,
       meleeRatio: ratio(defenders.leftMelee, defenders.leftRanged),
     );
-    final middle = allocateWing(
+    var middleOut = allocateWing(
       maxUnits: middleMax, maxSlots: 6,
       meleeRatio: ratio(defenders.middleMelee, defenders.middleRanged),
     );
-    final right = allocateWing(
+    var rightOut = allocateWing(
       maxUnits: flankMax, maxSlots: 2,
       meleeRatio: ratio(defenders.rightMelee, defenders.rightRanged),
     );
@@ -970,9 +973,9 @@ class DesertAttackService {
     List<List<int>> clean(List<List<int>> l) =>
         l.where((e) => e.length >= 2 && e[0] > 0 && e[1] > 0).toList();
 
-    var leftOut = clean(left);
-    var middleOut = clean(middle);
-    var rightOut = clean(right);
+    leftOut = clean(leftOut);
+    middleOut = clean(middleOut);
+    rightOut = clean(rightOut);
 
     int typeCount() {
       final s = <int>{};
@@ -988,9 +991,7 @@ class DesertAttackService {
         middleOut.fold<int>(0, (s, e) => s + e[1]) +
         rightOut.fold<int>(0, (s, e) => s + e[1]);
 
-    while (total() > maxTotal && middleOut.isNotEmpty) {
-      middleOut.removeLast();
-    }
+    while (total() > maxTotal && middleOut.isNotEmpty) middleOut.removeLast();
     while (total() > maxTotal && rightOut.isNotEmpty) rightOut.removeLast();
     while (total() > maxTotal && leftOut.isNotEmpty) leftOut.removeLast();
 
