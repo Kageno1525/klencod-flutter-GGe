@@ -26,14 +26,18 @@ class DesertAutoService {
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 30;
-  static const int kFailedCooldownMin = 300;
+  static const int kFailedCooldownMin = 5;
   static const int kInterAttackDelaySec = 3;
 
-  // ✅ الـ Caps الديناميكية (عشان نتجنب cpa > 170 و 313)
-  static const int kCapStart = 250;    // البداية آمنة
-  static const int kCapMin = 250;       // أقل عدد
-  static const int kCapMax = 250;      // أقصى عدد (تحت 170 عشان نمنع cpa)
-  static const int kCapGrowStep = 0;  // زيادة 10 كل نجاح
+  // ✅ المفاتيح دي هنستخدمها في الشاشة عشان نغير الأرقام
+  static const String kCapStartKey = 'desert_auto_cap_start';
+  static const String kCapMinKey = 'desert_auto_cap_min';
+  static const String kCapMaxKey = 'desert_auto_cap_max';
+
+  // القيم الافتراضية (لو المستخدم مغيرهاش)
+  static const int kDefaultCapStart = 204;
+  static const int kDefaultCapMin = 204;
+  static const int kDefaultCapMax = 204;
 
   static const _kCapsSuccessKey = 'desert_cap_ok_v3';
   static const _kCapsFailKey = 'desert_cap_fail_v3';
@@ -54,7 +58,6 @@ class DesertAutoService {
   List<DesertTower> get towers => List.unmodifiable(_towers);
 
   final Map<String, DateTime> _failedTowers = {};
-
   final Map<String, int> _lastSuccessCaps = {};
   final Map<String, int> _lastFailCaps = {};
 
@@ -87,8 +90,7 @@ class DesertAutoService {
 
   Future<void> setCommanderIds(List<int> ids) async {
     final p = await SharedPreferences.getInstance();
-    await p.setStringList(
-        _kCommanderIds, ids.map((e) => e.toString()).toList());
+    await p.setStringList(_kCommanderIds, ids.map((e) => e.toString()).toList());
     TrafficLog.add('ST', '[Desert-Auto] commander filter: $ids');
   }
 
@@ -100,8 +102,7 @@ class DesertAutoService {
 
   Future<void> setTransferUnitIds(List<int> ids) async {
     final p = await SharedPreferences.getInstance();
-    await p.setStringList(
-        _kTransferUnitIds, ids.map((e) => e.toString()).toList());
+    await p.setStringList(_kTransferUnitIds, ids.map((e) => e.toString()).toList());
     TrafficLog.add('ST', '[Desert-Auto] transfer filter: $ids');
   }
 
@@ -120,10 +121,6 @@ class DesertAutoService {
         if (dt != null && dt.isAfter(now)) {
           _failedTowers[e.key] = dt;
         }
-      }
-      if (_failedTowers.isNotEmpty) {
-        TrafficLog.add('ST',
-            '[Desert-Auto] loaded ${_failedTowers.length} failed towers from disk');
       }
     } catch (_) {}
   }
@@ -159,11 +156,7 @@ class DesertAutoService {
           _lastFailCaps[e.key] = (e.value as num).toInt();
         }
       }
-      TrafficLog.add('ST',
-          '[Desert-Auto] 📚 loaded caps: ok=${_lastSuccessCaps.length} fail=${_lastFailCaps.length}');
-    } catch (e) {
-      TrafficLog.add('ER', '[Desert-Auto] load caps error: $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> _saveCaps() async {
@@ -172,29 +165,20 @@ class DesertAutoService {
     await p.setString(_kCapsFailKey, jsonEncode(_lastFailCaps));
   }
 
-  Future<void> resetCaps() async {
-    _lastSuccessCaps.clear();
-    _lastFailCaps.clear();
-    final p = await SharedPreferences.getInstance();
-    await p.remove(_kCapsSuccessKey);
-    await p.remove(_kCapsFailKey);
-    TrafficLog.add('ST', '[Desert-Auto] 🔄 caps reset');
-  }
-
-  int _capFor(DesertTower t) {
+  int _capFor(DesertTower t, int startCap, int minCap, int maxCap) {
     final s = _lastSuccessCaps[t.key];
     final f = _lastFailCaps[t.key];
 
-    if (s == null && f == null) return kCapStart;
+    if (s == null && f == null) return startCap;
 
     if (s == null) {
       final next = f! - 20;
-      return next < kCapMin ? kCapMin : (next > kCapMax ? kCapMax : next);
+      return next < minCap ? minCap : (next > maxCap ? maxCap : next);
     }
 
     if (f == null) {
-      final next = s + kCapGrowStep;
-      return next > kCapMax ? kCapMax : next;
+      final next = s + 15;
+      return next > maxCap ? maxCap : next;
     }
 
     return s;
@@ -205,14 +189,12 @@ class DesertAutoService {
     _saveCaps();
   }
 
-  void _on313(DesertTower t, int attempted) {
+  void _on313(DesertTower t, int attempted, int minCap) {
     _lastFailCaps[t.key] = attempted;
-    if (attempted <= kCapMin) {
-      _failedTowers[t.key] =
-          DateTime.now().add(const Duration(hours: 24));
+    if (attempted <= minCap) {
+      _failedTowers[t.key] = DateTime.now().add(const Duration(hours: 24));
       _saveFailedTowers();
-      TrafficLog.add('ST',
-          '[Desert-Auto] 💀 ${t.coordsLabel} unusable at cap<=$kCapMin');
+      TrafficLog.add('ST', '[Desert-Auto] 💀 ${t.coordsLabel} unusable at cap<=$minCap');
     }
     _saveCaps();
   }
@@ -224,9 +206,7 @@ class DesertAutoService {
       TrafficLog.add('ST', '[Desert-Auto] ⏳ Waiting for old tick...');
       try {
         await _activeTick!.timeout(const Duration(seconds: 60));
-      } catch (_) {
-        TrafficLog.add('ER', '[Desert-Auto] Old tick timeout, forcing');
-      }
+      } catch (_) {}
     }
 
     _attackingNow.clear();
@@ -243,25 +223,7 @@ class DesertAutoService {
     towersScanned = 0;
 
     _xtSub?.cancel();
-    _xtSub = client.xtStream.listen((msg) {
-      if (msg.command != 'sne' || msg.payload == null) return;
-      try {
-        final data = jsonDecode(msg.payload!) as Map<String, dynamic>;
-        final msgs = data['MSG'] as List?;
-        if (msgs == null) return;
-        for (final m in msgs) {
-          if (m is! List || m.length < 2) continue;
-          final msgId = m[0] as int?;
-          final type = m[1] as int?;
-          if (msgId == null || type != 4) continue;
-          _svc?.captureSneReport(msgId);
-          TrafficLog.add('ST', '[Desert-Auto] 📩 captured sne msgId=$msgId');
-        }
-      } catch (e) {
-        TrafficLog.add('ER', '[Desert-Auto] sne parse error: $e');
-      }
-    });
-
+    
     if (sourceAreaId != null && sourceAreaId > 0) {
       await setSource(sourceAreaId);
     }
@@ -302,11 +264,8 @@ class DesertAutoService {
   }
 
   void _markTowerFailed(DesertTower t) {
-    _failedTowers[t.key] =
-        DateTime.now().add(Duration(minutes: kFailedCooldownMin));
+    _failedTowers[t.key] = DateTime.now().add(Duration(minutes: kFailedCooldownMin));
     _saveFailedTowers();
-    TrafficLog.add('ST',
-        '[Desert-Auto] ⏸️ marked ${t.coordsLabel} failed ($kFailedCooldownMin min)');
   }
 
   Future<void> _tick() async {
@@ -376,8 +335,7 @@ class DesertAutoService {
       if (main.areaId == desert.areaId) return;
 
       final catalog = await _client!.loadCatalog();
-      final desertUnits = await _client!.getCastleUnits(
-          desert.kingdomId, desert.areaId, catalog);
+      final desertUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog);
 
       final offCount = desertUnits
           .where((u) => u.isCombat && !u.isDefensive && u.amount > 0)
@@ -386,17 +344,12 @@ class DesertAutoService {
 
       _setStatus('🔄 Need transfer: $offCount < $minOff');
 
-      final mainUnits = await _client!.getCastleUnits(
-          main.kingdomId, main.areaId, catalog);
+      final mainUnits = await _client!.getCastleUnits(main.kingdomId, main.areaId, catalog);
 
       final selectedIds = await getTransferUnitIds();
-      var offensiveMain = mainUnits
-          .where((u) => u.isCombat && !u.isDefensive && u.amount > 0)
-          .toList();
+      var offensiveMain = mainUnits.where((u) => u.isCombat && !u.isDefensive && u.amount > 0).toList();
       if (selectedIds.isNotEmpty) {
-        offensiveMain = offensiveMain
-            .where((u) => selectedIds.contains(u.wodId))
-            .toList();
+        offensiveMain = offensiveMain.where((u) => selectedIds.contains(u.wodId)).toList();
       }
       if (offensiveMain.isEmpty) {
         _setStatus('❌ Main has no selected offensive units');
@@ -409,11 +362,7 @@ class DesertAutoService {
       }
 
       _setStatus('📤 Transferring ${toTransfer.length} types...');
-      final result = await _client!.transfer(
-        source: main,
-        target: desert,
-        units: toTransfer,
-      );
+      final result = await _client!.transfer(source: main, target: desert, units: toTransfer);
 
       if (result.success) {
         await p.setString(_kLastReplenish, DateTime.now().toIso8601String());
@@ -428,18 +377,13 @@ class DesertAutoService {
 
   Future<void> _maybeRescan() async {
     if (_client == null || _svc == null) return;
-    if (_scanInProgress) {
-      TrafficLog.add('ST', '[Desert-Auto] ⏭️ Scan already running, skip');
-      return;
-    }
+    if (_scanInProgress) return;
 
     final p = await SharedPreferences.getInstance();
     final lastStr = p.getString(_kLastScan);
     if (lastStr != null) {
       final last = DateTime.tryParse(lastStr);
-      if (last != null &&
-          DateTime.now().difference(last).inMinutes < 5 &&
-          _towers.isNotEmpty) {
+      if (last != null && DateTime.now().difference(last).inMinutes < 5 && _towers.isNotEmpty) {
         return;
       }
     }
@@ -471,12 +415,20 @@ class DesertAutoService {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // ⚔️ الهجوم التلقائي (بدون تجسس نهائياً)
+  // ═══════════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
 
     final p = await SharedPreferences.getInstance();
     final desertArea = p.getInt(_kSourceAreaId) ?? 0;
     if (desertArea == 0) return;
+
+    // ✅ قراءة الأرقام اللي المستخدم حطها في الشاشة (الافتراضي 204)
+    final startCap = p.getInt(DesertAutoService.kCapStartKey) ?? kDefaultCapStart;
+    final minCap = p.getInt(DesertAutoService.kCapMinKey) ?? kDefaultCapMin;
+    final maxCap = p.getInt(DesertAutoService.kCapMaxKey) ?? kDefaultCapMax;
 
     try {
       final castles = await _client!.getCastles();
@@ -489,17 +441,13 @@ class DesertAutoService {
       final catalog = await _client!.loadCatalog();
 
       int attacksThisTick = 0;
-      int spyAttempts = 0;
-      const int maxSpyAttempts = 20;
+      int attempts = 0;
+      const int maxAttempts = 20;
 
-      while (_running && spyAttempts < maxSpyAttempts) {
-        final freshUnits = await _client!.getCastleUnits(
-            desert.kingdomId, desert.areaId, catalog);
-        final sendable = freshUnits
-            .where((u) => u.isCombat && u.amount > 0)
-            .toList();
-        final totalUnits =
-            sendable.fold<int>(0, (s, u) => s + u.amount);
+      while (_running && attempts < maxAttempts) {
+        final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog);
+        final sendable = freshUnits.where((u) => u.isCombat && u.amount > 0).toList();
+        final totalUnits = sendable.fold<int>(0, (s, u) => s + u.amount);
 
         if (totalUnits < kMinUnitsToAttack) {
           _setStatus('💤 Idle — units: $totalUnits (< $kMinUnitsToAttack)');
@@ -510,14 +458,10 @@ class DesertAutoService {
         var freeLords = cmds.where((c) => !c.isBusy).toList();
         final selectedCommanderIds = await getCommanderIds();
         if (selectedCommanderIds.isNotEmpty) {
-          freeLords = freeLords
-              .where((c) => selectedCommanderIds.contains(c.lord.id))
-              .toList();
+          freeLords = freeLords.where((c) => selectedCommanderIds.contains(c.lord.id)).toList();
         }
         if (freeLords.isEmpty) {
-          _setStatus(selectedCommanderIds.isEmpty
-              ? '💤 Idle — no free commanders'
-              : '💤 Idle — no free selected commanders');
+          _setStatus('💤 Idle — no free commanders');
           return;
         }
 
@@ -527,8 +471,7 @@ class DesertAutoService {
             .where((t) => !_attackedThisTick.contains(t.key))
             .where((t) => !_attackingNow.contains(t.key))
             .toList()
-          ..sort((a, b) =>
-              a.distanceFromSource.compareTo(b.distanceFromSource));
+          ..sort((a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
 
         if (candidates.isEmpty) {
           _setStatus('⏳ No candidate towers (all cooldown/failed)');
@@ -539,49 +482,19 @@ class DesertAutoService {
         _attackingNow.add(tower.key);
 
         try {
-          _setStatus('🔍 Spying ${tower.coordsLabel}...');
-          spyAttempts++;
+          _setStatus('⚔️ Preparing ${tower.coordsLabel}...');
+          attempts++;
 
-          final spyOk = await _spyAndFetch(tower, desert, catalog);
-          if (!_running) return;
+          final cap = _capFor(tower, startCap, minCap, maxCap);
 
-          if (!spyOk) {
-            _setStatus('❌ Spy failed for ${tower.coordsLabel}');
-            _markTowerFailed(tower);
-            _attackedThisTick.add(tower.key);
-            continue;
-          }
-
-          final report = _svc!.getCachedReport(tower);
-          if (report == null || !report.matches(tower)) {
-            _setStatus('❌ Report mismatch for ${tower.coordsLabel}');
-            _markTowerFailed(tower);
-            _attackedThisTick.add(tower.key);
-            continue;
-          }
-
-          if (report.isDead) {
-            _setStatus(
-                '💀 ${tower.coordsLabel} dead (respawn in ${report.rs}s)');
-            _markTowerFailed(tower);
-            _attackedThisTick.add(tower.key);
-            continue;
-          }
-
-          final cap = _capFor(tower);
-          _setStatus(
-              '⚔️ Preparing ${tower.coordsLabel} (cap=$cap)...');
-
+          // ✅ هجوم مباشر بدون تجسس (بنباصي DefenderSummary فاضي عشان نوزع الـ 204)
           final suggestion = _svc!.suggestCounter(
             available: sendable,
-            defenders: report.toDefenderSummary(),
+            defenders: DefenderSummary(), 
             maxTotal: cap,
           );
 
-          if (suggestion.totalUnits <= 0 ||
-              (suggestion.left.isEmpty &&
-                  suggestion.middle.isEmpty &&
-                  suggestion.right.isEmpty)) {
+          if (suggestion.totalUnits <= 0) {
             _setStatus('⚠️ Empty suggestion for ${tower.coordsLabel}');
             _markTowerFailed(tower);
             _attackedThisTick.add(tower.key);
@@ -595,8 +508,7 @@ class DesertAutoService {
             lord = freeLords.first.lord;
           }
 
-          _setStatus('⚔️ Attacking ${tower.coordsLabel} '
-              '(${suggestion.totalUnits}/cap=$cap)...');
+          _setStatus('⚔️ Attacking ${tower.coordsLabel} (${suggestion.totalUnits}/cap=$cap)...');
 
           final result = await _svc!.attack(
             tower: tower,
@@ -611,102 +523,39 @@ class DesertAutoService {
             attacksThisTick++;
             attacksThisSession++;
             _attackedThisTick.add(tower.key);
+            _onSuccess(tower, suggestion.totalUnits);
 
-            final used = suggestion.totalUnits;
-            _onSuccess(tower, used);
-
-            TrafficLog.add('ST',
-                '[Desert-Auto] ✅ HIT ${tower.coordsLabel} '
-                'mid=${result.movementId} units=$used cap→${_capFor(tower)}');
+            TrafficLog.add('ST', '[Desert-Auto] ✅ HIT ${tower.coordsLabel} units=${suggestion.totalUnits}');
             _setStatus('✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
 
-            await Future.delayed(
-                const Duration(seconds: kInterAttackDelaySec));
+            await Future.delayed(const Duration(seconds: kInterAttackDelaySec));
             if (!_running) return;
             continue;
           }
 
           final is313 = result.error?.contains('313') == true;
           if (is313) {
-            _on313(tower, cap);
-            final newCap = _capFor(tower);
-            TrafficLog.add('ST',
-                '[Desert-Auto] 📉 313 on ${tower.coordsLabel} — cap $cap → $newCap');
+            _on313(tower, cap, minCap);
+            final newCap = _capFor(tower, startCap, minCap, maxCap);
             _setStatus('📉 ${tower.coordsLabel}: cap→$newCap');
             _attackedThisTick.add(tower.key);
             await Future.delayed(const Duration(milliseconds: 800));
             continue;
           }
 
-          TrafficLog.add('ER',
-              '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
+          // لو البرج ميت أو أي فشل تاني
+          TrafficLog.add('ER', '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel} failed');
           _markTowerFailed(tower);
           _attackedThisTick.add(tower.key);
           continue;
+
         } finally {
           _attackingNow.remove(tower.key);
         }
       }
-
-      if (spyAttempts >= maxSpyAttempts) {
-        _setStatus('🔁 Tried $spyAttempts towers, will continue next tick');
-      }
     } catch (e) {
       _setStatus('❌ Attack loop error: $e');
     }
-  }
-
-  List<List<int>> _flattenSuggestion(UnitSuggestion s) => [
-        ...s.left.where((u) => u.length >= 2 && u[0] > 0 && u[1] > 0),
-        ...s.middle.where((u) => u.length >= 2 && u[0] > 0 && u[1] > 0),
-        ...s.right.where((u) => u.length >= 2 && u[0] > 0 && u[1] > 0),
-      ];
-
-  Future<bool> _spyAndFetch(
-    DesertTower tower,
-    OwnedCastle desert,
-    Map<int, UnitCatalogEntry> catalog,
-  ) async {
-    if (_svc == null) return false;
-
-    _svc!.latestSpyMessageId = null;
-    _svc!.latestSpyMessageIdAt = null;
-
-    final spyRes = await _svc!.spy(tower: tower, source: desert);
-    if (!spyRes.success) {
-      _setStatus('❌ Spy failed: ${spyRes.error}');
-      return false;
-    }
-
-    _setStatus('⏳ Waiting for report...');
-
-    int? msgId;
-    for (int i = 0; i < 15; i++) {
-      await Future.delayed(const Duration(seconds: 2));
-      if (!_running) return false;
-      msgId = _svc!.latestSpyMessageId;
-      if (msgId != null) break;
-    }
-
-    if (msgId == null) {
-      _setStatus('⚠️ sne didn\'t arrive (30s timeout)');
-      return false;
-    }
-
-    _setStatus('📥 Fetching report msgId=$msgId...');
-    final report = await _svc!.fetchSpyReport(
-      messageId: msgId,
-      tower: tower,
-      catalog: catalog,
-    );
-
-    if (report == null) {
-      _setStatus('❌ bsd parse failed');
-      return false;
-    }
-
-    _setStatus('✓ Report: ${report.totalEnemyUnits} units, RS=${report.rs}');
-    return true;
   }
 }

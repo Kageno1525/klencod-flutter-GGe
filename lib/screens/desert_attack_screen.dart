@@ -46,7 +46,12 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
   Set<int> _selectedTransferIds = {};
   bool _loadingAutoData = false;
 
-  // ✅ Background attack limits (new)
+  // ✅ الأرقام التلاتة اللي هتتحكم فيها (204)
+  int _capStart = DesertAutoService.kDefaultCapStart;
+  int _capMin = DesertAutoService.kDefaultCapMin;
+  int _capMax = DesertAutoService.kDefaultCapMax;
+
+  // Background attack limits
   int _maxAttacksDay = 0;
   int _maxAttacksSession = 0;
   int _breakEvery = 0;
@@ -110,14 +115,19 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
   Future<void> _init() async {
     _settings = await DesertAttackSettings.load();
 
-    // Load background limits
+    // Load background limits + caps
     final p = await SharedPreferences.getInstance();
     _maxAttacksDay = p.getInt('desert_bg_max_attacks_day') ?? 0;
     _maxAttacksSession = p.getInt('desert_bg_max_attacks_session') ?? 0;
     _breakEvery = p.getInt('desert_bg_break_every') ?? 0;
     _breakMinutes = p.getInt('desert_bg_break_minutes') ?? 15;
     _attacksToday = p.getInt('desert_bg_attacks_today') ?? 0;
-    _attacksThisSession = 0; // session counter يبدأ من 0 في كل فتح
+    _attacksThisSession = 0;
+
+    // ✅ تحميل الأرقام التلاتة
+    _capStart = p.getInt(DesertAutoService.kCapStartKey) ?? DesertAutoService.kDefaultCapStart;
+    _capMin = p.getInt(DesertAutoService.kCapMinKey) ?? DesertAutoService.kDefaultCapMin;
+    _capMax = p.getInt(DesertAutoService.kCapMaxKey) ?? DesertAutoService.kDefaultCapMax;
 
     try {
       final castles = await widget.client.getCastles();
@@ -227,7 +237,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
       List<CastleUnit> mainUnits = [];
       if (main != null) {
         final catalog = await widget.client.loadCatalog();
-        // ✅ Sync catalog to SharedPreferences for background service
         try {
           final catMap = <String, Map<String, dynamic>>{};
           for (final e in catalog.entries) {
@@ -689,7 +698,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     ]);
   }
 
-  // ✅ NEW: Background service card
   Widget _bgServiceCard(BuildContext context, DesertAutoService svc) {
     final running = BackgroundService.isRunning;
     final statusColor = _bgStatusColor(_bgStatus);
@@ -1005,6 +1013,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     );
   }
 
+  // ✅ تعديل كارت الإعدادات عشان يشمل الأرقام التلاتة (204)
   Widget _autoSettingsCard(BuildContext context) {
     return AppTheme.glassCard(
       context: context,
@@ -1015,13 +1024,68 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
           Row(children: [
             const Icon(Icons.settings_rounded, color: kDesertSand, size: 18),
             const SizedBox(width: 8),
-            Text('إعدادات المسح',
+            Text('إعدادات الهجوم التلقائي',
                 style: TextStyle(
                     color: AppTheme.textColor(context),
                     fontWeight: FontWeight.bold,
                     fontSize: 14,
                     decoration: TextDecoration.none)),
           ]),
+          const SizedBox(height: 10),
+          
+          // ✅ الخانات التلاتة
+          Row(children: [
+            Expanded(
+              child: _numberField(
+                context,
+                label: 'البداية',
+                hint: '204',
+                value: _capStart,
+                onChanged: (v) async {
+                  setState(() => _capStart = v);
+                  final p = await SharedPreferences.getInstance();
+                  await p.setInt(DesertAutoService.kCapStartKey, v);
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _numberField(
+                context,
+                label: 'أقل عدد',
+                hint: '204',
+                value: _capMin,
+                onChanged: (v) async {
+                  setState(() => _capMin = v);
+                  final p = await SharedPreferences.getInstance();
+                  await p.setInt(DesertAutoService.kCapMinKey, v);
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _numberField(
+                context,
+                label: 'أقصى عدد',
+                hint: '204',
+                value: _capMax,
+                onChanged: (v) async {
+                  setState(() => _capMax = v);
+                  final p = await SharedPreferences.getInstance();
+                  await p.setInt(DesertAutoService.kCapMaxKey, v);
+                },
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Text('البوت بيهجم فوراً بدون تجسس بالعدد اللي تحدده (مثلاً 160-165 عشان ميجيبش cpa).',
+              style: TextStyle(
+                  fontSize: 10,
+                  color: AppTheme.subTextColor(context),
+                  decoration: TextDecoration.none)),
+
+          const SizedBox(height: 12),
+          Divider(color: AppTheme.subTextColor(context).withOpacity(0.15)),
           const SizedBox(height: 8),
           Row(children: [
             Expanded(
@@ -1033,11 +1097,11 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
             ),
             TextButton(
               onPressed: () => _openRadiusSheet(context),
-              child: const Text('تعديل',
-                  style: TextStyle(color: kDesertSand)),
+              child: const Text('تعديل', style: TextStyle(color: kDesertSand)),
             ),
           ]),
-          const SizedBox(height: 12),
+          
+          const SizedBox(height: 8),
           Divider(color: AppTheme.subTextColor(context).withOpacity(0.15)),
           const SizedBox(height: 8),
           Row(children: [
@@ -1050,12 +1114,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
                     fontSize: 14,
                     decoration: TextDecoration.none)),
           ]),
-          const SizedBox(height: 4),
-          Text('0 = بدون حد · العداد يُصفّر تلقائياً كل يوم',
-              style: TextStyle(
-                  fontSize: 10,
-                  color: AppTheme.subTextColor(context),
-                  decoration: TextDecoration.none)),
           const SizedBox(height: 10),
           Row(children: [
             Expanded(
@@ -1084,56 +1142,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
                   await p.setInt('desert_bg_max_attacks_session', v);
                 },
               ),
-            ),
-          ]),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(
-              child: _numberField(
-                context,
-                label: 'راحة كل N هجمة',
-                hint: '0 = لا',
-                value: _breakEvery,
-                onChanged: (v) async {
-                  setState(() => _breakEvery = v);
-                  final p = await SharedPreferences.getInstance();
-                  await p.setInt('desert_bg_break_every', v);
-                },
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _numberField(
-                context,
-                label: 'مدة الراحة (دقيقة)',
-                hint: '15',
-                value: _breakMinutes,
-                onChanged: (v) async {
-                  setState(() => _breakMinutes = v);
-                  final p = await SharedPreferences.getInstance();
-                  await p.setInt('desert_bg_break_minutes', v);
-                },
-              ),
-            ),
-          ]),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(
-              child: Text(
-                  'العداد الحالي: $_attacksToday${_maxAttacksDay > 0 ? "/$_maxAttacksDay" : ""} يومي · $_attacksThisSession${_maxAttacksSession > 0 ? "/$_maxAttacksSession" : ""} جلسة',
-                  style: TextStyle(
-                      fontSize: 10,
-                      color: AppTheme.subTextColor(context),
-                      decoration: TextDecoration.none)),
-            ),
-            TextButton.icon(
-              onPressed: _resetCounters,
-              icon: const Icon(Icons.refresh_rounded,
-                  size: 14, color: AppTheme.orange),
-              label: const Text('تصفير',
-                  style: TextStyle(fontSize: 11, color: AppTheme.orange)),
-              style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 8)),
             ),
           ]),
         ],
@@ -1267,9 +1275,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Shared widgets
-  // ═══════════════════════════════════════════════════════
   Widget _sourcePicker(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 4, 0, 4),
