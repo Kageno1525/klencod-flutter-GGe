@@ -29,11 +29,11 @@ class DesertAutoService {
   static const int kFailedCooldownMin = 5;
   static const int kInterAttackDelaySec = 3;
 
-  // ✅ الـ caps الديناميكية (زي JS مع تعلم)
-  static const int kCapStart = 80;
-  static const int kCapMin = 30;
-  static const int kCapMax = 260;
-  static const int kCapGrowStep = 15;
+  // ✅ الـ caps الديناميكية
+  static const int kCapStart = 190;    // ← الحد الأدنى لبرج level 35 (~183)
+  static const int kCapMin = 50;       // لو برج صغير (نادر)
+  static const int kCapMax = 320;      // الحد الأقصى للـ wave
+  static const int kCapGrowStep = 20;  // ينمو 20 كل نجاح
 
   static const _kCapsSuccessKey = 'desert_cap_ok_v3';
   static const _kCapsFailKey = 'desert_cap_fail_v3';
@@ -55,7 +55,6 @@ class DesertAutoService {
 
   final Map<String, DateTime> _failedTowers = {};
 
-  // ✅ خزائن الـ caps
   final Map<String, int> _lastSuccessCaps = {};
   final Map<String, int> _lastFailCaps = {};
 
@@ -141,9 +140,6 @@ class DesertAutoService {
     await p.setString(_kFailedTowers, jsonEncode(data));
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  ✅ إدارة الـ caps
-  // ═══════════════════════════════════════════════════════════
   Future<void> _loadCaps() async {
     final p = await SharedPreferences.getInstance();
     try {
@@ -475,9 +471,6 @@ class DesertAutoService {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  ⚔️ _tryAttackTowers — سقف متعلم + تعلم من 313/نجاح
-  // ═══════════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
 
