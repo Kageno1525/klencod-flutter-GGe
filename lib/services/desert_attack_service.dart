@@ -547,6 +547,22 @@ class DesertAttackService {
           'HBW': -1, 'KID': tower.kid, 'PTT': 1, 'SD': 0,
         }),
         responseCmd: 'csm', timeoutMs: 25000, isAction: true,
+        // ✅ فلترة: نتأكد إن الرد بتاع البرج ده (بمطابقة TX/TY)
+        predicate: (m) {
+          if (m.payload == null) return true;
+          try {
+            final data = jsonDecode(m.payload!) as Map;
+            final a = data['A'] as Map?;
+            final inner = a?['M'] as Map?;
+            final ta = inner?['TA'] as List?;
+            if (ta == null || ta.length < 3) return true;
+            final tx = int.tryParse(ta[1].toString());
+            final ty = int.tryParse(ta[2].toString());
+            return tx == tower.x && ty == tower.y;
+          } catch (_) {
+            return true;
+          }
+        },
       );
       if (resp.resultCode == 0 && resp.payload != null) {
         int? mid, scouts, sr;
@@ -750,8 +766,7 @@ class DesertAttackService {
 
     await _ensureKingdom(tower.kid);
     try {
-      // ✅ WT: 0 = نفس أمر الهجوم الشغال بالريشة
-      // ✅ PTT: 1 = Premium Travel Type (الريشة)
+      // ✅ WT: 0، PTT: 1 (الريشة)
       final payload = {
         'SX': source.x, 'SY': source.y,
         'TX': tower.x, 'TY': tower.y,
@@ -778,6 +793,22 @@ class DesertAttackService {
       final resp = await conn.sendXtAndWait(
         'cra', jsonEncode(payload),
         responseCmd: 'cra', timeoutMs: 25000, isAction: true,
+        // ✅✅✅ فلترة: نتأكد إن الرد بتاع هجمتنا (بمطابقة TA)
+        predicate: (m) {
+          if (m.payload == null) return true;
+          try {
+            final data = jsonDecode(m.payload!) as Map;
+            final aam = data['AAM'] as Map?;
+            final inner = aam?['M'] as Map?;
+            final ta = inner?['TA'] as List?;
+            if (ta == null || ta.length < 3) return true;
+            final tx = int.tryParse(ta[1].toString());
+            final ty = int.tryParse(ta[2].toString());
+            return tx == tower.x && ty == tower.y;
+          } catch (_) {
+            return true;
+          }
+        },
       );
 
       TrafficLog.add('ST', '[Desert-Attack] resp result=${resp.resultCode}');
@@ -799,7 +830,10 @@ class DesertAttackService {
       if (resp.resultCode == 218) return DesertAttackResult.fail('LORD_BUSY_218');
       if (resp.resultCode == 181) return DesertAttackResult.fail('MAX_MOVEMENTS_181');
       if (resp.resultCode == 100) return DesertAttackResult.fail('CRA_100');
-      if (resp.resultCode == 313) return DesertAttackResult.fail('CRA_313 (Already gone)');
+      // ✅✅✅ 313 = TOO_MANY_UNITS (مش Already gone)
+      if (resp.resultCode == 313) {
+        return DesertAttackResult.fail('TOO_MANY_UNITS_313 (وحدات كتير على البرج)');
+      }
       return DesertAttackResult.fail('CRA ${resp.resultCode}');
     } catch (e) {
       TrafficLog.add('ER', '[Desert-Attack] exception: $e');

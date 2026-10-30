@@ -72,11 +72,9 @@ class TrafficLog {
   static final StreamController<LogEntry> _ctrl = StreamController.broadcast();
   static const int maxEntries = 3000;
 
-  // Legacy API (متوافق مع الكود القديم)
   static List<String> get entries => _entries.map((e) => e.line).toList();
   static Stream<String> get stream => _ctrl.stream.map((e) => e.line);
 
-  // New API
   static List<LogEntry> get logEntries => List.unmodifiable(_entries);
   static Stream<LogEntry> get entryStream => _ctrl.stream;
 
@@ -308,7 +306,6 @@ class GgeClient {
           }
         }
 
-        // ✅ قراءة الوحدات المفتوحة من gpc — لكل قلعة على حدة
         final gpc = data['gpc'];
         if (gpc is Map) {
           final areas = gpc['A'] as List?;
@@ -322,7 +319,6 @@ class GgeClient {
               final aid = _asInt(area['AID']);
               final areaSet = <int>{};
 
-              // ✅ U = الوحدات الأساسية
               final unlockedU = u['U'] as List?;
               if (unlockedU != null) {
                 for (final id in unlockedU) {
@@ -334,7 +330,6 @@ class GgeClient {
                 }
               }
 
-              // ✅ L = وحدات Elite/Legendary
               final unlockedL = u['L'] as List?;
               if (unlockedL != null) {
                 for (final id in unlockedL) {
@@ -718,6 +713,7 @@ class GgeClient {
     required String responseCmd,
     int timeoutMs = 30000,
     bool isAction = false,
+    bool Function(XtMessage)? predicate,
   }) =>
       _sendXtAndWait(
         cmd,
@@ -725,6 +721,7 @@ class GgeClient {
         responseCmd: responseCmd,
         timeoutMs: timeoutMs,
         isAction: isAction,
+        predicate: predicate,
       );
 
   Future<String> sendAndWaitRaw(
@@ -915,23 +912,27 @@ class GgeClient {
     return completer.future;
   }
 
+  // ✅✅✅ _sendXtAndWait مع predicate اختياري
   Future<XtMessage> _sendXtAndWait(
     String cmd,
     String payload, {
     required String responseCmd,
     int timeoutMs = 30000,
     bool isAction = false,
+    bool Function(XtMessage)? predicate,
   }) async {
     final completer = Completer<XtMessage>();
     late StreamSubscription sub;
     Timer? timer;
 
     sub = _xtCtrl.stream.listen((m) {
-      if (m.command == responseCmd && !completer.isCompleted) {
-        timer?.cancel();
-        sub.cancel();
-        completer.complete(m);
-      }
+      if (m.command != responseCmd) return;
+      // ✅✅✅ فلترة إضافية للردود
+      if (predicate != null && !predicate(m)) return;
+      if (completer.isCompleted) return;
+      timer?.cancel();
+      sub.cancel();
+      completer.complete(m);
     });
 
     timer = Timer(Duration(milliseconds: timeoutMs), () {
