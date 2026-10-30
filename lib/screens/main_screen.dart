@@ -17,7 +17,8 @@ import 'package:gge/services/background_service.dart';
 import 'package:gge/screens/auto_defense_screen.dart';
 import 'package:gge/screens/attack_screen.dart';
 import 'package:gge/screens/desert_attack_screen.dart';
-import 'package:gge/screens/logs_screen.dart'; // ✅ NEW
+import 'package:gge/screens/logs_screen.dart';
+import 'package:gge/screens/inventory_screen.dart'; // ✅ NEW
 
 class MainScreen extends StatefulWidget {
   final GgeClient client;
@@ -410,9 +411,27 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // ✅ Logs (جديد)
+        // ✅ المخزن / البيع (جديد)
         FadeSlideIn(
           delay: const Duration(milliseconds: 600),
+          child: EnterTile(
+            icon: Icons.inventory_2_rounded,
+            title: 'المخزن / البيع',
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF7B1FA2), Color(0xFFBA68C8)],
+            ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => InventoryScreen(client: widget.client)),
+            ),
+          ),
+        ),
+        // ✅ Logs
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 650),
           child: EnterTile(
             icon: Icons.terminal_rounded,
             title: 'Logs',

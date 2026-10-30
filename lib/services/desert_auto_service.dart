@@ -26,15 +26,15 @@ class DesertAutoService {
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 30;
-  static const int kFailedCooldownMin = 5;
+  static const int kFailedCooldownMin = 30; // 30 دقيقة للبرج اللي يفشل
   static const int kInterAttackDelaySec = 3;
 
-  // ✅ المفاتيح دي هنستخدمها في الشاشة عشان نغير الأرقام
+  // ✅ المفاتيح دي هنستخدمها في الشاشة عشان نغير الأرقام (204)
   static const String kCapStartKey = 'desert_auto_cap_start';
   static const String kCapMinKey = 'desert_auto_cap_min';
   static const String kCapMaxKey = 'desert_auto_cap_max';
 
-  // القيم الافتراضية (لو المستخدم مغيرهاش)
+  // القيم الافتراضية
   static const int kDefaultCapStart = 204;
   static const int kDefaultCapMin = 204;
   static const int kDefaultCapMax = 204;
@@ -416,7 +416,7 @@ class DesertAutoService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // ⚔️ الهجوم التلقائي (بدون تجسس نهائياً)
+  // ⚔️ الهجوم التلقائي (بدون تجسس + يتخطى الأبراج المدمرة)
   // ═══════════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
@@ -465,7 +465,9 @@ class DesertAutoService {
           return;
         }
 
+        // ✅ ضفنا .where((t) => !t.isDead) عشان يتخطى الأبراج المدمرة
         final candidates = _towers
+            .where((t) => !t.isDead) 
             .where((t) => !_svc!.isTowerInCooldown(t))
             .where((t) => !_shouldSkipTower(t))
             .where((t) => !_attackedThisTick.contains(t.key))
@@ -474,7 +476,7 @@ class DesertAutoService {
           ..sort((a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
 
         if (candidates.isEmpty) {
-          _setStatus('⏳ No candidate towers (all cooldown/failed)');
+          _setStatus('⏳ No candidate towers (all dead/cooldown/failed)');
           return;
         }
 
@@ -487,7 +489,7 @@ class DesertAutoService {
 
           final cap = _capFor(tower, startCap, minCap, maxCap);
 
-          // ✅ هجوم مباشر بدون تجسس (بنباصي DefenderSummary فاضي عشان نوزع الـ 204)
+          // ✅ هجوم مباشر (بنباصي DefenderSummary فاضي عشان نوزع الـ 204)
           final suggestion = _svc!.suggestCounter(
             available: sendable,
             defenders: DefenderSummary(), 
@@ -543,7 +545,7 @@ class DesertAutoService {
             continue;
           }
 
-          // لو البرج ميت أو أي فشل تاني
+          // لو البرج ميت أو أي فشل تاني (هيتخطاه عشان ضافه للـ failed لمدة 30 دقيقة)
           TrafficLog.add('ER', '[Desert-Auto] ❌ ${tower.coordsLabel}: ${result.error}');
           _setStatus('❌ ${tower.coordsLabel} failed');
           _markTowerFailed(tower);
