@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import 'package:shared_preferences/shared_preferences.dart'; // ✅ إضافة
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
@@ -69,7 +69,7 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _isDark = widget.initialDark;
     _locale = S.current;
-    unawaited(_updateForegroundState(true)); // ✅ التطبيق فتح
+    unawaited(_updateForegroundState(true));
     unawaited(_logBgWsStatus());
   }
 
@@ -82,16 +82,25 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     GgeClient().onAppLifecycleChanged(state);
-    
-    // ✅ حفظ حالة التطبيق (مفتوح/مقفول) عشان الخدمة الخلفية
+
     unawaited(_updateForegroundState(state == AppLifecycleState.resumed));
+
+    // ✅ NEW: بلغ الـ BG فوراً عشان يتصرف
+    try {
+      if (state == AppLifecycleState.resumed) {
+        FlutterForegroundTask.sendDataToTask('UI_RESUMED');
+        TrafficLog.add('ST', '[Lifecycle] → BG: UI_RESUMED');
+      } else if (state == AppLifecycleState.paused) {
+        FlutterForegroundTask.sendDataToTask('UI_PAUSED');
+        TrafficLog.add('ST', '[Lifecycle] → BG: UI_PAUSED');
+      }
+    } catch (_) {}
 
     if (state == AppLifecycleState.resumed) {
       unawaited(_logBgWsStatus());
     }
   }
 
-  // ✅ دالة جديدة
   Future<void> _updateForegroundState(bool isForeground) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -104,7 +113,7 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
     try {
       final info = await BackgroundService.readStatus();
       TrafficLog.add('ST',
-          '[BG Status] ${info['status']} @ ${info['time']} (msgs=${info['msgs']})');
+          '[BG Status] ${info['status']} @ ${info['time']}');
     } catch (e) {
       TrafficLog.add('ER', '[BG Status] read failed: $e');
     }

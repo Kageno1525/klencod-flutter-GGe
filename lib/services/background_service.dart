@@ -20,14 +20,20 @@ void ggeBackgroundCallback() {
 final _callbackRef = ggeBackgroundCallback;
 
 // ═══════════════════════════════════════════════════════════
-//  Task Handler — Orchestrator فقط
-//  بيشغّل: Login → Notifications → AutoTrain → AutoDefense → DesertAuto
+//  Task Handler — Orchestrator + UI-aware
+//
+//  ✅ نمط العمل الجديد:
+//    • UI مفتوح → BG متوقف تماماً (WS مقفول + services متوقفة)
+//    • UI مقفول → BG يشتغل كامل
+//    • الانتقال فوري عبر sendDataToTask + polling كل 2s
 // ═══════════════════════════════════════════════════════════
 class _GgeTaskHandler extends TaskHandler {
   GgeClient? _client;
   Timer? _statusTimer;
+  Timer? _presenceTimer;
+  bool _running = false;
+  String? _token;
 
-  // ✅ NEW: log helper — يبعت للـ UI + debugPrint
   void _log(String s) {
     debugPrint('[BG] $s');
     try {
@@ -41,19 +47,76 @@ class _GgeTaskHandler extends TaskHandler {
     await _saveStatus('STARTING');
 
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('login_token');
-    if (token == null || token.isEmpty) {
+    _token = prefs.getString('login_token');
+    if (_token == null || _token!.isEmpty) {
       _log('No token available');
       await _saveStatus('NO_TOKEN');
       return;
     }
 
-    // ── مزامنة desert source بين UI key و Auto key ──
+    // ✅ لو UI شغال دلوقتي → BG يستنى
+    final isFg = prefs.getBool('is_app_foreground') ?? false;
+    if (isFg) {
+      _log('App is in foreground — BG waiting');
+      await _saveStatus('WAITING_FOR_UI');
+      _watchPresence();
+      return;
+    }
+
+    // UI مقفول → يبدأ كامل
+    await _startAll();
+    _watchPresence();
+  }
+
+  /// ✅ راقب UI كل 2 ثانية (fail-safe إذا الإشارة الفورية فشلت)
+  void _watchPresence() {
+    _presenceTimer?.cancel();
+    _presenceTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (_token == null) return;
+
+      final p = await SharedPreferences.getInstance();
+      final fg = p.getBool('is_app_foreground') ?? false;
+
+      // الحالة 1: UI مفتوح و BG شغال → أوقف
+      if (fg && _running) {
+        _log('Presence: UI opened → pausing');
+        _presenceTimer?.cancel();
+        _presenceTimer = null;
+        await _pauseAll();
+        _watchPresence();
+        return;
+      }
+
+      // الحالة 2: UI مقفول و BG متوقف → شغّل
+      if (!fg && !_running) {
+        // تأخير بسيط للتأكد إن UI خلص + تحديث الـ flag
+        await Future.delayed(const Duration(seconds: 2));
+        final fg2 = (await SharedPreferences.getInstance())
+                .getBool('is_app_foreground') ??
+            false;
+        if (fg2) return; // رجع للـ foreground، استنى الدورة الجاية
+
+        _log('Presence: UI closed → starting');
+        _presenceTimer?.cancel();
+        _presenceTimer = null;
+        await _startAll();
+        _watchPresence();
+      }
+    });
+  }
+
+  Future<void> _startAll() async {
+    if (_running) return;
+    if (_token == null) return;
+    _running = true;
+
+    final prefs = await SharedPreferences.getInstance();
+
+    // ── مزامنة desert source ──
     final desertSourceV2 = prefs.getInt('desert_source_v2') ?? 0;
     if (desertSourceV2 > 0 &&
         (prefs.getInt('desert_auto_source') ?? 0) == 0) {
       await prefs.setInt('desert_auto_source', desertSourceV2);
-      _log('Synced desert_auto_source → $desertSourceV2');
     }
 
     // ── Init client ──
@@ -61,50 +124,37 @@ class _GgeTaskHandler extends TaskHandler {
     GgeClient.allowBackgroundReconnect = true;
     _client!.onAppLifecycleChanged(AppLifecycleState.paused);
 
-    // ── Connect ──
+    // ── Connect + Login ──
     await _saveStatus('CONNECTING');
     try {
       await _client!.connect();
+      await _client!.loginWithToken(_token!);
     } catch (e) {
-      _log('Connect failed: $e');
+      _log('Connect/login failed: $e');
       await _saveStatus('CONNECT_FAILED', extra: '$e');
+      _running = false;
+      try {
+        await _client?.dispose();
+      } catch (_) {}
+      _client = null;
       return;
     }
 
-    // ── Login ──
-    await _saveStatus('LOGGING_IN');
-    try {
-      await _client!.loginWithToken(token);
-    } catch (e) {
-      _log('Login failed: $e');
-      await _saveStatus('LOGIN_FAILED', extra: '$e');
-      return;
-    }
+    await prefs.setBool('bg_session_conflict', false);
     _log('Online');
     await _saveStatus('ONLINE');
 
-    // ✅ NEW: نمسح أي conflict flag قديم — login نجح يبقى مفيش conflict
-    await prefs.setBool('bg_session_conflict', false);
-
-    // ✅ NEW: Session conflict handler
-    // لما الـ client يكتشف إن حد تاني فتح الحساب، بنسجل flag للـ UI
-    // ونوقف كل الخدمات عشان مفيش requests فاشلة
+    // ── Session conflict handler ──
     _client!.onSessionConflict = () async {
-      _log('⚠️ Session conflict detected — stopping all services');
+      _log('⚠️ Session conflict — stopping');
       try {
-        final p = await SharedPreferences.getInstance();
-        await p.setBool('bg_session_conflict', true);
+        await prefs.setBool('bg_session_conflict', true);
       } catch (_) {}
-      await _saveStatus('SESSION_CONFLICT',
-          extra: 'Account logged in elsewhere');
-
-      try { AutoTrainService.instance.stop(); } catch (_) {}
-      try { AutoDefenseService.instance.stop(); } catch (_) {}
-      try { DesertAutoService.instance.stop(); } catch (_) {}
-      try { NotificationsService.stopListening(); } catch (_) {}
+      await _saveStatus('SESSION_CONFLICT');
+      await _pauseAll();
     };
 
-    // ── 1. Notifications (يستمع على نفس GgeClient) ──
+    // ── Services ──
     try {
       NotificationsService.startListening();
       _log('Notifications listening');
@@ -112,7 +162,6 @@ class _GgeTaskHandler extends TaskHandler {
       _log('Notifications error: $e');
     }
 
-    // ── 2. Auto Train ──
     try {
       await AutoTrainService.instance.start(_client!);
       _log('AutoTrain started');
@@ -120,12 +169,10 @@ class _GgeTaskHandler extends TaskHandler {
       _log('AutoTrain error: $e');
     }
 
-    // ── 3. Auto Defense (التهريب التلقائي) ──
     try {
       AutoDefenseService.instance.onBeforeEvac = () async {
-        final p = await SharedPreferences.getInstance();
-        // BG يهرب بس لو الـ app في الخلفية (الـ UI بيتصرف لو في المقدمة)
-        return !(p.getBool('is_app_foreground') ?? false);
+        final pp = await SharedPreferences.getInstance();
+        return !(pp.getBool('is_app_foreground') ?? false);
       };
       await AutoDefenseService.instance.init();
       _log('AutoDefense: '
@@ -134,7 +181,6 @@ class _GgeTaskHandler extends TaskHandler {
       _log('AutoDefense error: $e');
     }
 
-    // ── 4. Desert Auto (هجوم الأبراج) ──
     try {
       _setupDesertCallbacks();
       await DesertAutoService.instance.start(_client!);
@@ -143,7 +189,7 @@ class _GgeTaskHandler extends TaskHandler {
       _log('DesertAuto error: $e');
     }
 
-    // ── Periodic status sync للـ UI poller ──
+    // ── Status sync ──
     _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _saveStatus(
@@ -156,20 +202,43 @@ class _GgeTaskHandler extends TaskHandler {
     });
   }
 
-  /// ✅ فرض الحدود اليومية/الجلسة + أولوية التهريب
+  Future<void> _pauseAll() async {
+    _log('Pausing all');
+    _running = false;
+    _statusTimer?.cancel();
+    _statusTimer = null;
+
+    try {
+      AutoTrainService.instance.stop();
+    } catch (_) {}
+    try {
+      AutoDefenseService.instance.stop();
+    } catch (_) {}
+    try {
+      DesertAutoService.instance.stop();
+    } catch (_) {}
+    try {
+      NotificationsService.stopListening();
+    } catch (_) {}
+
+    try {
+      await _client?.dispose();
+    } catch (_) {}
+    _client = null;
+
+    await _saveStatus('PAUSED_UI');
+  }
+
   void _setupDesertCallbacks() {
     DesertAutoService.instance.onBeforeAttack = () async {
       final p = await SharedPreferences.getInstance();
 
-      // (1) لو الـ UI شغال في المقدمة → سيبه للـ UI
       if (p.getBool('is_app_foreground') ?? false) return false;
 
-      // (2) أولوية الدفاع: لو في تهريب نشط → بلاش هجوم
       if (AutoDefenseService.instance.activeEvacuations.isNotEmpty) {
         return false;
       }
 
-      // (3) حد يومي
       final maxDay = p.getInt('desert_bg_max_attacks_day') ?? 0;
       if (maxDay > 0) {
         final now = DateTime.now();
@@ -184,7 +253,6 @@ class _GgeTaskHandler extends TaskHandler {
         if (count >= maxDay) return false;
       }
 
-      // (4) حد جلسة
       final maxSess = p.getInt('desert_bg_max_attacks_session') ?? 0;
       if (maxSess > 0 &&
           DesertAutoService.instance.attacksThisSession >= maxSess) {
@@ -210,8 +278,38 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   @override
+  void onReceiveData(Object data) {
+    // ✅ إشارة فورية من UI
+    if (data is String) {
+      if (data == 'UI_RESUMED') {
+        _log('Signal: UI_RESUMED');
+        if (_running) {
+          _pauseAll();
+          _watchPresence();
+        }
+      } else if (data == 'UI_PAUSED') {
+        _log('Signal: UI_PAUSED');
+        if (!_running && _token != null) {
+          // تأخير بسيط ثم بدء
+          Future.delayed(const Duration(seconds: 2), () async {
+            final fg = (await SharedPreferences.getInstance())
+                    .getBool('is_app_foreground') ??
+                false;
+            if (!fg && !_running) {
+              await _startAll();
+              _watchPresence();
+            }
+          });
+        }
+      }
+    }
+  }
+
+  @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    _log('Service destroying');
+    _log('Destroying');
+    _presenceTimer?.cancel();
+    _presenceTimer = null;
     _statusTimer?.cancel();
     _statusTimer = null;
 
@@ -231,14 +329,13 @@ class _GgeTaskHandler extends TaskHandler {
       await _client?.dispose();
     } catch (_) {}
     _client = null;
+    _running = false;
 
     await _saveStatus('DESTROYED');
   }
 
   @override
   void onRepeatEvent(DateTime timestamp) {}
-  @override
-  void onReceiveData(Object data) {}
   @override
   void onNotificationButtonPressed(String id) {}
   @override
@@ -257,7 +354,7 @@ class _GgeTaskHandler extends TaskHandler {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  BackgroundService static class — **بدون أي تغيير عن الأصلي**
+//  BackgroundService static class — بدون تغيير
 // ═══════════════════════════════════════════════════════════
 class BackgroundService {
   BackgroundService._();
