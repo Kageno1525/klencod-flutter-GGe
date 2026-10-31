@@ -26,17 +26,16 @@ class DesertAutoService {
   static const _kTransferUnitIds = 'desert_auto_transfer_unit_ids';
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
-  // ═══ ثوابت الهجوم (مطابقة للخلفية) ═══
+  // ═══ ثوابت ═══
   static const int kMinUnitsToAttack = 30;
-  static const int kSuccessCooldownH = 4;      // نجاح → 4 ساعات
-  static const int kFailedCooldownH = 4;       // فشل/مدمر → 4 ساعات
-  static const int k313CooldownMin = 5;        // 313 → 5 دقائق
-  static const int k24hCooldownMin = 24 * 60;  // عند الوصول للحد الأدنى للـ cap
-  static const int kInterAttackDelaySec = 15;  // + random(5) = 15-19 ثانية
+  static const int kSuccessCooldownH = 4;
+  static const int kFailedCooldownH = 4;
+  static const int k313CooldownMin = 5;
+  static const int k24hCooldownMin = 24 * 60;
+  static const int kInterAttackDelaySec = 15;
   static const int kMaxRadius = 50;
   static const int kRadiusStep = 5;
 
-  // ✅ مفاتيح الأرقام (204)
   static const String kCapStartKey = 'desert_auto_cap_start';
   static const String kCapMinKey = 'desert_auto_cap_min';
   static const String kCapMaxKey = 'desert_auto_cap_max';
@@ -54,8 +53,7 @@ class DesertAutoService {
 
   int attacksThisSession = 0;
   int towersScanned = 0;
-  int get currentRadius => _sessionRadius;
-
+  
   Timer? _timer;
   StreamSubscription? _xtSub;
   bool _running = false;
@@ -182,17 +180,14 @@ class DesertAutoService {
     final f = _lastFailCaps[t.key];
 
     if (s == null && f == null) return startCap;
-
     if (s == null) {
       final next = f! - 20;
       return next < minCap ? minCap : (next > maxCap ? maxCap : next);
     }
-
     if (f == null) {
       final next = s + 15;
       return next > maxCap ? maxCap : next;
     }
-
     return s;
   }
 
@@ -203,15 +198,12 @@ class DesertAutoService {
 
   void _on313(DesertTower t, int attempted, int minCap) {
     _lastFailCaps[t.key] = attempted;
-    // ✅ لو وصلنا الحد الأدنى، البرج غير قابل للهجوم → 24 ساعة
     if (attempted <= minCap) {
-      _failedTowers[t.key] = DateTime.now().add(Duration(minutes: k24hCooldownMin));
-      TrafficLog.add('ST', '[Desert-Auto] 💀 ${t.coordsLabel} unusable at cap<=$minCap (24h)');
+      _markTowerCooldown(t, minutes: k24hCooldownMin);
+      TrafficLog.add('ST', '[Desert-Auto] 💀 ${t.coordsLabel} cap<=minCap → 24h');
     } else {
-      // ✅ لسه نقدر ننقص cap → 5 دقائق قبل المحاولة
-      _failedTowers[t.key] = DateTime.now().add(Duration(minutes: k313CooldownMin));
+      _markTowerCooldown(t, minutes: k313CooldownMin);
     }
-    _saveFailedTowers();
     _saveCaps();
   }
 
@@ -222,10 +214,7 @@ class DesertAutoService {
     if (_running) return;
 
     if (_activeTick != null) {
-      TrafficLog.add('ST', '[Desert-Auto] ⏳ Waiting for old tick...');
-      try {
-        await _activeTick!.timeout(const Duration(seconds: 60));
-      } catch (_) {}
+      try { await _activeTick!.timeout(const Duration(seconds: 60)); } catch (_) {}
     }
 
     _attackingNow.clear();
@@ -241,7 +230,6 @@ class DesertAutoService {
     attacksThisSession = 0;
     towersScanned = 0;
 
-    // ✅ reset radius to user setting
     try {
       final settings = await DesertAttackSettings.load();
       _sessionRadius = settings.radiusTiles.clamp(kRadiusStep, kMaxRadius);
@@ -250,7 +238,6 @@ class DesertAutoService {
     }
 
     _xtSub?.cancel();
-
     if (sourceAreaId != null && sourceAreaId > 0) {
       await setSource(sourceAreaId);
     }
@@ -295,6 +282,32 @@ class DesertAutoService {
     _saveFailedTowers();
   }
 
+  Future<List<OwnedCastle>?> _getCastlesCached({bool force = false}) async {
+    if (_client == null) return null;
+    try {
+      return await _client!.getCastles();
+    } catch (e) {
+      TrafficLog.add('ER', '[Desert-Auto] getCastles: $e');
+      return null;
+    }
+  }
+
+  OwnedCastle? _findDesert(List<OwnedCastle>? castles, int desertArea) {
+    if (castles == null) return null;
+    for (final c in castles) {
+      if (c.areaId == desertArea) return c;
+    }
+    return null;
+  }
+
+  OwnedCastle? _findMain(List<OwnedCastle>? castles) {
+    if (castles == null) return null;
+    for (final c in castles) {
+      if (c.areaType == 1) return c;
+    }
+    return null;
+  }
+
   // ═══════════════════════════════════════════════════════
   //  Tick
   // ═══════════════════════════════════════════════════════
@@ -335,9 +348,6 @@ class DesertAutoService {
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Replenish (زي القديم)
-  // ═══════════════════════════════════════════════════════
   Future<void> _maybeReplenish() async {
     if (_client == null) return;
     final p = await SharedPreferences.getInstance();
@@ -347,21 +357,16 @@ class DesertAutoService {
     final lastStr = p.getString(_kLastReplenish);
     if (lastStr != null) {
       final last = DateTime.tryParse(lastStr);
-      if (last != null && DateTime.now().difference(last).inMinutes < 20) {
-        return;
-      }
+      if (last != null && DateTime.now().difference(last).inMinutes < 20) return;
     }
 
     final minOff = p.getInt(_kMinOffensive) ?? kMinUnitsToAttack;
 
     try {
-      final castles = await _client!.getCastles();
-      OwnedCastle? main;
-      OwnedCastle? desert;
-      for (final c in castles) {
-        if (c.areaType == 1) main = c;
-        if (c.areaId == desertArea) desert = c;
-      }
+      final castles = await _getCastlesCached();
+      if (castles == null) return;
+      final desert = _findDesert(castles, desertArea);
+      final main = _findMain(castles);
       if (desert == null || main == null) return;
       if (main.areaId == desert.areaId) return;
 
@@ -373,42 +378,31 @@ class DesertAutoService {
           .fold<int>(0, (s, u) => s + u.amount);
       if (offCount >= minOff) return;
 
-      _setStatus('🔄 Need transfer: $offCount < $minOff');
+      TrafficLog.add('ST', '[Desert-Auto] 🔄 Need transfer: $offCount < $minOff');
 
       final mainUnits = await _client!.getCastleUnits(main.kingdomId, main.areaId, catalog);
-
       final selectedIds = await getTransferUnitIds();
       var offensiveMain = mainUnits.where((u) => u.isCombat && !u.isDefensive && u.amount > 0).toList();
       if (selectedIds.isNotEmpty) {
         offensiveMain = offensiveMain.where((u) => selectedIds.contains(u.wodId)).toList();
       }
-      if (offensiveMain.isEmpty) {
-        _setStatus('❌ Main has no selected offensive units');
-        return;
-      }
+      if (offensiveMain.isEmpty) return;
 
       final toTransfer = <List<int>>[];
       for (final u in offensiveMain.take(10)) {
         toTransfer.add([u.wodId, u.amount]);
       }
 
-      _setStatus('📤 Transferring ${toTransfer.length} types...');
       final result = await _client!.transfer(source: main, target: desert, units: toTransfer);
-
       if (result.success) {
         await p.setString(_kLastReplenish, DateTime.now().toIso8601String());
-        _setStatus('✅ Transfer queued (~10-15m)');
-      } else {
-        _setStatus('❌ Transfer failed: ${result.error}');
+        TrafficLog.add('ST', '[Desert-Auto] ✅ Transfer queued');
       }
     } catch (e) {
-      _setStatus('❌ Replenish error: $e');
+      TrafficLog.add('ST', '[Desert-Auto] replenish skip: $e');
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Rescan (merge, لا يستبدل)
-  // ═══════════════════════════════════════════════════════
   Future<void> _rescanAt(int radius) async {
     if (_client == null || _svc == null) return;
     if (_scanInProgress) return;
@@ -419,17 +413,13 @@ class DesertAutoService {
 
     _scanInProgress = true;
     try {
-      final castles = await _client!.getCastles();
-      OwnedCastle? desert;
-      for (final c in castles) {
-        if (c.areaId == desertArea) desert = c;
-      }
+      final castles = await _getCastlesCached();
+      final desert = _findDesert(castles, desertArea);
       if (desert == null) return;
 
       _setStatus('🔍 Scan @ R=$radius...');
       final newTowers = await _svc!.scanArea(source: desert, radiusTiles: radius);
 
-      // ✅ merge
       int added = 0;
       for (final t in newTowers) {
         final idx = _towers.indexWhere((e) => e.x == t.x && e.y == t.y && e.kid == t.kid);
@@ -444,16 +434,11 @@ class DesertAutoService {
       towersScanned = _towers.length;
       await p.setString(_kLastScan, DateTime.now().toIso8601String());
       _setStatus('✓ ${_towers.length} towers (+$added) @ R=$radius');
-    } catch (e) {
-      rethrow;
     } finally {
       _scanInProgress = false;
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Attack loop (مطابق للخلفية)
-  // ═══════════════════════════════════════════════════════
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
 
@@ -466,16 +451,13 @@ class DesertAutoService {
     final maxCap = p.getInt(kCapMaxKey) ?? kDefaultCapMax;
 
     try {
-      final castles = await _client!.getCastles();
-      OwnedCastle? desert;
-      for (final c in castles) {
-        if (c.areaId == desertArea) desert = c;
+      final castles = await _getCastlesCached();
+      final desert = _findDesert(castles, desertArea);
+      if (desert == null) {
+        _setStatus('❌ No desert castle');
+        return;
       }
-      if (desert == null) return;
 
-      final catalog = await _client!.loadCatalog();
-
-      // ═══ 1. Scan أولي / دوري ═══
       final lastScanStr = p.getString(_kLastScan);
       final lastScan = lastScanStr != null ? DateTime.tryParse(lastScanStr) : null;
       final needsScan = _towers.isEmpty ||
@@ -486,7 +468,7 @@ class DesertAutoService {
           await _rescanAt(_sessionRadius);
         } catch (e) {
           if (e.toString().contains('SCAN_COOLDOWN')) {
-            _setStatus('⏱ Scan cooldown, wait...');
+            _setStatus('⏱ Scan cooldown');
             return;
           }
           _setStatus('❌ Scan: $e');
@@ -494,12 +476,26 @@ class DesertAutoService {
         }
       }
 
+      if (_towers.isEmpty) {
+        _setStatus('💤 No towers found');
+        return;
+      }
+
+      // ✅ مفيش تجسس خلاص. بنقرا الأبراج المدمرة من السكان وبنحطلها 4 ساعات فوراً
+      for (final t in _towers) {
+        if (t.isDead && !_shouldSkipTower(t)) {
+          _markTowerCooldown(t, minutes: kFailedCooldownH * 60);
+          TrafficLog.add('ST', '[Desert-Auto] 💀 ${t.coordsLabel} dead (rs=${t.rs}) → ${kFailedCooldownH}h');
+        }
+      }
+
       int attempts = 0;
       const int maxAttempts = 50;
 
-      // ═══ 2. Attack loop مع Radius expansion ═══
       while (_running && attempts < maxAttempts) {
+        // هنختار من الأبراج الحية بس
         final ready = _towers
+            .where((t) => !t.isDead) 
             .where((t) => !_shouldSkipTower(t))
             .where((t) => !_attackedThisTick.contains(t.key))
             .where((t) => !_attackingNow.contains(t.key))
@@ -507,7 +503,6 @@ class DesertAutoService {
           ..sort((a, b) => a.distanceFromSource.compareTo(b.distanceFromSource));
 
         if (ready.isEmpty) {
-          // ✅ مفيش جاهز → كبّر radius
           if (_sessionRadius < kMaxRadius) {
             final newRadius = min(_sessionRadius + kRadiusStep, kMaxRadius);
             try {
@@ -524,12 +519,11 @@ class DesertAutoService {
               return;
             }
           }
-          _setStatus('💤 All cooldown (R=$kMaxRadius)');
+          _setStatus('💤 All done (R=$kMaxRadius)');
           return;
         }
 
-        // ═══ جلب وحدات ═══
-        final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog);
+        final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog: await _client!.loadCatalog());
         final sendable = freshUnits.where((u) => u.isCombat && u.amount > 0).toList();
         final totalUnits = sendable.fold<int>(0, (s, u) => s + u.amount);
 
@@ -538,7 +532,6 @@ class DesertAutoService {
           return;
         }
 
-        // ═══ قائد ═══
         final cmds = await _client!.getCommanders();
         var freeLords = cmds.where((c) => !c.isBusy).toList();
         final selectedCommanderIds = await getCommanderIds();
@@ -584,19 +577,18 @@ class DesertAutoService {
             leftUnits: suggestion.left,
             middleUnits: suggestion.middle,
             rightUnits: suggestion.right,
-            markCooldownAfterSuccess: false, // ✅ إحنا بنحط cooldown
+            markCooldownAfterSuccess: false,
           );
 
           if (result.success) {
-            _markTowerCooldown(tower, minutes: kSuccessCooldownH * 60); // 4h
+            _markTowerCooldown(tower, minutes: kSuccessCooldownH * 60);
             _onSuccess(tower, suggestion.totalUnits);
             attacksThisSession++;
             _attackedThisTick.add(tower.key);
             TrafficLog.add('ST', '[Desert-Auto] ✅ HIT ${tower.coordsLabel} units=${suggestion.totalUnits}');
             _setStatus('✅ Hit ${tower.coordsLabel} → ${kSuccessCooldownH}h');
 
-            final delaySec = kInterAttackDelaySec + Random().nextInt(5); // 15-19s
-            TrafficLog.add('ST', '[Desert-Auto] ⏳ wait ${delaySec}s');
+            final delaySec = kInterAttackDelaySec + Random().nextInt(5);
             await Future.delayed(Duration(seconds: delaySec));
 
             if (!_running) return;
@@ -624,11 +616,11 @@ class DesertAutoService {
             return;
           }
 
-          // ✅ فشل عادي = احتمال برج مدمر → 4 ساعات
+          // ✅ لو الهجمة فشلت (زي CRA 95) معناها البرج مدمر ومحصلش قتال، بنحطه 4 ساعات
           _markTowerCooldown(tower, minutes: kFailedCooldownH * 60);
           _attackedThisTick.add(tower.key);
           TrafficLog.add('ER', '[Desert-Auto] ❌ ${tower.coordsLabel}: $err → ${kFailedCooldownH}h (dead?)');
-          _setStatus('❌ ${tower.coordsLabel}: ${err.substring(0, min(20, err.length))}');
+          _setStatus('❌ ${tower.coordsLabel}: dead');
           continue;
 
         } finally {
@@ -636,7 +628,7 @@ class DesertAutoService {
         }
       }
     } catch (e) {
-      _setStatus('❌ Attack loop error: $e');
+      _setStatus('❌ Attack loop: $e');
     }
   }
 }

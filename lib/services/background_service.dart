@@ -27,30 +27,14 @@ class _DesertTower {
   String get key => '$x,$y,$kid';
   String get coordsLabel => '($x,$y)';
 
-  // ⚠️ معطّل تماماً: قراءة rs من gaa غير موثوقة
-  // البرج المدمر بيتكتشف من فشل الهجوم نفسه (4h cooldown)
-  bool get isDead => false;
+  // ✅ البرج بيبقى مدمر لو rs أكبر من صفر
+  bool get isDead => rs > 0 && rs < 100000;
 }
 
 class _DefenderWing {
   final int melee, ranged;
   _DefenderWing({required this.melee, required this.ranged});
   int get total => melee + ranged;
-}
-
-class _DesertSpyReport {
-  final int messageId;
-  final int targetX, targetY;
-  final _DefenderWing left, middle, right;
-  final int defensiveStrength;
-  final int rs;
-  _DesertSpyReport({
-    required this.messageId, required this.targetX, required this.targetY,
-    required this.left, required this.middle, required this.right,
-    required this.defensiveStrength, required this.rs,
-  });
-  bool get isDead => rs > 0 && rs < 100000;
-  int get totalEnemyUnits => left.total + middle.total + right.total;
 }
 
 class _XtMsg {
@@ -94,7 +78,6 @@ class _GgeTaskHandler extends TaskHandler {
   int? _sourceAreaId;
   int? _sourceX, _sourceY, _sourceKid;
   final Map<String, List<Completer<_XtMsg>>> _pending = {};
-  int? _latestSpyMessageId;
   final List<_DesertTower> _towers = [];
   final Map<String, DateTime> _cooldowns = {};
   final Map<String, DateTime> _failedTowers = {};
@@ -111,7 +94,6 @@ class _GgeTaskHandler extends TaskHandler {
   Set<int> _rangedUnitIds = {};
   bool _runningDesert = false;
 
-  // ✅ Cap tracking
   final Map<String, int> _lastSuccessCaps = {};
   final Map<String, int> _lastFailCaps = {};
 
@@ -126,9 +108,9 @@ class _GgeTaskHandler extends TaskHandler {
   static const int _kMaxRadius = 50;
   static const int _kRadiusStep = 5;
   static const int _kInterAttackDelaySec = 15;
-  static const int _kTowerSuccessCooldownHours = 4;   // نجاح → 4h
-  static const int _kTowerFailedCooldownHours = 4;    // فشل (برج مدمر محتمل) → 4h
-  static const int _kTower313CooldownMin = 5;         // 313 → 5min (تعديل cap)
+  static const int _kTowerSuccessCooldownHours = 4;
+  static const int _kTowerDeadCooldownHours = 4;
+  static const int _kTower313CooldownMin = 5;
 
   static const String _kCapStartKey = 'desert_auto_cap_start';
   static const String _kCapMinKey = 'desert_auto_cap_min';
@@ -157,9 +139,6 @@ class _GgeTaskHandler extends TaskHandler {
     return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Lifecycle
-  // ═══════════════════════════════════════════════════════
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     _log('Service Started');
@@ -200,9 +179,6 @@ class _GgeTaskHandler extends TaskHandler {
   @override
   void onNotificationDismissed() {}
 
-  // ═══════════════════════════════════════════════════════
-  //  Desert state persistence
-  // ═══════════════════════════════════════════════════════
   Future<void> _loadDesertState() async {
     final prefs = await SharedPreferences.getInstance();
     _desertEnabled = prefs.getBool('desert_auto_enabled') ?? false;
@@ -266,10 +242,6 @@ class _GgeTaskHandler extends TaskHandler {
     }
 
     await _loadCaps();
-
-    _log('Desert loaded: enabled=$_desertEnabled radius=$_radiusTiles srcArea=$_sourceAreaId '
-         'attacks=$_attacksToday/$_maxAttacksDay session=$_maxAttacksSession '
-         'cd=${_cooldowns.length} failed=${_failedTowers.length}');
   }
 
   Future<void> _persistDesertState() async {
@@ -328,9 +300,6 @@ class _GgeTaskHandler extends TaskHandler {
         n.contains('منجنيق') || n.contains('عرادة') || n.contains('قاذف');
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Throttle
-  // ═══════════════════════════════════════════════════════
   Future<void> _throttle({bool isAction = true}) async {
     if (!isAction) {
       await Future.delayed(Duration(milliseconds: 500 + Random().nextInt(700)));
@@ -342,7 +311,6 @@ class _GgeTaskHandler extends TaskHandler {
       if (now.isBefore(_nextBreakAt!)) {
         final wait = _nextBreakAt!.difference(now).inMilliseconds;
         if (wait > 0 && wait < 3600000) {
-          _log('Break ${_nextBreakAt!.difference(now).inMinutes} min');
           await _saveStatus('ON_BREAK', extra: '${_nextBreakAt!.difference(now).inMinutes} min');
           await Future.delayed(Duration(milliseconds: wait));
         }
@@ -365,13 +333,9 @@ class _GgeTaskHandler extends TaskHandler {
 
     if (_breakEvery > 0 && _actionsSinceBreak >= _breakEvery) {
       _nextBreakAt = DateTime.now().add(Duration(minutes: _breakMinutes));
-      _log('Break scheduled: $_breakMinutes min after $_actionsSinceBreak actions');
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Request-Response
-  // ═══════════════════════════════════════════════════════
   Future<_XtMsg> _sendXtAndWaitAsync(
     String cmd,
     String payload, {
@@ -421,23 +385,17 @@ class _GgeTaskHandler extends TaskHandler {
     return _XtMsg(cmd, result, payload);
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  WS
-  // ═══════════════════════════════════════════════════════
   Future<void> _connect() async {
     try {
-      _log('Connecting...');
       await _saveStatus('CONNECTING');
       _ws = await WebSocket.connect(_url).timeout(const Duration(seconds: 20));
       _connected = true;
-      _log('WS Connected');
       _ws!.add('<msg t="sys"><body action="verChk" r="0"><ver v="166" /></body></msg>');
       _sub = _ws!.listen((data) => _onMessage(data.toString()),
         onDone: () { _connected = false; _loggedIn = false; _scheduleReconnect(); },
         onError: (_) { _connected = false; _loggedIn = false; _scheduleReconnect(); },
       );
     } catch (e) {
-      _log('Connect error: $e');
       _scheduleReconnect();
     }
   }
@@ -470,15 +428,11 @@ class _GgeTaskHandler extends TaskHandler {
     } else if (text.startsWith('%xt%') && text.contains('%lli%')) {
       if (text.contains('%lli%1%0%')) {
         _loggedIn = true;
-        _log('Login OK');
         await _saveStatus('ONLINE');
         _runInit();
       } else {
-        _log('Login FAILED');
         await _saveStatus('LOGIN_FAILED');
       }
-    } else if (text.contains('bup%1%0%')) {
-      _log('BUP OK');
     } else if (text.contains('bup%1%87%') || text.contains('bup%1%88%')) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('auto_last_train_time', DateTime.now().toIso8601String());
@@ -487,32 +441,10 @@ class _GgeTaskHandler extends TaskHandler {
     if (text.startsWith('%xt%')) {
       _dispatchToPending(text);
     }
-
-    if (text.startsWith('%xt%') && text.contains('%sne%')) {
-      try {
-        final xt = _parseXt(text);
-        if (xt?.payload != null) {
-          final data = jsonDecode(xt!.payload!) as Map;
-          final msgs = data['MSG'] as List?;
-          if (msgs != null) {
-            for (final m in msgs) {
-              if (m is List && m.length >= 2) {
-                final msgId = m[0] as int?;
-                final type = m[1] as int?;
-                if (msgId != null && type == 4) {
-                  _latestSpyMessageId = msgId;
-                  _log('Captured spy msgId=$msgId');
-                }
-              }
-            }
-          }
-        }
-      } catch (e) { _log('sne: $e'); }
-    }
   }
 
   void _doLogin() {
-    if (_token == null) { _log('No token'); return; }
+    if (_token == null) return;
     _sendXt('lli', jsonEncode({
       'CONM': 350, 'RTM': 57, 'ID': 0, 'PL': 1,
       'NOM': 'User', 'LT': _token, 'LANG': 'en', 'DID': '0',
@@ -537,9 +469,6 @@ class _GgeTaskHandler extends TaskHandler {
     });
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Auto-train
-  // ═══════════════════════════════════════════════════════
   void _startAutoTrainTimer() {
     _trainTimer?.cancel();
     _trainTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
@@ -586,7 +515,6 @@ class _GgeTaskHandler extends TaskHandler {
 
       if (timeTriggered || triggerOnSlot) {
         _isProcessing = true;
-        _log('AutoTrain WID=$wodId AMT=$amount');
         await _throttle();
         _sendXt('bup', jsonEncode({
           'LID': 0, 'WID': wodId, 'AMT': amount,
@@ -600,9 +528,6 @@ class _GgeTaskHandler extends TaskHandler {
     });
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Desert loop — كل 30 ثانية
-  // ═══════════════════════════════════════════════════════
   void _scheduleNextDesertTick() {
     const seconds = 30;
     _desertTimer = Timer(const Duration(seconds: seconds), () async {
@@ -637,7 +562,6 @@ class _GgeTaskHandler extends TaskHandler {
     try {
       final kid = await _ensureKingdom();
       if (kid == null) {
-        _log('jca failed');
         await _saveStatus('JCA_FAILED');
         return;
       }
@@ -660,8 +584,22 @@ class _GgeTaskHandler extends TaskHandler {
       int currentRadius = _radiusTiles;
 
       while (_runningDesert) {
+        // ✅ 1. علّم الأبراج المدمرة بـ 4 ساعات
+        final now = DateTime.now();
+        bool changed = false;
+        for (final t in _towers) {
+          if (t.isDead && !_isTowerCooling(t) && !_isTowerFailed(t)) {
+            _failedTowers[t.key] = now.add(Duration(hours: _kTowerDeadCooldownHours));
+            changed = true;
+            _log('💀 ${t.coordsLabel} dead (rs=${t.rs}) → ${_kTowerDeadCooldownHours}h');
+          }
+        }
+        if (changed) await _persistDesertState();
+
+        // ✅ 2. فلترة الأبراج الجاهزة (مش مدمرة + مش في كولداون)
         _towers.sort((a, b) => a.distance.compareTo(b.distance));
         final ready = _towers
+            .where((t) => !t.isDead)
             .where((t) => !_isTowerCooling(t) && !_isTowerFailed(t))
             .toList();
 
@@ -719,9 +657,9 @@ class _GgeTaskHandler extends TaskHandler {
             await Future.delayed(const Duration(seconds: 3));
 
           } else {
-            // ✅ فشل الهجوم (احتمال برج مدمر) → 4 ساعات cooldown
-            _markTowerFailed(tower, minutes: _kTowerFailedCooldownHours * 60);
-            _log('❌ ${tower.coordsLabel} failed → ${_kTowerFailedCooldownHours}h (dead?)');
+            // ✅ CRA 95 أو أي فشل معناه إن البرج مدمر
+            _markTowerFailed(tower, minutes: _kTowerDeadCooldownHours * 60);
+            _log('❌ ${tower.coordsLabel} failed → 4h (dead tower)');
           }
         }
 
@@ -797,9 +735,6 @@ class _GgeTaskHandler extends TaskHandler {
     _persistDesertState();
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Cap
-  // ═══════════════════════════════════════════════════════
   Future<int> _capFor(_DesertTower t) async {
     final p = await SharedPreferences.getInstance();
     final start = p.getInt(_kCapStartKey) ?? 204;
@@ -830,12 +765,8 @@ class _GgeTaskHandler extends TaskHandler {
     final cap = await _capFor(t);
     _lastFailCaps[t.key] = cap;
     await _saveCaps();
-    _log('📉 ${t.coordsLabel} cap fail at $cap');
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Scan (لا يثق في rs)
-  // ═══════════════════════════════════════════════════════
   Future<void> _scanTowersAt(int kid, int radius) async {
     if (_sourceX == null || _sourceY == null) return;
     _lastScanAt = DateTime.now();
@@ -860,9 +791,6 @@ class _GgeTaskHandler extends TaskHandler {
     }
     if (chunks.length > 40) chunks.removeRange(40, chunks.length);
 
-    _log('Scan ${chunks.length} chunks @ r=$radius');
-    await _saveStatus('SCANNING', extra: '0/${chunks.length}');
-
     int done = 0;
     int added = 0;
     for (final chunk in chunks) {
@@ -885,6 +813,7 @@ class _GgeTaskHandler extends TaskHandler {
               final y = int.tryParse(entry[2].toString()) ?? 0;
 
               final asVal = entry.length > 3 ? (int.tryParse(entry[3].toString()) ?? 0) : 0;
+              final rsVal = entry.length > 5 ? (int.tryParse(entry[5].toString()) ?? 0) : 0;
 
               final dx = (x - cx).toDouble();
               final dy = (y - cy).toDouble();
@@ -894,12 +823,12 @@ class _GgeTaskHandler extends TaskHandler {
               if (idx >= 0) {
                 _towers[idx] = _DesertTower(
                   x: x, y: y, kid: kid, distance: dist,
-                  as: asVal, rs: 0,  // ✅ مش بنثق في rs
+                  as: asVal, rs: rsVal,
                 );
               } else {
                 _towers.add(_DesertTower(
                   x: x, y: y, kid: kid, distance: dist,
-                  as: asVal, rs: 0,
+                  as: asVal, rs: rsVal,
                 ));
                 added++;
               }
@@ -911,13 +840,8 @@ class _GgeTaskHandler extends TaskHandler {
       await Future.delayed(Duration(milliseconds: 800 + Random().nextInt(400)));
       await _saveStatus('SCANNING', extra: '$done/${chunks.length} · ${_towers.length} towers');
     }
-    _log('Scan r=$radius done: +$added new, total ${_towers.length}');
-    await _saveStatus('SCAN_DONE', extra: '${_towers.length} towers (+$added @ r=$radius)');
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Attack
-  // ═══════════════════════════════════════════════════════
   Future<_AttackResult> _tryAttackTowerDirect(_DesertTower tower) async {
     final units = await _fetchUnits();
     if (units.isEmpty) return _AttackResult.noUnits;
@@ -951,21 +875,13 @@ class _GgeTaskHandler extends TaskHandler {
       );
       if (resp.result == 0) {
         await _onSuccess(tower, army.total);
-        _log('✅ HIT ${tower.coordsLabel} (${army.total} units, cap=$cap)');
         return _AttackResult.success;
       }
-      if (resp.result == 218) {
-        _log('Lord busy 218');
-        return _AttackResult.lordBusy;
-      }
-      if (resp.result == 313) {
-        _log('Too many units 313 at cap=$cap');
-        return _AttackResult.tooManyUnits;
-      }
-      _log('Attack ${tower.coordsLabel} failed: ${resp.result} (assume dead tower)');
+      if (resp.result == 218) return _AttackResult.lordBusy;
+      if (resp.result == 313) return _AttackResult.tooManyUnits;
+
       return _AttackResult.failed;
     } catch (e) {
-      _log('Attack error ${tower.coordsLabel}: $e');
       return _AttackResult.failed;
     }
   }
@@ -991,7 +907,7 @@ class _GgeTaskHandler extends TaskHandler {
         }
         return units;
       }
-    } catch (e) { _log('gui: $e'); }
+    } catch (e) {}
     return {};
   }
 
@@ -1004,11 +920,8 @@ class _GgeTaskHandler extends TaskHandler {
     final melee = <MapEntry<int, int>>[];
     final ranged = <MapEntry<int, int>>[];
     for (final e in available.entries) {
-      if (_rangedUnitIds.contains(e.key)) {
-        ranged.add(e);
-      } else {
-        melee.add(e);
-      }
+      if (_rangedUnitIds.contains(e.key)) ranged.add(e);
+      else melee.add(e);
     }
     melee.sort((a, b) => b.value.compareTo(a.value));
     ranged.sort((a, b) => b.value.compareTo(a.value));
