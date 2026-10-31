@@ -26,7 +26,7 @@ class DesertAutoService {
   static const _kTransferUnitIds = 'desert_auto_transfer_unit_ids';
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
-  // ═══════════ Constants (نفس الخلفية) ═══════════
+  // ═══════════ Constants ═══════════
   static const int kMinUnitsToAttack = 30;
   static const int kTowerCooldownMin = 240;
   static const int kFailedCooldownMin = 240;
@@ -34,7 +34,7 @@ class DesertAutoService {
   static const int kMaxRadius = 50;
   static const int kRadiusStep = 5;
 
-  // ═══════════ Caps (زي ما هي) ═══════════
+  // ═══════════ Caps ═══════════
   static const String kCapStartKey = 'desert_auto_cap_start';
   static const String kCapMinKey   = 'desert_auto_cap_min';
   static const String kCapMaxKey   = 'desert_auto_cap_max';
@@ -71,7 +71,7 @@ class DesertAutoService {
   bool _scanInProgress = false;
 
   // ═══════════════════════════════════════════════════════
-  //  Public API (used by screen)
+  //  Public API
   // ═══════════════════════════════════════════════════════
   Future<bool> isEnabled() async {
     final p = await SharedPreferences.getInstance();
@@ -289,7 +289,7 @@ class DesertAutoService {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Handle empty candidates → expand radius / wait cooldown
+  //  Handle empty candidates
   // ═══════════════════════════════════════════════════════
   Future<void> _handleEmptyCandidates(OwnedCastle desert) async {
     final tempWait = _soonestTempSkipRemaining();
@@ -420,14 +420,19 @@ class DesertAutoService {
 
       if (result.error?.contains('313') == true) {
         _on313(tower, cap, minCap);
-        if (cap <= minCap) {
+        
+        // ✅ التعديل الجديد: بنحاول نقلل لحد 80 عشان الهجمة تنجح
+        final safeMinCap = minCap > 80 ? 80 : minCap; 
+        final newCap = _capFor(tower, startCap, safeMinCap, maxCap);
+        
+        if (cap <= safeMinCap) {
+          // لو وصلنا 80 ولسه بيرفض، يبقى البرج فيه مشكلة فعلاً
           _markTowerFailed(tower);
-          _setStatus('💀 ${tower.coordsLabel}: 313 at min cap');
+          _setStatus('💀 ${tower.coordsLabel}: 313 even at $safeMinCap');
         } else {
-          final newCap = _capFor(tower, startCap, minCap, maxCap);
-          _tempSkip[tower.key] =
-              DateTime.now().add(const Duration(seconds: 60));
-          _setStatus('📉 ${tower.coordsLabel}: 313 → cap=$newCap (60s)');
+          // لو لسه فيه مجال نقلل، بنستنى 10 ثواني ونجرب تاني بعدد أقل
+          _tempSkip[tower.key] = DateTime.now().add(const Duration(seconds: 10));
+          _setStatus('📉 ${tower.coordsLabel}: 313 → retry with $newCap');
         }
         return;
       }
@@ -569,7 +574,7 @@ class DesertAutoService {
     if (s == null && f == null) {
       cap = startCap;
     } else if (s == null) {
-      cap = f! - 20;
+      cap = f! - 30; // ✅ قللناها لـ 30 بدل 20
     } else if (f == null) {
       cap = s + 15;
     } else {
