@@ -174,10 +174,8 @@ class AutoDefenseService {
   DateTime? _commandersCacheAt;
   static const _commandersTtl = Duration(seconds: 30);
 
-  // ✅ callback اختياري — يستخدمه الـ Background لفرض foreground check
   Future<bool> Function()? onBeforeEvac;
 
-  // Global evacuation state
   bool _globalEvacRunning = false;
   bool _globalEvacCancelled = false;
   int _globalEvacCurrent = 0;
@@ -342,20 +340,31 @@ class AutoDefenseService {
       }
     }
 
-    // Spy mode recall
+    // ═══════════════════════════════════════════════════════════
+    // ✅ SPY MODE RECALL — بعد إصلاح المشكلة
+    //
+    // المشكلة القديمة: hasImminent = r > 0 && r <= 30
+    //   → لو spyTrigger = 60، الجنود ترجع فوراً لأن 60 > 30
+    //
+    // الحل الجديد: نرجّع الجنود فقط لما كل الهجمات توصل فعلياً
+    //   (r <= 0 لكل الهجمات). لو فيه أي هجمة لسه في الطريق → استنى.
+    // ═══════════════════════════════════════════════════════════
     for (final ev in _evac.values.toList()) {
       if (ev.recalled || !ev.spyMode) continue;
+
       final castleAttacks = _pending.values
           .where((a) => a.targetAreaId == ev.sourceAreaId)
           .toList();
-      final allPassed = castleAttacks.every((a) => a.remainingSeconds() <= 0);
-      final hasImminent = castleAttacks.any((a) {
-        final r = a.remainingSeconds();
-        return r > 0 && r <= 30;
-      });
-      if (allPassed && !hasImminent) {
-        _recallEvacuation(ev, reason: 'all attacks cleared');
-      }
+
+      // ✅ لو أي هجمة لسه جاية (r > 0) → استنى
+      final hasIncoming = castleAttacks.any((a) => a.remainingSeconds() > 0);
+      if (hasIncoming) continue;
+
+      // ✅ مفيش هجمات جاية + مر 3s على الأقل (عشان الجنود تكون خرجت فعلاً)
+      final ageSeconds = DateTime.now().difference(ev.createdAt).inSeconds;
+      if (ageSeconds < 3) continue;
+
+      _recallEvacuation(ev, reason: 'all attacks arrived');
     }
 
     // Normal/Save mode: recall after saveHours (no pending attacks)
@@ -378,14 +387,10 @@ class AutoDefenseService {
     return settings.normalTriggerSeconds;
   }
 
-  // ── Unit filtering ─────────────────────────────────────────
-  // ✅ يطابق `_isSendableForSmuggle` في الواجهة اليدوية بالحرف
   bool _isSendableForEvac(CastleUnit u) {
     final info = u.info;
     if (info == null) return false;
-    // جنود قتالية فقط (melee أو ranged)
     if (!u.isCombat) return false;
-    // استبعاد الجدران/البوابات/الخنادق (مباني دفاعية مش جنود)
     final type = info.type ?? '';
     if (type.contains('Wall') ||
         type.contains('Gate') ||
@@ -427,7 +432,6 @@ class AutoDefenseService {
     return out;
   }
 
-  // ✅ يتخطى الوحدات بـ amount=0 عشان مايعملش batches فاضية
   List<List<List<int>>> _splitIntoBatches(
       List<CastleUnit> units, int maxPerBatch) {
     final batches = <List<List<int>>>[];
@@ -444,7 +448,6 @@ class AutoDefenseService {
     return batches;
   }
 
-  // ── Trigger evacuation (multi-batch, NO delay for speed) ────
   Future<void> _triggerEvacuation(
       _PendingAttack attack, int totalAttacks) async {
     final areaId = attack.targetAreaId;
@@ -452,7 +455,6 @@ class AutoDefenseService {
     if (existing != null && !existing.recalled) return;
     if (_evacuationInProgress.contains(areaId)) return;
 
-    // فحص خارجي قبل التهريب (الـ UI بيسيبه null → مش بيتنفذ)
     if (onBeforeEvac != null && !await onBeforeEvac!()) {
       _addLog('⏸️ Evac blocked by callback', 'warn');
       return;
@@ -508,7 +510,6 @@ class AutoDefenseService {
         return;
       }
 
-      // Prefetch free lords
       final cmds = await _getCommanders(force: true);
       final freeLordIds = cmds
           .where((c) => !c.isBusy)
@@ -543,7 +544,6 @@ class AutoDefenseService {
         final batch = batches[i];
         final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
 
-        // ✅ حاول مع القائد الحالي، ولو 218 → جرّب اللي بعده (حتى 3 محاولات)
         bool batchSent = false;
         for (int attempt = 0;
             attempt < 3 &&
@@ -573,12 +573,10 @@ class AutoDefenseService {
 
           final err = result.error ?? '';
           if (err.contains('218')) {
-            // القائد مشغول — جرّب اللي بعده
             _addLog('⚠️ LID=$lordId busy (218), trying next...', 'warn');
             continue;
           }
 
-          // خطأ تاني — وقف
           _addLog('❌ Batch ${i + 1} failed: $err', 'error');
           break;
         }
@@ -588,8 +586,6 @@ class AutoDefenseService {
               'warn');
           break;
         }
-
-        // ⚡ NO explicit delay — throttle في GgeClient بيتكفل
       }
 
       if (listMids.isNotEmpty) {
@@ -695,7 +691,6 @@ class AutoDefenseService {
     }
   }
 
-  // ── Global evacuation ──────────────────────────────────────
   Future<void> evacuateAllCastles() async {
     if (_globalEvacRunning) return;
     _globalEvacRunning = true;
@@ -729,7 +724,6 @@ class AutoDefenseService {
 
         await _evacuateCastleStandalone(targets[i]);
 
-        // ✅ 7s بين كل castle و castle
         if (i < targets.length - 1 && !_globalEvacCancelled) {
           await Future.delayed(const Duration(seconds: 7));
         }
@@ -813,7 +807,6 @@ class AutoDefenseService {
         final batch = batches[i];
         final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
 
-        // ✅ حاول مع القائد الحالي، ولو 218 → جرّب اللي بعده
         bool batchSent = false;
         for (int attempt = 0;
             attempt < 3 &&
@@ -852,7 +845,6 @@ class AutoDefenseService {
 
         if (!batchSent) break;
 
-        // ✅ 7s بين كل batch و batch في التهريب العام
         if (i < batches.length - 1) {
           await Future.delayed(const Duration(seconds: 7));
         }
