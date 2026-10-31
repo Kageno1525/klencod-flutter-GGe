@@ -26,7 +26,6 @@ class DesertAutoService {
   static const _kTransferUnitIds = 'desert_auto_transfer_unit_ids';
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
-  // ═══ ثوابت ═══
   static const int kMinUnitsToAttack = 30;
   static const int kSuccessCooldownH = 4;
   static const int kFailedCooldownH = 4;
@@ -53,7 +52,7 @@ class DesertAutoService {
 
   int attacksThisSession = 0;
   int towersScanned = 0;
-  
+
   Timer? _timer;
   StreamSubscription? _xtSub;
   bool _running = false;
@@ -70,6 +69,7 @@ class DesertAutoService {
   final Set<String> _attackingNow = {};
   final Set<String> _attackedThisTick = {};
   bool _scanInProgress = false;
+  bool _hasSyncedMarches = false;
 
   int _sessionRadius = 5;
 
@@ -115,9 +115,6 @@ class DesertAutoService {
 
   bool get isRunning => _running;
 
-  // ═══════════════════════════════════════════════════════
-  //  Persistence
-  // ═══════════════════════════════════════════════════════
   Future<void> _loadFailedTowers() async {
     final p = await SharedPreferences.getInstance();
     final raw = p.getString(_kFailedTowers);
@@ -207,9 +204,6 @@ class DesertAutoService {
     _saveCaps();
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Start / Stop
-  // ═══════════════════════════════════════════════════════
   Future<void> start(GgeClient client, {int? sourceAreaId}) async {
     if (_running) return;
 
@@ -220,6 +214,7 @@ class DesertAutoService {
     _attackingNow.clear();
     _attackedThisTick.clear();
     _scanInProgress = false;
+    _hasSyncedMarches = false;
 
     _client = client;
     _svc = DesertAttackService(client);
@@ -282,7 +277,7 @@ class DesertAutoService {
     _saveFailedTowers();
   }
 
-  Future<List<OwnedCastle>?> _getCastlesCached({bool force = false}) async {
+  Future<List<OwnedCastle>?> _getCastlesCached() async {
     if (_client == null) return null;
     try {
       return await _client!.getCastles();
@@ -308,9 +303,6 @@ class DesertAutoService {
     return null;
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Tick
-  // ═══════════════════════════════════════════════════════
   Future<void> _tick() async {
     if (!_running) return;
     if (_activeTick != null) return;
@@ -439,6 +431,57 @@ class DesertAutoService {
     }
   }
 
+  Future<void> _syncActiveMarches() async {
+    if (_hasSyncedMarches || _client == null) return;
+    try {
+      final desertArea = (await SharedPreferences.getInstance()).getInt(_kSourceAreaId) ?? 0;
+      if (desertArea == 0) return;
+
+      final castles = await _getCastlesCached();
+      final desert = _findDesert(castles, desertArea);
+      if (desert == null) return;
+
+      final resp = await _client!.sendXtAndWait(
+        'gam', '{}', responseCmd: 'gam', timeoutMs: 10000, isAction: false,
+      );
+      if (resp.resultCode == 0 && resp.payload != null) {
+        final data = jsonDecode(resp.payload!) as Map;
+        final moves = data['M'] as List? ?? [];
+        final now = DateTime.now();
+        int synced = 0;
+        for (final m in moves) {
+          if (m is! Map) continue;
+          final mov = m['M'] as Map?;
+          if (mov == null) continue;
+          final type = int.tryParse(mov['T']?.toString() ?? '') ?? -1;
+          if (type != 0) continue; // 0 = Attack
+          final ta = mov['TA'] as List?;
+          final sa = mov['SA'] as List?;
+          if (ta == null || ta.length < 3) continue;
+          if (sa == null || sa.length < 3) continue;
+
+          final sx = int.tryParse(sa[1].toString()) ?? 0;
+          final sy = int.tryParse(sa[2].toString()) ?? 0;
+          final tx = int.tryParse(ta[1].toString()) ?? 0;
+          final ty = int.tryParse(ta[2].toString()) ?? 0;
+
+          if (sx == desert.x && sy == desert.y) {
+            final key = '$tx,$ty,${desert.kingdomId}';
+            _failedTowers[key] = now.add(Duration(hours: kFailedCooldownH));
+            synced++;
+          }
+        }
+        if (synced > 0) {
+          await _saveFailedTowers();
+          TrafficLog.add('ST', '[Desert-Auto] 🔄 Synced $synced active marches → 4h cooldown');
+        }
+        _hasSyncedMarches = true;
+      }
+    } catch (e) {
+      TrafficLog.add('ER', '[Desert-Auto] gam sync error: $e');
+    }
+  }
+
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
 
@@ -457,6 +500,9 @@ class DesertAutoService {
         _setStatus('❌ No desert castle');
         return;
       }
+
+      // ✅ مزامنة الجيوش
+      await _syncActiveMarches();
 
       final lastScanStr = p.getString(_kLastScan);
       final lastScan = lastScanStr != null ? DateTime.tryParse(lastScanStr) : null;
@@ -481,7 +527,6 @@ class DesertAutoService {
         return;
       }
 
-      // ✅ الأبراج المدمرة بتتحط 4 ساعات فوراً
       for (final t in _towers) {
         if (t.isDead && !_shouldSkipTower(t)) {
           _markTowerCooldown(t, minutes: kFailedCooldownH * 60);
@@ -493,7 +538,6 @@ class DesertAutoService {
       const int maxAttempts = 50;
 
       while (_running && attempts < maxAttempts) {
-        // هنختار من الأبراج الحية بس
         final ready = _towers
             .where((t) => !t.isDead) 
             .where((t) => !_shouldSkipTower(t))
@@ -523,9 +567,7 @@ class DesertAutoService {
           return;
         }
 
-        // ✅ تصحيح الخطأ هنا: كلمة catalog: اتشالت
-        final catalog = await _client!.loadCatalog();
-        final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog);
+        final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog: await _client!.loadCatalog());
         final sendable = freshUnits.where((u) => u.isCombat && u.amount > 0).toList();
         final totalUnits = sendable.fold<int>(0, (s, u) => s + u.amount);
 
@@ -570,6 +612,9 @@ class DesertAutoService {
             lord = freeLords.first.lord;
           }
 
+          // ✅ الحماية الاستباقية في الواجهة
+          _markTowerCooldown(tower, minutes: kFailedCooldownH * 60);
+
           _setStatus('⚔️ ${tower.coordsLabel} (${suggestion.totalUnits}/cap=$cap)');
 
           final result = await _svc!.attack(
@@ -583,7 +628,6 @@ class DesertAutoService {
           );
 
           if (result.success) {
-            _markTowerCooldown(tower, minutes: kSuccessCooldownH * 60);
             _onSuccess(tower, suggestion.totalUnits);
             attacksThisSession++;
             _attackedThisTick.add(tower.key);
@@ -600,6 +644,8 @@ class DesertAutoService {
           final err = result.error ?? '';
 
           if (err.contains('313')) {
+            _failedTowers.remove(tower.key); // شيل الـ 4 ساعات
+            await _saveFailedTowers();
             _on313(tower, cap, minCap);
             _attackedThisTick.add(tower.key);
             final newCap = _capFor(tower, startCap, minCap, maxCap);
@@ -609,17 +655,25 @@ class DesertAutoService {
           }
 
           if (err.contains('218') || err.contains('181')) {
+            _failedTowers.remove(tower.key); // شيل الـ 4 ساعات
+            await _saveFailedTowers();
             _setStatus('⏸️ $err — next tick');
             return;
           }
 
           if (err.contains('NO_UNITS')) {
+            _failedTowers.remove(tower.key); // شيل الـ 4 ساعات
+            await _saveFailedTowers();
             _setStatus('⏸️ No units');
             return;
           }
 
-          // ✅ لو الهجمة فشلت (زي CRA 95) معناها البرج مدمر ومحصلش قتال، بنحطه 4 ساعات
-          _markTowerCooldown(tower, minutes: kFailedCooldownH * 60);
+          if (err.contains('TimeoutException')) {
+            // ✅ النت قطع أثناء الهجمة: سيب الـ 4 ساعات
+            _setStatus('⏸️ Timeout — keeping 4h cooldown');
+            return;
+          }
+
           _attackedThisTick.add(tower.key);
           TrafficLog.add('ER', '[Desert-Auto] ❌ ${tower.coordsLabel}: $err → ${kFailedCooldownH}h (dead?)');
           _setStatus('❌ ${tower.coordsLabel}: dead');

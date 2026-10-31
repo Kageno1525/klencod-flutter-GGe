@@ -9,9 +9,6 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
 
-// ═══════════════════════════════════════════════════════════
-//  Desert Model Classes (local)
-// ═══════════════════════════════════════════════════════════
 class _DesertTower {
   final int x, y, kid;
   final double distance;
@@ -26,15 +23,7 @@ class _DesertTower {
 
   String get key => '$x,$y,$kid';
   String get coordsLabel => '($x,$y)';
-
-  // ✅ البرج بيبقى مدمر لو rs أكبر من صفر
   bool get isDead => rs > 0 && rs < 100000;
-}
-
-class _DefenderWing {
-  final int melee, ranged;
-  _DefenderWing({required this.melee, required this.ranged});
-  int get total => melee + ranged;
 }
 
 class _XtMsg {
@@ -50,9 +39,8 @@ class _BgArmy {
   _BgArmy({required this.left, required this.middle, required this.right, required this.total});
 }
 
-enum _AttackResult { success, lordBusy, noUnits, tooManyUnits, failed }
+enum _AttackResult { success, lordBusy, noUnits, tooManyUnits, timeout, failed }
 
-// ═══════════════════════════════════════════════════════════
 @pragma('vm:entry-point')
 void ggeBackgroundCallback() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -63,7 +51,6 @@ void ggeBackgroundCallback() {
 final _callbackRef = ggeBackgroundCallback;
 
 class _GgeTaskHandler extends TaskHandler {
-  // ═══ WS ═══
   WebSocket? _ws;
   StreamSubscription? _sub;
   Timer? _pollTimer;
@@ -74,7 +61,6 @@ class _GgeTaskHandler extends TaskHandler {
   String? _token;
   int? _mainCastleArea;
 
-  // ═══ Desert state ═══
   int? _sourceAreaId;
   int? _sourceX, _sourceY, _sourceKid;
   final Map<String, List<Completer<_XtMsg>>> _pending = {};
@@ -93,17 +79,16 @@ class _GgeTaskHandler extends TaskHandler {
   String _attacksDate = '';
   Set<int> _rangedUnitIds = {};
   bool _runningDesert = false;
+  bool _hasSyncedMarches = false; // ✅ علم لمزامنة الجيوش
 
   final Map<String, int> _lastSuccessCaps = {};
   final Map<String, int> _lastFailCaps = {};
 
-  // ═══ Anti-ban ═══
   DateTime _lastActionTime = DateTime.now();
   bool _isProcessing = false;
   DateTime? _nextBreakAt;
   int _actionsSinceBreak = 0;
 
-  // ═══ ثوابت الهجوم ═══
   static const int _kMinUnitsToAttack = 30;
   static const int _kMaxRadius = 50;
   static const int _kRadiusStep = 5;
@@ -191,6 +176,7 @@ class _GgeTaskHandler extends TaskHandler {
     _attacksToday = prefs.getInt('desert_bg_attacks_today') ?? 0;
     _attacksDate = prefs.getString('desert_bg_attacks_date') ?? '';
     _attacksThisSession = 0;
+    _hasSyncedMarches = false;
 
     final today = _todayStr();
     if (_attacksDate != today) {
@@ -390,6 +376,7 @@ class _GgeTaskHandler extends TaskHandler {
       await _saveStatus('CONNECTING');
       _ws = await WebSocket.connect(_url).timeout(const Duration(seconds: 20));
       _connected = true;
+      _hasSyncedMarches = false; // ✅ تصفير المزامنة عند الاتصال
       _ws!.add('<msg t="sys"><body action="verChk" r="0"><ver v="166" /></body></msg>');
       _sub = _ws!.listen((data) => _onMessage(data.toString()),
         onDone: () { _connected = false; _loggedIn = false; _scheduleReconnect(); },
@@ -538,6 +525,49 @@ class _GgeTaskHandler extends TaskHandler {
     });
   }
 
+  // ✅ دالة مزامنة الجيوش النشطة
+  Future<void> _syncActiveMarches() async {
+    if (_hasSyncedMarches || _sourceX == null || _sourceY == null) return;
+    try {
+      final resp = await _sendXtAndWaitAsync('gam', '{}', responseCmd: 'gam', timeoutMs: 10000, isAction: false);
+      if (resp.result == 0 && resp.payload != null) {
+        final data = jsonDecode(resp.payload!) as Map;
+        final moves = data['M'] as List? ?? [];
+        final now = DateTime.now();
+        int synced = 0;
+        for (final m in moves) {
+          if (m is! Map) continue;
+          final mov = m['M'] as Map?;
+          if (mov == null) continue;
+          final type = int.tryParse(mov['T']?.toString() ?? '') ?? -1;
+          if (type != 0) continue; // 0 = Attack
+          final ta = mov['TA'] as List?;
+          final sa = mov['SA'] as List?;
+          if (ta == null || ta.length < 3) continue;
+          if (sa == null || sa.length < 3) continue;
+
+          final sx = int.tryParse(sa[1].toString()) ?? 0;
+          final sy = int.tryParse(sa[2].toString()) ?? 0;
+          final tx = int.tryParse(ta[1].toString()) ?? 0;
+          final ty = int.tryParse(ta[2].toString()) ?? 0;
+
+          if (sx == _sourceX && sy == _sourceY) {
+            final key = '$tx,$ty,$_sourceKid';
+            _failedTowers[key] = now.add(Duration(hours: _kTowerDeadCooldownHours));
+            synced++;
+          }
+        }
+        if (synced > 0) {
+          await _persistDesertState();
+          _log('🔄 Synced $synced active marches → 4h cooldown');
+        }
+        _hasSyncedMarches = true;
+      }
+    } catch (e) {
+      _log('gam sync error: $e');
+    }
+  }
+
   Future<void> _desertTick() async {
     if (!_loggedIn || !_desertEnabled) return;
     if (_sourceAreaId == null || _sourceAreaId == 0) return;
@@ -566,6 +596,9 @@ class _GgeTaskHandler extends TaskHandler {
         return;
       }
 
+      // ✅ مزامنة الجيوش أول ما نشتغل أو نتصل
+      await _syncActiveMarches();
+
       if (_towers.isEmpty) {
         await _scanTowersAt(kid, _radiusTiles);
       }
@@ -584,7 +617,6 @@ class _GgeTaskHandler extends TaskHandler {
       int currentRadius = _radiusTiles;
 
       while (_runningDesert) {
-        // ✅ 1. علّم الأبراج المدمرة بـ 4 ساعات
         final now = DateTime.now();
         bool changed = false;
         for (final t in _towers) {
@@ -596,7 +628,6 @@ class _GgeTaskHandler extends TaskHandler {
         }
         if (changed) await _persistDesertState();
 
-        // ✅ 2. فلترة الأبراج الجاهزة (مش مدمرة + مش في كولداون)
         _towers.sort((a, b) => a.distance.compareTo(b.distance));
         final ready = _towers
             .where((t) => !t.isDead)
@@ -640,25 +671,37 @@ class _GgeTaskHandler extends TaskHandler {
             await Future.delayed(Duration(seconds: delaySec));
 
           } else if (result == _AttackResult.lordBusy) {
+            _failedTowers.remove(tower.key); // ✅ القائد مشغول: شيل الـ 4 ساعات
+            await _persistDesertState();
             await _saveStatus('WAITING_COMMANDER');
             _log('⏸️ Lord busy');
             stopTick = true;
             break;
 
           } else if (result == _AttackResult.noUnits) {
+            _failedTowers.remove(tower.key); // ✅ وحدات قليلة: شيل الـ 4 ساعات
+            await _persistDesertState();
             await _saveStatus('WAITING_UNITS');
             _log('⏸️ Not enough units');
             stopTick = true;
             break;
 
           } else if (result == _AttackResult.tooManyUnits) {
+            _failedTowers.remove(tower.key); // شيل الـ 4 ساعات
             await _on313(tower);
             _markTowerFailed(tower, minutes: _kTower313CooldownMin);
             await Future.delayed(const Duration(seconds: 3));
 
+          } else if (result == _AttackResult.timeout) {
+            // ✅ النت قطع: نسيب الـ 4 ساعات زي ما هي عشان ميبعتش تاني
+            await _saveStatus('WAITING_NET');
+            _log('⏸️ Timeout — keeping 4h cooldown to prevent duplicates');
+            stopTick = true;
+            break;
+
           } else {
-            // ✅ CRA 95 أو أي فشل معناه إن البرج مدمر
-            _markTowerFailed(tower, minutes: _kTowerDeadCooldownHours * 60);
+            // CRA 95 برج مدمر: نسيب الـ 4 ساعات
+            await _persistDesertState();
             _log('❌ ${tower.coordsLabel} failed → 4h (dead tower)');
           }
         }
@@ -853,6 +896,9 @@ class _GgeTaskHandler extends TaskHandler {
     final army = _buildArmyFromCap(units, cap);
     if (army == null || army.total <= 0) return _AttackResult.noUnits;
 
+    // ✅ الحماية الاستباقية: نحط 4 ساعات قبل ما نبعت
+    _markTowerFailed(tower, minutes: _kTowerDeadCooldownHours * 60);
+
     try {
       final payload = {
         'SX': _sourceX, 'SY': _sourceY,
@@ -881,6 +927,9 @@ class _GgeTaskHandler extends TaskHandler {
       if (resp.result == 313) return _AttackResult.tooManyUnits;
 
       return _AttackResult.failed;
+    } on TimeoutException {
+      // ✅ الشبكة قطعت أثناء انتظار الرد: البوت مش هيعرف لو الهجمة نجحت ولا لأ، فبنسيب الـ 4 ساعات
+      return _AttackResult.timeout;
     } catch (e) {
       return _AttackResult.failed;
     }
