@@ -14,8 +14,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 class _DesertTower {
   final int x, y, kid;
   final double distance;
-  final int as; // attack strength
-  final int rs; // defense strength (rs > 0 && rs < 100000 => dead)
+  final int as;
+  final int rs;
   _DesertTower({
     required this.x, required this.y, required this.kid,
     required this.distance, this.as = 0, this.rs = 0,
@@ -68,9 +68,9 @@ class _GgeTaskHandler extends TaskHandler {
   final Map<String, List<Completer<_XtMsg>>> _pending = {};
 
   final List<_DesertTower> _towers = [];
-  final Map<String, DateTime> _cooldowns = {};   // 4h after success or dead
-  final Map<String, DateTime> _failedTowers = {}; // 4h after failure
-  final Map<String, DateTime> _tempSkip = {};     // 30s on 218 (lord busy)
+  final Map<String, DateTime> _cooldowns = {};
+  final Map<String, DateTime> _failedTowers = {};
+  final Map<String, DateTime> _tempSkip = {};
   final Map<String, int> _successCaps = {};
   final Map<String, int> _failCaps = {};
 
@@ -101,7 +101,7 @@ class _GgeTaskHandler extends TaskHandler {
   static const int _radiusStep = 5;
   static const int _interAttackDelaySec = 15;
   static const int _minUnitsToAttack = 30;
-  static const int _towerCooldownMin = 240; // 4 hours
+  static const int _towerCooldownMin = 240;
 
   void _log(String s) {
     debugPrint('[BG] $s');
@@ -138,7 +138,6 @@ class _GgeTaskHandler extends TaskHandler {
     _startAutoTrainTimer();
     _scheduleNextDesertTick();
 
-    // Kick the desert loop shortly after connect
     Future.delayed(const Duration(seconds: 8), () {
       if (_desertEnabled && _loggedIn && !_runningDesert) _desertTick();
     });
@@ -199,7 +198,6 @@ class _GgeTaskHandler extends TaskHandler {
       await prefs.setString('desert_bg_attacks_date', today);
     }
 
-    // cooldowns
     final cdJson = prefs.getString('desert_cooldowns_v1');
     if (cdJson != null && cdJson.isNotEmpty) {
       try {
@@ -212,7 +210,6 @@ class _GgeTaskHandler extends TaskHandler {
       } catch (_) {}
     }
 
-    // failed towers
     final ftJson = prefs.getString('desert_auto_failed_towers');
     if (ftJson != null && ftJson.isNotEmpty) {
       try {
@@ -225,7 +222,6 @@ class _GgeTaskHandler extends TaskHandler {
       } catch (_) {}
     }
 
-    // caps
     final rawS = prefs.getString('desert_cap_ok_v3');
     if (rawS != null && rawS.isNotEmpty) {
       try {
@@ -416,7 +412,6 @@ class _GgeTaskHandler extends TaskHandler {
         _log('Login OK');
         await _saveStatus('ONLINE');
         _runInit();
-        // Trigger desert loop after login
         Future.delayed(const Duration(seconds: 5), () {
           if (_desertEnabled && _loggedIn && !_runningDesert) _desertTick();
         });
@@ -548,7 +543,6 @@ class _GgeTaskHandler extends TaskHandler {
 
     _runningDesert = true;
     try {
-      // Daily reset
       final today = _todayStr();
       if (_attacksDate != today) {
         _attacksToday = 0;
@@ -556,14 +550,12 @@ class _GgeTaskHandler extends TaskHandler {
         await _persistDesertState();
       }
 
-      // Resolve source position
       final kid = await _ensureKingdom();
       if (kid == null) {
         _log('Desert: jca failed, retry next tick');
         return;
       }
 
-      // Initial scan
       if (_towers.isEmpty) {
         await _scanTowers(kid);
       }
@@ -575,7 +567,6 @@ class _GgeTaskHandler extends TaskHandler {
       while (_desertEnabled && _loggedIn) {
         loops++;
 
-        // Hard limits
         if (_maxAttacksDay > 0 && _attacksToday >= _maxAttacksDay) {
           await _saveStatus('LIMIT_REACHED', extra: 'يومي: $_attacksToday/$_maxAttacksDay');
           return;
@@ -593,7 +584,7 @@ class _GgeTaskHandler extends TaskHandler {
           }
         }
 
-        // 2. Available candidates
+        // 2. Available candidates — sorted by distance (closest first)
         final available = _towers.where((t) =>
             !t.isDead &&
             !_isTowerCooling(t) &&
@@ -601,7 +592,7 @@ class _GgeTaskHandler extends TaskHandler {
             !_isTempSkipped(t)).toList()
           ..sort((a, b) => a.distance.compareTo(b.distance));
 
-        // 3. Nothing available → wait or expand
+        // 3. Nothing available → wait or expand radius
         if (available.isEmpty) {
           await _persistDesertState();
 
@@ -613,7 +604,6 @@ class _GgeTaskHandler extends TaskHandler {
             continue;
           }
 
-          // Expand radius
           _radiusTiles += _radiusStep;
           if (_radiusTiles > _maxRadius) {
             _radiusTiles = _maxRadius;
@@ -676,7 +666,6 @@ class _GgeTaskHandler extends TaskHandler {
             break;
 
           case _AttackResult.lordBusy:
-            // Temp skip 30s, no 4h cooldown
             _tempSkip[tower.key] = DateTime.now().add(const Duration(seconds: 30));
             _failCaps[tower.key] = army.total;
             await _saveStatus('LORD_BUSY', extra: tower.coordsLabel);
@@ -684,8 +673,6 @@ class _GgeTaskHandler extends TaskHandler {
             break;
 
           case _AttackResult.failed:
-            // Check if it was a 313 (too many units)
-            // We detect via _lastAttackError in _sendAttack
             if (_lastAttackErr313) {
               _failCaps[tower.key] = army.total;
               final nextCap = _capForTower(tower);
@@ -703,7 +690,6 @@ class _GgeTaskHandler extends TaskHandler {
             break;
         }
 
-        // 6. Wait 15s between attacks
         await Future.delayed(const Duration(seconds: _interAttackDelaySec));
       }
     } catch (e) {
@@ -716,6 +702,9 @@ class _GgeTaskHandler extends TaskHandler {
 
   bool _lastAttackErr313 = false;
 
+  // ═══════════════════════════════════════════════════════════
+  //  ✅ إصلاح قراءة MID من AAM.M.MID أول، وبعدها A.M.MID
+  // ═══════════════════════════════════════════════════════════
   Future<_AttackResult> _sendAttack(_DesertTower tower, _BgArmy army) async {
     _lastAttackErr313 = false;
     try {
@@ -740,17 +729,45 @@ class _GgeTaskHandler extends TaskHandler {
       );
 
       if (resp.result == 0) {
-        // Verify a real movement was created (avoid "no battle" being counted as success)
+        // ✅ تحقق من وجود MID فعلي (مع دعم AAM.M.MID + A.M.MID + MID)
         if (resp.payload != null) {
           try {
             final data = jsonDecode(resp.payload!) as Map;
-            final a = data['A'] as Map?;
-            final m = a?['M'] as Map?;
-            final mid = int.tryParse((m?['MID'] ?? '').toString()) ?? 0;
-            if (mid > 0) return _AttackResult.success;
-          } catch (_) {}
+
+            int mid = 0;
+
+            // 1) رد الهجوم (cra) → AAM.M.MID
+            final aam = data['AAM'] as Map?;
+            if (aam != null) {
+              final m = aam['M'] as Map?;
+              if (m != null) {
+                mid = int.tryParse((m['MID'] ?? '').toString()) ?? 0;
+              }
+            }
+
+            // 2) fallback → A.M.MID
+            if (mid <= 0) {
+              final a = data['A'] as Map?;
+              final m = a?['M'] as Map?;
+              if (m != null) {
+                mid = int.tryParse((m['MID'] ?? '').toString()) ?? 0;
+              }
+            }
+
+            // 3) fallback → MID مباشر
+            if (mid <= 0) {
+              mid = int.tryParse((data['MID'] ?? '').toString()) ?? 0;
+            }
+
+            if (mid > 0) {
+              _log('✅ MID received: $mid for ${tower.coordsLabel}');
+              return _AttackResult.success;
+            }
+          } catch (e) {
+            _log('cra parse error: $e');
+          }
         }
-        // result==0 but no MID → tower was dead / no battle
+        // result==0 بدون MID → البرج ميت / لا توجد معركة
         _log('No MID in cra response → tower is dead');
         return _AttackResult.failed;
       }
@@ -846,7 +863,7 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Ensure kingdom + get source position
+  //  Ensure kingdom
   // ═══════════════════════════════════════════════════════
   Future<int?> _ensureKingdom() async {
     try {
@@ -880,7 +897,7 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Scan
+  //  Scan — مع سورت نهائي من الأقرب للأبعد ✅
   // ═══════════════════════════════════════════════════════
   Future<void> _scanTowers(int kid) async {
     if (_sourceX == null || _sourceY == null) return;
@@ -933,7 +950,6 @@ class _GgeTaskHandler extends TaskHandler {
               if (seen.contains(key)) continue;
               seen.add(key);
 
-              // ✅ read as + rs (same as UI)
               final asVal = entry.length > 3 ? (int.tryParse(entry[3].toString()) ?? 0) : 0;
               final rsVal = entry.length > 5 ? (int.tryParse(entry[5].toString()) ?? 0) : 0;
 
@@ -952,7 +968,11 @@ class _GgeTaskHandler extends TaskHandler {
       await Future.delayed(Duration(milliseconds: 800 + Random().nextInt(400)));
       await _saveStatus('SCANNING', extra: 'radius=$_radiusTiles · $done/${chunks.length} · ${_towers.length} towers');
     }
-    _log('Scan done: ${_towers.length} towers (dead=${_towers.where((t) => t.isDead).length})');
+
+    // ✅ ترتيب من الأقرب للأبعد — مضمون من المصدر
+    _towers.sort((a, b) => a.distance.compareTo(b.distance));
+
+    _log('Scan done: ${_towers.length} towers (dead=${_towers.where((t) => t.isDead).length}) — sorted by distance');
     await _saveStatus('SCAN_DONE', extra: '${_towers.length} towers');
   }
 
@@ -985,7 +1005,7 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Build army — 20% left / 60% middle / 20% right (same as UI)
+  //  Build army — 20/60/20
   // ═══════════════════════════════════════════════════════
   _BgArmy? _buildArmy(Map<int, int> available, int cap) {
     if (cap <= 0) return null;
