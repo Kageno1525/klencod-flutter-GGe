@@ -27,14 +27,14 @@ class DesertAutoService {
   static const _kFailedTowers = 'desert_auto_failed_towers';
 
   static const int kMinUnitsToAttack = 30;
-  
-  // ✅ 4 ساعات (240 دقيقة) للفشل والنجاح
-  static const int kFailedCooldownMin = 240; 
-  static const int kTowerCooldownMin = 240; 
-  
-  // ✅ التأخير بين الهجمات 20 ثانية (زي كودك القديم)
-  static const int kInterAttackDelaySec = 20; 
 
+  // ✅ وقت الفشل 30 دقيقة عشان ميرجعش للبرج المدمر بسرعة
+  static const int kFailedCooldownMin = 30;
+
+  // ✅ وقت التأخير الأساسي بين الهجمات (هنزود عليه عشوائي في الكود)
+  static const int kInterAttackDelaySec = 20;
+
+  // ✅ مفاتيح الأرقام اللي هتتحكم فيها من الشاشة (204)
   static const String kCapStartKey = 'desert_auto_cap_start';
   static const String kCapMinKey = 'desert_auto_cap_min';
   static const String kCapMaxKey = 'desert_auto_cap_max';
@@ -169,7 +169,6 @@ class DesertAutoService {
     await p.setString(_kCapsFailKey, jsonEncode(_lastFailCaps));
   }
 
-  // ✅ رجعناها للكود القديم بتاعك بالظبط
   int _capFor(DesertTower t, int startCap, int minCap, int maxCap) {
     final s = _lastSuccessCaps[t.key];
     final f = _lastFailCaps[t.key];
@@ -196,6 +195,11 @@ class DesertAutoService {
 
   void _on313(DesertTower t, int attempted, int minCap) {
     _lastFailCaps[t.key] = attempted;
+    if (attempted <= minCap) {
+      _failedTowers[t.key] = DateTime.now().add(const Duration(hours: 24));
+      _saveFailedTowers();
+      TrafficLog.add('ST', '[Desert-Auto] 💀 ${t.coordsLabel} unusable at cap<=$minCap');
+    }
     _saveCaps();
   }
 
@@ -223,7 +227,7 @@ class DesertAutoService {
     towersScanned = 0;
 
     _xtSub?.cancel();
-    
+
     if (sourceAreaId != null && sourceAreaId > 0) {
       await setSource(sourceAreaId);
     }
@@ -416,7 +420,6 @@ class DesertAutoService {
     }
   }
 
-  // ✅ رجعنا اللوب بتاعك القديم بس ضفنا فيه حظر الـ 4 ساعات
   Future<void> _tryAttackTowers() async {
     if (_client == null || _svc == null) return;
 
@@ -440,8 +443,9 @@ class DesertAutoService {
 
       int attacksThisTick = 0;
       int attempts = 0;
-      
-      const int maxAttempts = 5; 
+
+      // ✅ قللنا المحاولات لـ 5 عشان ميعملش سبام هجمات
+      const int maxAttempts = 5;
 
       while (_running && attempts < maxAttempts) {
         final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog);
@@ -464,8 +468,9 @@ class DesertAutoService {
           return;
         }
 
+        // ✅ السطر ده هو اللي بيتخطى الأبراج المدمرة
         final candidates = _towers
-            .where((t) => !t.isDead) 
+            .where((t) => !t.isDead)
             .where((t) => !_svc!.isTowerInCooldown(t))
             .where((t) => !_shouldSkipTower(t))
             .where((t) => !_attackedThisTick.contains(t.key))
@@ -489,7 +494,7 @@ class DesertAutoService {
 
           final suggestion = _svc!.suggestCounter(
             available: sendable,
-            defenders: DefenderSummary(), 
+            defenders: DefenderSummary(),
             maxTotal: cap,
           );
 
@@ -523,17 +528,15 @@ class DesertAutoService {
             attacksThisSession++;
             _attackedThisTick.add(tower.key);
             _onSuccess(tower, suggestion.totalUnits);
-            
-            // ✅ 4 ساعات كولداون بعد النجاح
-            await _svc!.markTowerAttacked(tower, minutes: kTowerCooldownMin);
 
             TrafficLog.add('ST', '[Desert-Auto] ✅ HIT ${tower.coordsLabel} units=${suggestion.totalUnits}');
             _setStatus('✅ Hit ${tower.coordsLabel}! (#$attacksThisTick)');
 
+            // ✅ تأخير عشوائي بين 20 لـ 35 ثانية (عشان نمنع البان)
             final delaySec = kInterAttackDelaySec + Random().nextInt(15);
             TrafficLog.add('ST', '[Desert-Auto] ⏳ waiting $delaySec sec to avoid ban');
             await Future.delayed(Duration(seconds: delaySec));
-            
+
             if (!_running) return;
             continue;
           }
@@ -541,13 +544,11 @@ class DesertAutoService {
           final is313 = result.error?.contains('313') == true;
           if (is313) {
             _on313(tower, cap, minCap);
-            
-            // ✅ 4 ساعات كولداون لو أخد 313
-            _markTowerFailed(tower);
-            
-            _setStatus('📉 ${tower.coordsLabel}: 313 (cooldown 4h)');
+            final newCap = _capFor(tower, startCap, minCap, maxCap);
+            _setStatus('📉 ${tower.coordsLabel}: cap→$newCap');
             _attackedThisTick.add(tower.key);
-            
+
+            // ✅ تأخير عشوائي بين 5 لـ 10 ثواني بعد الـ 313
             await Future.delayed(Duration(seconds: 5 + Random().nextInt(5)));
             continue;
           }
