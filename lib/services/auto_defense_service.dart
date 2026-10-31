@@ -174,7 +174,7 @@ class AutoDefenseService {
   DateTime? _commandersCacheAt;
   static const _commandersTtl = Duration(seconds: 30);
 
-  // ✅ NEW: callback اختياري — يستخدمه الـ Background لفرض foreground check
+  // ✅ callback اختياري — يستخدمه الـ Background لفرض foreground check
   Future<bool> Function()? onBeforeEvac;
 
   // Global evacuation state
@@ -379,48 +379,19 @@ class AutoDefenseService {
   }
 
   // ── Unit filtering ─────────────────────────────────────────
+  // ✅ يطابق `_isSendableForSmuggle` في الواجهة اليدوية بالحرف
   bool _isSendableForEvac(CastleUnit u) {
     final info = u.info;
-    if (info == null) {
-      // Unknown unit — range heuristic (700-800 غالباً tools)
-      if (u.wodId >= 700 && u.wodId <= 800) return false;
-      return true;
-    }
-    final type = (info.type ?? '').toLowerCase();
-    final role = (info.role ?? '').toLowerCase();
-
-    // Wall/Gate/Moat/Trap
-    if (role == 'wall' || role == 'gate' || role == 'moat' || role == 'trap') {
+    if (info == null) return false;
+    // جنود قتالية فقط (melee أو ranged)
+    if (!u.isCombat) return false;
+    // استبعاد الجدران/البوابات/الخنادق (مباني دفاعية مش جنود)
+    final type = info.type ?? '';
+    if (type.contains('Wall') ||
+        type.contains('Gate') ||
+        type.contains('Moat')) {
       return false;
     }
-    if (type.contains('def_building') ||
-        type.contains('defbuilding') ||
-        type.contains('_wall') ||
-        type.contains('wall_') ||
-        type.contains('_gate') ||
-        type.contains('gate_') ||
-        type.contains('_moat') ||
-        type.contains('moat_') ||
-        type.contains('_trap') ||
-        type.contains('trap_')) {
-      return false;
-    }
-
-    // Tools
-    if (role == 'tool' ||
-        type.contains('_tool') ||
-        type.contains('tool_') ||
-        type.contains('ram_') ||
-        type.contains('_ram') ||
-        type.contains('ladder_') ||
-        type.contains('_ladder') ||
-        type.contains('siege_tower') ||
-        type.contains('siegetower') ||
-        type.contains('catapult') ||
-        type.contains('ballista')) {
-      return false;
-    }
-
     return true;
   }
 
@@ -456,11 +427,13 @@ class AutoDefenseService {
     return out;
   }
 
+  // ✅ يتخطى الوحدات بـ amount=0 عشان مايعملش batches فاضية
   List<List<List<int>>> _splitIntoBatches(
       List<CastleUnit> units, int maxPerBatch) {
     final batches = <List<List<int>>>[];
     List<List<int>> current = [];
     for (final u in units) {
+      if (u.amount <= 0) continue;
       if (current.length >= maxPerBatch) {
         batches.add(current);
         current = [];
@@ -471,7 +444,7 @@ class AutoDefenseService {
     return batches;
   }
 
-  // ── Trigger evacuation (multi-batch) ───────────────────────
+  // ── Trigger evacuation (multi-batch, NO delay for speed) ────
   Future<void> _triggerEvacuation(
       _PendingAttack attack, int totalAttacks) async {
     final areaId = attack.targetAreaId;
@@ -479,7 +452,7 @@ class AutoDefenseService {
     if (existing != null && !existing.recalled) return;
     if (_evacuationInProgress.contains(areaId)) return;
 
-    // ✅ NEW: فحص خارجي قبل التهريب (الـ UI بيسيبه null → مش بيتنفذ)
+    // فحص خارجي قبل التهريب (الـ UI بيسيبه null → مش بيتنفذ)
     if (onBeforeEvac != null && !await onBeforeEvac!()) {
       _addLog('⏸️ Evac blocked by callback', 'warn');
       return;
@@ -568,33 +541,55 @@ class AutoDefenseService {
         }
 
         final batch = batches[i];
-        final lordId = freeLordIds[lordIndex++];
         final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
 
-        _addLog(
-            '📤 Batch ${i + 1}/${batches.length}: $totalUnits units, LID=$lordId',
-            'evac');
+        // ✅ حاول مع القائد الحالي، ولو 218 → جرّب اللي بعده (حتى 3 محاولات)
+        bool batchSent = false;
+        for (int attempt = 0;
+            attempt < 3 &&
+                lordIndex < freeLordIds.length &&
+                !batchSent;
+            attempt++) {
+          final lordId = freeLordIds[lordIndex++];
+          _addLog(
+              '📤 Batch ${i + 1}/${batches.length}: $totalUnits units, LID=$lordId'
+              '${attempt > 0 ? " (attempt ${attempt + 1})" : ""}',
+              'evac');
 
-        final result = await client.sendToAlly(
-          source: source,
-          target: ally.castle,
-          units: batch,
-          stationTime: wt,
-          lordId: lordId,
-        );
+          final result = await client.sendToAlly(
+            source: source,
+            target: ally.castle,
+            units: batch,
+            stationTime: wt,
+            lordId: lordId,
+          );
 
-        if (!result.success) {
-          _addLog('❌ Batch ${i + 1} failed: ${result.error}', 'error');
+          if (result.success) {
+            if (result.movementId != null) listMids.add(result.movementId!);
+            _addLog('✅ Batch ${i + 1} MID=${result.movementId}', 'evac');
+            batchSent = true;
+            break;
+          }
+
+          final err = result.error ?? '';
+          if (err.contains('218')) {
+            // القائد مشغول — جرّب اللي بعده
+            _addLog('⚠️ LID=$lordId busy (218), trying next...', 'warn');
+            continue;
+          }
+
+          // خطأ تاني — وقف
+          _addLog('❌ Batch ${i + 1} failed: $err', 'error');
           break;
         }
 
-        if (result.movementId != null) listMids.add(result.movementId!);
-        _addLog('✅ Batch ${i + 1} MID=${result.movementId}', 'evac');
-
-        if (i < batches.length - 1) {
-          await Future.delayed(
-              Duration(milliseconds: 6000 + Random().nextInt(1500)));
+        if (!batchSent) {
+          _addLog('⏹️ Stopping evac — batch ${i + 1} could not be sent',
+              'warn');
+          break;
         }
+
+        // ⚡ NO explicit delay — throttle في GgeClient بيتكفل
       }
 
       if (listMids.isNotEmpty) {
@@ -734,9 +729,9 @@ class AutoDefenseService {
 
         await _evacuateCastleStandalone(targets[i]);
 
+        // ✅ 7s بين كل castle و castle
         if (i < targets.length - 1 && !_globalEvacCancelled) {
-          await Future.delayed(
-              Duration(milliseconds: 2000 + Random().nextInt(1000)));
+          await Future.delayed(const Duration(seconds: 7));
         }
       }
 
@@ -799,7 +794,10 @@ class AutoDefenseService {
           return a.compareTo(b);
         });
 
-      if (freeLordIds.isEmpty) return;
+      if (freeLordIds.isEmpty) {
+        _addLog('⚠️ No free lords for ${source.displayName}', 'warn');
+        return;
+      }
 
       final wt = settings.globalEvacHours;
       final listMids = <int>[];
@@ -812,29 +810,51 @@ class AutoDefenseService {
           break;
         }
 
-        final lordId = freeLordIds[lordIndex++];
-        final totalUnits = batches[i].fold<int>(0, (s, e) => s + e[1]);
+        final batch = batches[i];
+        final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
 
-        final result = await client.sendToAlly(
-          source: source,
-          target: ally.castle,
-          units: batches[i],
-          stationTime: wt,
-          lordId: lordId,
-        );
+        // ✅ حاول مع القائد الحالي، ولو 218 → جرّب اللي بعده
+        bool batchSent = false;
+        for (int attempt = 0;
+            attempt < 3 &&
+                lordIndex < freeLordIds.length &&
+                !batchSent;
+            attempt++) {
+          final lordId = freeLordIds[lordIndex++];
 
-        if (!result.success) {
-          _addLog('❌ Batch ${i + 1} failed: ${result.error}', 'error');
+          final result = await client.sendToAlly(
+            source: source,
+            target: ally.castle,
+            units: batch,
+            stationTime: wt,
+            lordId: lordId,
+          );
+
+          if (result.success) {
+            if (result.movementId != null) listMids.add(result.movementId!);
+            _addLog(
+                '✅ ${source.displayName} batch ${i + 1}/${batches.length}: '
+                '$totalUnits units, LID=$lordId, MID=${result.movementId}',
+                'evac');
+            batchSent = true;
+            break;
+          }
+
+          final err = result.error ?? '';
+          if (err.contains('218')) {
+            _addLog('⚠️ LID=$lordId busy (218), trying next...', 'warn');
+            continue;
+          }
+
+          _addLog('❌ Batch ${i + 1} failed: $err', 'error');
           break;
         }
 
-        if (result.movementId != null) listMids.add(result.movementId!);
-        _addLog('✅ ${source.displayName} batch ${i + 1}/${batches.length}: '
-            '$totalUnits units, LID=$lordId, MID=${result.movementId}', 'evac');
+        if (!batchSent) break;
 
+        // ✅ 7s بين كل batch و batch في التهريب العام
         if (i < batches.length - 1) {
-          await Future.delayed(
-              Duration(milliseconds: 6000 + Random().nextInt(1500)));
+          await Future.delayed(const Duration(seconds: 7));
         }
       }
 

@@ -27,15 +27,23 @@ class _GgeTaskHandler extends TaskHandler {
   GgeClient? _client;
   Timer? _statusTimer;
 
+  // ✅ NEW: log helper — يبعت للـ UI + debugPrint
+  void _log(String s) {
+    debugPrint('[BG] $s');
+    try {
+      FlutterForegroundTask.sendDataToMain('LOG:$s');
+    } catch (_) {}
+  }
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    debugPrint('[BG] Starting');
+    _log('Service starting');
     await _saveStatus('STARTING');
 
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('login_token');
     if (token == null || token.isEmpty) {
-      debugPrint('[BG] No token');
+      _log('No token available');
       await _saveStatus('NO_TOKEN');
       return;
     }
@@ -45,6 +53,7 @@ class _GgeTaskHandler extends TaskHandler {
     if (desertSourceV2 > 0 &&
         (prefs.getInt('desert_auto_source') ?? 0) == 0) {
       await prefs.setInt('desert_auto_source', desertSourceV2);
+      _log('Synced desert_auto_source → $desertSourceV2');
     }
 
     // ── Init client ──
@@ -57,7 +66,7 @@ class _GgeTaskHandler extends TaskHandler {
     try {
       await _client!.connect();
     } catch (e) {
-      debugPrint('[BG] Connect failed: $e');
+      _log('Connect failed: $e');
       await _saveStatus('CONNECT_FAILED', extra: '$e');
       return;
     }
@@ -67,27 +76,48 @@ class _GgeTaskHandler extends TaskHandler {
     try {
       await _client!.loginWithToken(token);
     } catch (e) {
-      debugPrint('[BG] Login failed: $e');
+      _log('Login failed: $e');
       await _saveStatus('LOGIN_FAILED', extra: '$e');
       return;
     }
-    debugPrint('[BG] Online');
+    _log('Online');
     await _saveStatus('ONLINE');
+
+    // ✅ NEW: نمسح أي conflict flag قديم — login نجح يبقى مفيش conflict
+    await prefs.setBool('bg_session_conflict', false);
+
+    // ✅ NEW: Session conflict handler
+    // لما الـ client يكتشف إن حد تاني فتح الحساب، بنسجل flag للـ UI
+    // ونوقف كل الخدمات عشان مفيش requests فاشلة
+    _client!.onSessionConflict = () async {
+      _log('⚠️ Session conflict detected — stopping all services');
+      try {
+        final p = await SharedPreferences.getInstance();
+        await p.setBool('bg_session_conflict', true);
+      } catch (_) {}
+      await _saveStatus('SESSION_CONFLICT',
+          extra: 'Account logged in elsewhere');
+
+      try { AutoTrainService.instance.stop(); } catch (_) {}
+      try { AutoDefenseService.instance.stop(); } catch (_) {}
+      try { DesertAutoService.instance.stop(); } catch (_) {}
+      try { NotificationsService.stopListening(); } catch (_) {}
+    };
 
     // ── 1. Notifications (يستمع على نفس GgeClient) ──
     try {
       NotificationsService.startListening();
-      debugPrint('[BG] Notifications listening');
+      _log('Notifications listening');
     } catch (e) {
-      debugPrint('[BG] Notifications error: $e');
+      _log('Notifications error: $e');
     }
 
     // ── 2. Auto Train ──
     try {
       await AutoTrainService.instance.start(_client!);
-      debugPrint('[BG] AutoTrain started');
+      _log('AutoTrain started');
     } catch (e) {
-      debugPrint('[BG] AutoTrain error: $e');
+      _log('AutoTrain error: $e');
     }
 
     // ── 3. Auto Defense (التهريب التلقائي) ──
@@ -98,19 +128,19 @@ class _GgeTaskHandler extends TaskHandler {
         return !(p.getBool('is_app_foreground') ?? false);
       };
       await AutoDefenseService.instance.init();
-      debugPrint('[BG] AutoDefense: '
+      _log('AutoDefense: '
           '${AutoDefenseService.instance.isRunning ? "running" : "idle"}');
     } catch (e) {
-      debugPrint('[BG] AutoDefense error: $e');
+      _log('AutoDefense error: $e');
     }
 
     // ── 4. Desert Auto (هجوم الأبراج) ──
     try {
       _setupDesertCallbacks();
       await DesertAutoService.instance.start(_client!);
-      debugPrint('[BG] DesertAuto started');
+      _log('DesertAuto started');
     } catch (e) {
-      debugPrint('[BG] DesertAuto error: $e');
+      _log('DesertAuto error: $e');
     }
 
     // ── Periodic status sync للـ UI poller ──
@@ -181,7 +211,7 @@ class _GgeTaskHandler extends TaskHandler {
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    debugPrint('[BG] Destroying');
+    _log('Service destroying');
     _statusTimer?.cancel();
     _statusTimer = null;
 

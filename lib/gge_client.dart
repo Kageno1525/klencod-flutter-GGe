@@ -987,29 +987,47 @@ class GgeClient {
     }
   }
 
+  // ✅✅✅ NEW: يفرّق بين transient close و session conflict حقيقي
   void _scheduleReconnect() {
     if (_disposed) return;
     if (!_appForeground && !allowBackgroundReconnect) return;
     if (!isLoggedIn) return;
     if (_networkWaitActive) return;
+    if (_reconnecting) return;
 
     Future.delayed(const Duration(seconds: 3), () async {
       if (_disposed || _connected) return;
       if (!_appForeground && !allowBackgroundReconnect) return;
       if (!isLoggedIn) return;
 
+      // 1) لو مفيش نت → استنى لحد ما يرجع
       final hasNet = await _hasInternet();
       if (!hasNet) {
         _status('⚠️ Network lost. Waiting for internet to return...');
         _networkWaitActive = true;
         _waitForNetworkAndReconnect();
-      } else {
-        _status(
-            '🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
-        _status('👉 Tap "Login" to reconnect manually when done.');
-
-        onSessionConflict?.call();
+        return;
       }
+
+      // 2) في نت لكن WS مقفول → احتمال transient أو conflict
+      //    استنى 5s إضافية يمكن الـ WS نفسه يرجع
+      _status('🔄 Connection lost — checking...');
+      await Future.delayed(const Duration(seconds: 5));
+      if (_disposed || _connected) return;
+
+      // 3) جرّب reconnect — لو 409 (token expired) → conflict حقيقي
+      _status('🔄 Attempting auto-reconnect...');
+      final ok = await autoReconnect();
+      if (ok) {
+        _status('✅ Auto-reconnected after transient close');
+        return;
+      }
+
+      // 4) reconnect فشل مع وجود نت → ده conflict حقيقي
+      _status(
+          '🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
+      _status('👉 Tap "Login" to reconnect manually when done.');
+      onSessionConflict?.call();
     });
   }
 

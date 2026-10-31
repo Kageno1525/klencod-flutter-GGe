@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // ✅ NEW
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/main.dart' show GgeApp, GgeAppState;
@@ -37,11 +38,33 @@ class _MainScreenState extends State<MainScreen> {
     super.initState();
     _loadUser();
     widget.client.onSessionConflict = _handleSessionConflict;
+    _checkBgSessionConflict(); // ✅ NEW
   }
 
   Future<void> _loadUser() async {
     final u = await AppStorage.getUsername();
     if (mounted) setState(() => _username = u ?? '');
+  }
+
+  // ✅✅✅ NEW: يفحص لو الـ Background سجّل session conflict
+  // بينما التطبيق كان مقفول، ويعرضه للمستخدم أول ما يفتح.
+  Future<void> _checkBgSessionConflict() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final conflict = prefs.getBool('bg_session_conflict') ?? false;
+      if (!conflict) return;
+
+      // نمسح الـ flag عشان ميتكررش
+      await prefs.setBool('bg_session_conflict', false);
+
+      if (!mounted) return;
+
+      // استنى شوية عشان الـ UI يترسم قبل الـ dialog
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+
+      await _handleSessionConflict();
+    } catch (_) {}
   }
 
   Future<void> _handleSessionConflict() async {
