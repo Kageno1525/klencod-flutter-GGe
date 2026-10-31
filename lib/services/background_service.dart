@@ -10,13 +10,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
 
 // ═══════════════════════════════════════════════════════════
-//  Desert Model Classes (local, لتجنب dependencies في الـ isolate)
+//  Desert Model Classes (local)
 // ═══════════════════════════════════════════════════════════
 class _DesertTower {
   final int x, y, kid;
   final double distance;
-  final int as; // ✅ جديد
-  final int rs; // ✅ جديد
+  final int as;
+  final int rs;
 
   _DesertTower({
     required this.x, required this.y, required this.kid,
@@ -27,8 +27,9 @@ class _DesertTower {
   String get key => '$x,$y,$kid';
   String get coordsLabel => '($x,$y)';
 
-  // ✅ برج مدمر (نفس منطق الواجهة)
-  bool get isDead => rs > 0 && rs < 100000;
+  // ⚠️ معطّل تماماً: قراءة rs من gaa غير موثوقة
+  // البرج المدمر بيتكتشف من فشل الهجوم نفسه (4h cooldown)
+  bool get isDead => false;
 }
 
 class _DefenderWing {
@@ -65,7 +66,6 @@ class _BgArmy {
   _BgArmy({required this.left, required this.middle, required this.right, required this.total});
 }
 
-// ✅ نتيجة محاولة الهجوم
 enum _AttackResult { success, lordBusy, noUnits, tooManyUnits, failed }
 
 // ═══════════════════════════════════════════════════════════
@@ -111,7 +111,7 @@ class _GgeTaskHandler extends TaskHandler {
   Set<int> _rangedUnitIds = {};
   bool _runningDesert = false;
 
-  // ✅ Cap tracking (زي الواجهة)
+  // ✅ Cap tracking
   final Map<String, int> _lastSuccessCaps = {};
   final Map<String, int> _lastFailCaps = {};
 
@@ -121,17 +121,15 @@ class _GgeTaskHandler extends TaskHandler {
   DateTime? _nextBreakAt;
   int _actionsSinceBreak = 0;
 
-  // ═══ ثوابت الهجوم التلقائي ═══
+  // ═══ ثوابت الهجوم ═══
   static const int _kMinUnitsToAttack = 30;
   static const int _kMaxRadius = 50;
   static const int _kRadiusStep = 5;
   static const int _kInterAttackDelaySec = 15;
-  static const int _kTowerSuccessCooldownHours = 4;
-  static const int _kTowerDeadCooldownHours = 4;
-  static const int _kTowerFailCooldownMin = 30;
-  static const int _kTower313CooldownMin = 5;
+  static const int _kTowerSuccessCooldownHours = 4;   // نجاح → 4h
+  static const int _kTowerFailedCooldownHours = 4;    // فشل (برج مدمر محتمل) → 4h
+  static const int _kTower313CooldownMin = 5;         // 313 → 5min (تعديل cap)
 
-  // ✅ مفاتيح cap
   static const String _kCapStartKey = 'desert_auto_cap_start';
   static const String _kCapMinKey = 'desert_auto_cap_min';
   static const String _kCapMaxKey = 'desert_auto_cap_max';
@@ -193,16 +191,12 @@ class _GgeTaskHandler extends TaskHandler {
 
   @override
   void onRepeatEvent(DateTime timestamp) {}
-
   @override
   void onReceiveData(Object data) {}
-
   @override
   void onNotificationButtonPressed(String id) {}
-
   @override
   void onNotificationPressed() => FlutterForegroundTask.launchApp('/');
-
   @override
   void onNotificationDismissed() {}
 
@@ -274,8 +268,8 @@ class _GgeTaskHandler extends TaskHandler {
     await _loadCaps();
 
     _log('Desert loaded: enabled=$_desertEnabled radius=$_radiusTiles srcArea=$_sourceAreaId '
-         'attacksToday=$_attacksToday/$_maxAttacksDay session=$_maxAttacksSession '
-         'caps=${_lastSuccessCaps.length}/ok ${_lastFailCaps.length}/fail');
+         'attacks=$_attacksToday/$_maxAttacksDay session=$_maxAttacksSession '
+         'cd=${_cooldowns.length} failed=${_failedTowers.length}');
   }
 
   Future<void> _persistDesertState() async {
@@ -335,7 +329,7 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Anti-ban throttle
+  //  Throttle
   // ═══════════════════════════════════════════════════════
   Future<void> _throttle({bool isAction = true}) async {
     if (!isAction) {
@@ -631,11 +625,11 @@ class _GgeTaskHandler extends TaskHandler {
     }
 
     if (_maxAttacksDay > 0 && _attacksToday >= _maxAttacksDay) {
-      await _saveStatus('LIMIT_REACHED', extra: 'يومي: $_attacksToday/$_maxAttacksDay');
+      await _saveStatus('LIMIT_REACHED', extra: '$_attacksToday/$_maxAttacksDay');
       return;
     }
     if (_maxAttacksSession > 0 && _attacksThisSession >= _maxAttacksSession) {
-      await _saveStatus('SESSION_LIMIT', extra: 'جلسة: $_attacksThisSession/$_maxAttacksSession');
+      await _saveStatus('SESSION_LIMIT', extra: '$_attacksThisSession/$_maxAttacksSession');
       return;
     }
 
@@ -643,7 +637,7 @@ class _GgeTaskHandler extends TaskHandler {
     try {
       final kid = await _ensureKingdom();
       if (kid == null) {
-        _log('Desert: jca failed');
+        _log('jca failed');
         await _saveStatus('JCA_FAILED');
         return;
       }
@@ -666,19 +660,6 @@ class _GgeTaskHandler extends TaskHandler {
       int currentRadius = _radiusTiles;
 
       while (_runningDesert) {
-        // 1. علّم الأبراج المدمرة بـ 4 ساعات
-        final now = DateTime.now();
-        bool changed = false;
-        for (final t in _towers) {
-          if (t.isDead && !_isTowerCooling(t)) {
-            _cooldowns[t.key] = now.add(Duration(hours: _kTowerDeadCooldownHours));
-            changed = true;
-            _log('💀 ${t.coordsLabel} dead (rs=${t.rs}) → ${_kTowerDeadCooldownHours}h');
-          }
-        }
-        if (changed) await _persistDesertState();
-
-        // 2. فلترة الأبراج الجاهزة
         _towers.sort((a, b) => a.distance.compareTo(b.distance));
         final ready = _towers
             .where((t) => !_isTowerCooling(t) && !_isTowerFailed(t))
@@ -697,7 +678,6 @@ class _GgeTaskHandler extends TaskHandler {
 
         await _saveStatus('READY', extra: '${ready.length} towers');
 
-        // 3. اهجم على كل الأبراج الجاهزة
         bool stopTick = false;
 
         for (final tower in ready) {
@@ -714,22 +694,22 @@ class _GgeTaskHandler extends TaskHandler {
             _attacksThisSession++;
             await _persistDesertState();
             await _saveStatus('ATTACK_HIT',
-                extra: 'يومي: $_attacksToday/$_maxAttacksDay · جلسة: $_attacksThisSession/$_maxAttacksSession');
-            _log('✅ ${tower.coordsLabel} → ${_kTowerSuccessCooldownHours}h cooldown');
+                extra: '$_attacksToday/$_maxAttacksDay · $_attacksThisSession/$_maxAttacksSession');
+            _log('✅ ${tower.coordsLabel} → 4h cooldown');
 
             final delaySec = _kInterAttackDelaySec + Random().nextInt(5);
-            _log('⏳ waiting ${delaySec}s before next attack');
+            _log('⏳ wait ${delaySec}s');
             await Future.delayed(Duration(seconds: delaySec));
 
           } else if (result == _AttackResult.lordBusy) {
             await _saveStatus('WAITING_COMMANDER');
-            _log('⏸️ Lord busy — will retry next tick');
+            _log('⏸️ Lord busy');
             stopTick = true;
             break;
 
           } else if (result == _AttackResult.noUnits) {
             await _saveStatus('WAITING_UNITS');
-            _log('⏸️ Not enough units — will retry next tick');
+            _log('⏸️ Not enough units');
             stopTick = true;
             break;
 
@@ -739,14 +719,14 @@ class _GgeTaskHandler extends TaskHandler {
             await Future.delayed(const Duration(seconds: 3));
 
           } else {
-            _markTowerFailed(tower, minutes: _kTowerFailCooldownMin);
-            _log('❌ ${tower.coordsLabel} failed → ${_kTowerFailCooldownMin}min');
+            // ✅ فشل الهجوم (احتمال برج مدمر) → 4 ساعات cooldown
+            _markTowerFailed(tower, minutes: _kTowerFailedCooldownHours * 60);
+            _log('❌ ${tower.coordsLabel} failed → ${_kTowerFailedCooldownHours}h (dead?)');
           }
         }
 
         if (stopTick) break;
 
-        // 4. خلّصنا الـ ready → كبّر radius وامسح تاني
         if (currentRadius < _kMaxRadius) {
           currentRadius = min(currentRadius + _kRadiusStep, _kMaxRadius);
           await _saveStatus('RADIUS_UP', extra: '$currentRadius tiles');
@@ -807,7 +787,7 @@ class _GgeTaskHandler extends TaskHandler {
     return true;
   }
 
-  void _markTowerFailed(_DesertTower t, {int minutes = _kTowerFailCooldownMin}) {
+  void _markTowerFailed(_DesertTower t, {required int minutes}) {
     _failedTowers[t.key] = DateTime.now().add(Duration(minutes: minutes));
     _persistDesertState();
   }
@@ -818,7 +798,7 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Cap management
+  //  Cap
   // ═══════════════════════════════════════════════════════
   Future<int> _capFor(_DesertTower t) async {
     final p = await SharedPreferences.getInstance();
@@ -854,7 +834,7 @@ class _GgeTaskHandler extends TaskHandler {
   }
 
   // ═══════════════════════════════════════════════════════
-  //  Scan (merge + update)
+  //  Scan (لا يثق في rs)
   // ═══════════════════════════════════════════════════════
   Future<void> _scanTowersAt(int kid, int radius) async {
     if (_sourceX == null || _sourceY == null) return;
@@ -905,7 +885,6 @@ class _GgeTaskHandler extends TaskHandler {
               final y = int.tryParse(entry[2].toString()) ?? 0;
 
               final asVal = entry.length > 3 ? (int.tryParse(entry[3].toString()) ?? 0) : 0;
-              final rsVal = entry.length > 5 ? (int.tryParse(entry[5].toString()) ?? 0) : 0;
 
               final dx = (x - cx).toDouble();
               final dy = (y - cy).toDouble();
@@ -915,12 +894,12 @@ class _GgeTaskHandler extends TaskHandler {
               if (idx >= 0) {
                 _towers[idx] = _DesertTower(
                   x: x, y: y, kid: kid, distance: dist,
-                  as: asVal, rs: rsVal,
+                  as: asVal, rs: 0,  // ✅ مش بنثق في rs
                 );
               } else {
                 _towers.add(_DesertTower(
                   x: x, y: y, kid: kid, distance: dist,
-                  as: asVal, rs: rsVal,
+                  as: asVal, rs: 0,
                 ));
                 added++;
               }
@@ -983,7 +962,7 @@ class _GgeTaskHandler extends TaskHandler {
         _log('Too many units 313 at cap=$cap');
         return _AttackResult.tooManyUnits;
       }
-      _log('Attack ${tower.coordsLabel} failed: ${resp.result}');
+      _log('Attack ${tower.coordsLabel} failed: ${resp.result} (assume dead tower)');
       return _AttackResult.failed;
     } catch (e) {
       _log('Attack error ${tower.coordsLabel}: $e');
@@ -1104,80 +1083,6 @@ class _GgeTaskHandler extends TaskHandler {
       }
     }
     return r;
-  }
-
-  // ═══════════════════════════════════════════════════════
-  //  Legacy spy flow (مش مستخدم — للرجوع لاحقاً)
-  // ═══════════════════════════════════════════════════════
-  Future<_DesertSpyReport?> _spyAndFetch(_DesertTower tower) async {
-    _latestSpyMessageId = null;
-    try {
-      final resp = await _sendXtAndWaitAsync(
-        'csm',
-        jsonEncode({
-          'SID': _sourceAreaId,
-          'TX': tower.x, 'TY': tower.y,
-          'SC': 11, 'ST': 0, 'SE': 100,
-          'HBW': -1, 'KID': tower.kid, 'PTT': 1, 'SD': 0,
-        }),
-        responseCmd: 'csm',
-        timeoutMs: 25000,
-        isAction: true,
-      );
-      if (resp.result != 0) { _log('Spy failed: ${resp.result}'); return null; }
-    } catch (e) { _log('Spy: $e'); return null; }
-
-    int? msgId;
-    for (int i = 0; i < 15; i++) {
-      await Future.delayed(const Duration(seconds: 2));
-      msgId = _latestSpyMessageId;
-      if (msgId != null) break;
-    }
-    if (msgId == null) { _log('No sne'); return null; }
-
-    try {
-      _sendXt('mmr', jsonEncode({'MID': msgId}));
-      await Future.delayed(const Duration(milliseconds: 300));
-      final bsd = await _sendXtAndWaitAsync(
-        'bsd', jsonEncode({'MID': msgId}),
-        responseCmd: 'bsd', timeoutMs: 15000, isAction: false,
-      );
-      if (bsd.result != 0 || bsd.payload == null) { _log('bsd failed: ${bsd.result}'); return null; }
-      return _parseBsd(bsd.payload!, msgId, tower);
-    } catch (e) { _log('bsd: $e'); return null; }
-  }
-
-  _DesertSpyReport? _parseBsd(String payload, int messageId, _DesertTower tower) {
-    try {
-      final data = jsonDecode(payload) as Map;
-      final s = data['S'] as List?;
-      if (s == null || s.length < 3) return null;
-
-      _DefenderWing parseWing(dynamic w) {
-        int melee = 0, ranged = 0;
-        if (w is List) {
-          for (final u in w) {
-            if (u is! List || u.length < 2) continue;
-            final id = int.tryParse(u[0].toString()) ?? 0;
-            final amt = int.tryParse(u[1].toString()) ?? 0;
-            if (id <= 0 || amt <= 0) continue;
-            if (_rangedUnitIds.contains(id)) ranged += amt;
-            else melee += amt;
-          }
-        }
-        return _DefenderWing(melee: melee, ranged: ranged);
-      }
-
-      return _DesertSpyReport(
-        messageId: messageId,
-        targetX: tower.x, targetY: tower.y,
-        left: parseWing(s[0]),
-        middle: parseWing(s[1]),
-        right: parseWing(s[2]),
-        defensiveStrength: int.tryParse(data['AS']?.toString() ?? '') ?? 0,
-        rs: int.tryParse(data['RS']?.toString() ?? '') ?? 0,
-      );
-    } catch (e) { _log('parseBsd: $e'); return null; }
   }
 }
 
