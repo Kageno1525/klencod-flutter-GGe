@@ -71,6 +71,10 @@ class DesertAutoService {
   bool _scanInProgress = false;
   bool _hasSyncedMarches = false;
 
+  /// ✅ NEW: callbacks من الـ Background
+  Future<bool> Function()? onBeforeAttack;
+  VoidCallback? onAfterAttack;
+
   int _sessionRadius = 5;
 
   Future<bool> isEnabled() async {
@@ -208,7 +212,9 @@ class DesertAutoService {
     if (_running) return;
 
     if (_activeTick != null) {
-      try { await _activeTick!.timeout(const Duration(seconds: 60)); } catch (_) {}
+      try {
+        await _activeTick!.timeout(const Duration(seconds: 60));
+      } catch (_) {}
     }
 
     _attackingNow.clear();
@@ -539,7 +545,7 @@ class DesertAutoService {
 
       while (_running && attempts < maxAttempts) {
         final ready = _towers
-            .where((t) => !t.isDead) 
+            .where((t) => !t.isDead)
             .where((t) => !_shouldSkipTower(t))
             .where((t) => !_attackedThisTick.contains(t.key))
             .where((t) => !_attackingNow.contains(t.key))
@@ -570,7 +576,7 @@ class DesertAutoService {
         // ✅ تم تصليح الخطأ هنا:
         final catalog = await _client!.loadCatalog();
         final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog);
-        
+
         final sendable = freshUnits.where((u) => u.isCombat && u.amount > 0).toList();
         final totalUnits = sendable.fold<int>(0, (s, u) => s + u.amount);
 
@@ -615,6 +621,12 @@ class DesertAutoService {
             lord = freeLords.first.lord;
           }
 
+          // ✅ NEW: فحص خارجي قبل الهجوم (يسبق markTowerCooldown)
+          if (onBeforeAttack != null && !await onBeforeAttack!()) {
+            _setStatus('⏸️ Blocked (limit/foreground/under-evac)');
+            return;
+          }
+
           // ✅ الحماية الاستباقية في الواجهة
           _markTowerCooldown(tower, minutes: kFailedCooldownH * 60);
 
@@ -633,6 +645,7 @@ class DesertAutoService {
           if (result.success) {
             _onSuccess(tower, suggestion.totalUnits);
             attacksThisSession++;
+            onAfterAttack?.call(); // ✅ NEW
             _attackedThisTick.add(tower.key);
             TrafficLog.add('ST', '[Desert-Auto] ✅ HIT ${tower.coordsLabel} units=${suggestion.totalUnits}');
             _setStatus('✅ Hit ${tower.coordsLabel} → ${kSuccessCooldownH}h');

@@ -1,45 +1,14 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math';
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
-
-class _DesertTower {
-  final int x, y, kid;
-  final double distance;
-  final int as;
-  final int rs;
-
-  _DesertTower({
-    required this.x, required this.y, required this.kid,
-    required this.distance,
-    this.as = 0, this.rs = 0,
-  });
-
-  String get key => '$x,$y,$kid';
-  String get coordsLabel => '($x,$y)';
-  bool get isDead => rs > 0 && rs < 100000;
-}
-
-class _XtMsg {
-  final String cmd;
-  final int result;
-  final String? payload;
-  _XtMsg(this.cmd, this.result, this.payload);
-}
-
-class _BgArmy {
-  final List<List<int>> left, middle, right;
-  final int total;
-  _BgArmy({required this.left, required this.middle, required this.right, required this.total});
-}
-
-enum _AttackResult { success, lordBusy, noUnits, tooManyUnits, timeout, failed }
+import 'auto_train_service.dart';
+import 'auto_defense_service.dart';
+import 'desert_auto_service.dart';
+import 'notifications_service.dart';
 
 @pragma('vm:entry-point')
 void ggeBackgroundCallback() {
@@ -50,106 +19,189 @@ void ggeBackgroundCallback() {
 
 final _callbackRef = ggeBackgroundCallback;
 
+// ═══════════════════════════════════════════════════════════
+//  Task Handler — Orchestrator فقط
+//  بيشغّل: Login → Notifications → AutoTrain → AutoDefense → DesertAuto
+// ═══════════════════════════════════════════════════════════
 class _GgeTaskHandler extends TaskHandler {
-  WebSocket? _ws;
-  StreamSubscription? _sub;
-  Timer? _pollTimer;
-  Timer? _trainTimer;
-  Timer? _desertTimer;
-  bool _connected = false;
-  bool _loggedIn = false;
-  String? _token;
-  int? _mainCastleArea;
-
-  int? _sourceAreaId;
-  int? _sourceX, _sourceY, _sourceKid;
-  final Map<String, List<Completer<_XtMsg>>> _pending = {};
-  final List<_DesertTower> _towers = [];
-  final Map<String, DateTime> _cooldowns = {};
-  final Map<String, DateTime> _failedTowers = {};
-  DateTime? _lastScanAt;
-  bool _desertEnabled = false;
-  int _radiusTiles = 5;
-  int _maxAttacksDay = 0;
-  int _maxAttacksSession = 0;
-  int _breakEvery = 0;
-  int _breakMinutes = 15;
-  int _attacksToday = 0;
-  int _attacksThisSession = 0;
-  String _attacksDate = '';
-  Set<int> _rangedUnitIds = {};
-  bool _runningDesert = false;
-  bool _hasSyncedMarches = false; // ✅ علم لمزامنة الجيوش
-
-  final Map<String, int> _lastSuccessCaps = {};
-  final Map<String, int> _lastFailCaps = {};
-
-  DateTime _lastActionTime = DateTime.now();
-  bool _isProcessing = false;
-  DateTime? _nextBreakAt;
-  int _actionsSinceBreak = 0;
-
-  static const int _kMinUnitsToAttack = 30;
-  static const int _kMaxRadius = 50;
-  static const int _kRadiusStep = 5;
-  static const int _kInterAttackDelaySec = 15;
-  static const int _kTowerSuccessCooldownHours = 4;
-  static const int _kTowerDeadCooldownHours = 4;
-  static const int _kTower313CooldownMin = 5;
-
-  static const String _kCapStartKey = 'desert_auto_cap_start';
-  static const String _kCapMinKey = 'desert_auto_cap_min';
-  static const String _kCapMaxKey = 'desert_auto_cap_max';
-  static const String _kCapsOkKey = 'desert_cap_ok_v3';
-  static const String _kCapsFailKey = 'desert_cap_fail_v3';
-
-  static const String _url = 'wss://ep-live-mz-sa1-ae1-eg1-arab1-game.goodgamestudios.com/';
-  static const String _gameServer = 'EmpireEx_34';
-
-  void _log(String s) {
-    debugPrint('[BG] $s');
-    try { FlutterForegroundTask.sendDataToMain('LOG:$s'); } catch (_) {}
-  }
-
-  Future<void> _saveStatus(String status, {String? extra}) async {
-    try {
-      await FlutterForegroundTask.saveData(key: 'bg_status', value: status);
-      await FlutterForegroundTask.saveData(key: 'bg_time', value: DateTime.now().toIso8601String());
-      await FlutterForegroundTask.saveData(key: 'bg_extra', value: extra ?? '');
-    } catch (_) {}
-  }
-
-  String _todayStr() {
-    final d = DateTime.now();
-    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-  }
+  GgeClient? _client;
+  Timer? _statusTimer;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    _log('Service Started');
+    debugPrint('[BG] Starting');
     await _saveStatus('STARTING');
 
     final prefs = await SharedPreferences.getInstance();
-    _token = prefs.getString('login_token');
-    _mainCastleArea = prefs.getInt('main_castle_area');
-    await _loadDesertState();
+    final token = prefs.getString('login_token');
+    if (token == null || token.isEmpty) {
+      debugPrint('[BG] No token');
+      await _saveStatus('NO_TOKEN');
+      return;
+    }
 
-    _connect();
-    _startAutoTrainTimer();
-    _scheduleNextDesertTick();
+    // ── مزامنة desert source بين UI key و Auto key ──
+    final desertSourceV2 = prefs.getInt('desert_source_v2') ?? 0;
+    if (desertSourceV2 > 0 &&
+        (prefs.getInt('desert_auto_source') ?? 0) == 0) {
+      await prefs.setInt('desert_auto_source', desertSourceV2);
+    }
+
+    // ── Init client ──
+    _client = GgeClient();
+    GgeClient.allowBackgroundReconnect = true;
+    _client!.onAppLifecycleChanged(AppLifecycleState.paused);
+
+    // ── Connect ──
+    await _saveStatus('CONNECTING');
+    try {
+      await _client!.connect();
+    } catch (e) {
+      debugPrint('[BG] Connect failed: $e');
+      await _saveStatus('CONNECT_FAILED', extra: '$e');
+      return;
+    }
+
+    // ── Login ──
+    await _saveStatus('LOGGING_IN');
+    try {
+      await _client!.loginWithToken(token);
+    } catch (e) {
+      debugPrint('[BG] Login failed: $e');
+      await _saveStatus('LOGIN_FAILED', extra: '$e');
+      return;
+    }
+    debugPrint('[BG] Online');
+    await _saveStatus('ONLINE');
+
+    // ── 1. Notifications (يستمع على نفس GgeClient) ──
+    try {
+      NotificationsService.startListening();
+      debugPrint('[BG] Notifications listening');
+    } catch (e) {
+      debugPrint('[BG] Notifications error: $e');
+    }
+
+    // ── 2. Auto Train ──
+    try {
+      await AutoTrainService.instance.start(_client!);
+      debugPrint('[BG] AutoTrain started');
+    } catch (e) {
+      debugPrint('[BG] AutoTrain error: $e');
+    }
+
+    // ── 3. Auto Defense (التهريب التلقائي) ──
+    try {
+      AutoDefenseService.instance.onBeforeEvac = () async {
+        final p = await SharedPreferences.getInstance();
+        // BG يهرب بس لو الـ app في الخلفية (الـ UI بيتصرف لو في المقدمة)
+        return !(p.getBool('is_app_foreground') ?? false);
+      };
+      await AutoDefenseService.instance.init();
+      debugPrint('[BG] AutoDefense: '
+          '${AutoDefenseService.instance.isRunning ? "running" : "idle"}');
+    } catch (e) {
+      debugPrint('[BG] AutoDefense error: $e');
+    }
+
+    // ── 4. Desert Auto (هجوم الأبراج) ──
+    try {
+      _setupDesertCallbacks();
+      await DesertAutoService.instance.start(_client!);
+      debugPrint('[BG] DesertAuto started');
+    } catch (e) {
+      debugPrint('[BG] DesertAuto error: $e');
+    }
+
+    // ── Periodic status sync للـ UI poller ──
+    _statusTimer?.cancel();
+    _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _saveStatus(
+        DesertAutoService.instance.isRunning ? 'RUNNING' : 'IDLE',
+        extra: 'atk=${DesertAutoService.instance.attacksThisSession} · '
+            'towers=${DesertAutoService.instance.towersScanned} · '
+            'train=${AutoTrainService.instance.isRunning ? "ON" : "OFF"} · '
+            'def=${AutoDefenseService.instance.isRunning ? "ON" : "OFF"}',
+      );
+    });
+  }
+
+  /// ✅ فرض الحدود اليومية/الجلسة + أولوية التهريب
+  void _setupDesertCallbacks() {
+    DesertAutoService.instance.onBeforeAttack = () async {
+      final p = await SharedPreferences.getInstance();
+
+      // (1) لو الـ UI شغال في المقدمة → سيبه للـ UI
+      if (p.getBool('is_app_foreground') ?? false) return false;
+
+      // (2) أولوية الدفاع: لو في تهريب نشط → بلاش هجوم
+      if (AutoDefenseService.instance.activeEvacuations.isNotEmpty) {
+        return false;
+      }
+
+      // (3) حد يومي
+      final maxDay = p.getInt('desert_bg_max_attacks_day') ?? 0;
+      if (maxDay > 0) {
+        final now = DateTime.now();
+        final today =
+            '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        final stored = p.getString('desert_bg_attacks_date') ?? '';
+        if (stored != today) {
+          await p.setInt('desert_bg_attacks_today', 0);
+          await p.setString('desert_bg_attacks_date', today);
+        }
+        final count = p.getInt('desert_bg_attacks_today') ?? 0;
+        if (count >= maxDay) return false;
+      }
+
+      // (4) حد جلسة
+      final maxSess = p.getInt('desert_bg_max_attacks_session') ?? 0;
+      if (maxSess > 0 &&
+          DesertAutoService.instance.attacksThisSession >= maxSess) {
+        return false;
+      }
+      return true;
+    };
+
+    DesertAutoService.instance.onAfterAttack = () async {
+      final p = await SharedPreferences.getInstance();
+      final now = DateTime.now();
+      final today =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      final stored = p.getString('desert_bg_attacks_date') ?? '';
+      if (stored != today) {
+        await p.setString('desert_bg_attacks_date', today);
+        await p.setInt('desert_bg_attacks_today', 1);
+      } else {
+        final cur = p.getInt('desert_bg_attacks_today') ?? 0;
+        await p.setInt('desert_bg_attacks_today', cur + 1);
+      }
+    };
   }
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    _pollTimer?.cancel();
-    _trainTimer?.cancel();
-    _desertTimer?.cancel();
-    await _persistDesertState();
-    await _sub?.cancel();
-    try { await _ws?.close(); } catch (_) {}
-    _ws = null;
-    _connected = false;
-    _loggedIn = false;
+    debugPrint('[BG] Destroying');
+    _statusTimer?.cancel();
+    _statusTimer = null;
+
+    try {
+      AutoTrainService.instance.stop();
+    } catch (_) {}
+    try {
+      AutoDefenseService.instance.stop();
+    } catch (_) {}
+    try {
+      DesertAutoService.instance.stop();
+    } catch (_) {}
+    try {
+      NotificationsService.stopListening();
+    } catch (_) {}
+    try {
+      await _client?.dispose();
+    } catch (_) {}
+    _client = null;
+
     await _saveStatus('DESTROYED');
   }
 
@@ -164,892 +216,18 @@ class _GgeTaskHandler extends TaskHandler {
   @override
   void onNotificationDismissed() {}
 
-  Future<void> _loadDesertState() async {
-    final prefs = await SharedPreferences.getInstance();
-    _desertEnabled = prefs.getBool('desert_auto_enabled') ?? false;
-    _radiusTiles = prefs.getInt('desert_radius_v2') ?? 5;
-    _sourceAreaId = prefs.getInt('desert_source_v2') ?? 0;
-    _maxAttacksDay = prefs.getInt('desert_bg_max_attacks_day') ?? 0;
-    _maxAttacksSession = prefs.getInt('desert_bg_max_attacks_session') ?? 0;
-    _breakEvery = prefs.getInt('desert_bg_break_every') ?? 0;
-    _breakMinutes = prefs.getInt('desert_bg_break_minutes') ?? 15;
-    _attacksToday = prefs.getInt('desert_bg_attacks_today') ?? 0;
-    _attacksDate = prefs.getString('desert_bg_attacks_date') ?? '';
-    _attacksThisSession = 0;
-    _hasSyncedMarches = false;
-
-    final today = _todayStr();
-    if (_attacksDate != today) {
-      _attacksToday = 0;
-      _attacksDate = today;
-      await prefs.setInt('desert_bg_attacks_today', 0);
-      await prefs.setString('desert_bg_attacks_date', today);
-    }
-
-    final catalogJson = prefs.getString('desert_bg_catalog_json');
-    if (catalogJson != null && catalogJson.isNotEmpty) {
-      try {
-        final data = jsonDecode(catalogJson) as Map;
-        _rangedUnitIds.clear();
-        for (final e in data.entries) {
-          final id = int.tryParse(e.key);
-          if (id != null && e.value is Map) {
-            final name = (e.value as Map)['displayName']?.toString() ?? '';
-            if (_looksRanged(name)) _rangedUnitIds.add(id);
-          }
-        }
-      } catch (e) { _log('catalog load: $e'); }
-    }
-
-    final cdJson = prefs.getString('desert_cooldowns_v1');
-    if (cdJson != null && cdJson.isNotEmpty) {
-      try {
-        final data = jsonDecode(cdJson) as Map;
-        final now = DateTime.now();
-        _cooldowns.clear();
-        for (final e in data.entries) {
-          final dt = DateTime.tryParse(e.value.toString());
-          if (dt != null && dt.isAfter(now)) _cooldowns[e.key] = dt;
-        }
-      } catch (_) {}
-    }
-
-    final ftJson = prefs.getString('desert_auto_failed_towers');
-    if (ftJson != null && ftJson.isNotEmpty) {
-      try {
-        final data = jsonDecode(ftJson) as Map;
-        final now = DateTime.now();
-        _failedTowers.clear();
-        for (final e in data.entries) {
-          final dt = DateTime.tryParse(e.value.toString());
-          if (dt != null && dt.isAfter(now)) _failedTowers[e.key] = dt;
-        }
-      } catch (_) {}
-    }
-
-    await _loadCaps();
-  }
-
-  Future<void> _persistDesertState() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('desert_bg_attacks_today', _attacksToday);
-    await prefs.setString('desert_bg_attacks_date', _attacksDate);
-
-    final now = DateTime.now();
-    final cdData = <String, String>{};
-    for (final e in _cooldowns.entries) {
-      if (e.value.isAfter(now)) cdData[e.key] = e.value.toIso8601String();
-    }
-    await prefs.setString('desert_cooldowns_v1', jsonEncode(cdData));
-
-    final ftData = <String, String>{};
-    for (final e in _failedTowers.entries) {
-      if (e.value.isAfter(now)) ftData[e.key] = e.value.toIso8601String();
-    }
-    await prefs.setString('desert_auto_failed_towers', jsonEncode(ftData));
-  }
-
-  Future<void> _loadCaps() async {
-    final p = await SharedPreferences.getInstance();
+  Future<void> _saveStatus(String status, {String? extra}) async {
     try {
-      final rawS = p.getString(_kCapsOkKey);
-      if (rawS != null && rawS.isNotEmpty) {
-        final data = jsonDecode(rawS) as Map;
-        _lastSuccessCaps.clear();
-        for (final e in data.entries) {
-          _lastSuccessCaps[e.key] = (e.value as num).toInt();
-        }
-      }
-      final rawF = p.getString(_kCapsFailKey);
-      if (rawF != null && rawF.isNotEmpty) {
-        final data = jsonDecode(rawF) as Map;
-        _lastFailCaps.clear();
-        for (final e in data.entries) {
-          _lastFailCaps[e.key] = (e.value as num).toInt();
-        }
-      }
+      await FlutterForegroundTask.saveData(key: 'bg_status', value: status);
+      await FlutterForegroundTask.saveData(
+          key: 'bg_time', value: DateTime.now().toIso8601String());
+      await FlutterForegroundTask.saveData(key: 'bg_extra', value: extra ?? '');
     } catch (_) {}
-  }
-
-  Future<void> _saveCaps() async {
-    final p = await SharedPreferences.getInstance();
-    await p.setString(_kCapsOkKey, jsonEncode(_lastSuccessCaps));
-    await p.setString(_kCapsFailKey, jsonEncode(_lastFailCaps));
-  }
-
-  bool _looksRanged(String name) {
-    final n = name.toLowerCase();
-    return n.contains('bow') || n.contains('archer') || n.contains('crossbow') ||
-        n.contains('slinger') || n.contains('mangonel') || n.contains('trebuchet') ||
-        n.contains('ballista') || n.contains('ranged') ||
-        n.contains('قوس') || n.contains('نابل') || n.contains('رامي') ||
-        n.contains('منجنيق') || n.contains('عرادة') || n.contains('قاذف');
-  }
-
-  Future<void> _throttle({bool isAction = true}) async {
-    if (!isAction) {
-      await Future.delayed(Duration(milliseconds: 500 + Random().nextInt(700)));
-      return;
-    }
-
-    if (_nextBreakAt != null) {
-      final now = DateTime.now();
-      if (now.isBefore(_nextBreakAt!)) {
-        final wait = _nextBreakAt!.difference(now).inMilliseconds;
-        if (wait > 0 && wait < 3600000) {
-          await _saveStatus('ON_BREAK', extra: '${_nextBreakAt!.difference(now).inMinutes} min');
-          await Future.delayed(Duration(milliseconds: wait));
-        }
-      }
-      _nextBreakAt = null;
-      _actionsSinceBreak = 0;
-      await _saveStatus('ONLINE');
-    }
-
-    final now = DateTime.now();
-    final diff = now.difference(_lastActionTime).inMilliseconds;
-    if (diff < 5500) {
-      final wait = 5500 - diff + Random().nextInt(1500);
-      await Future.delayed(Duration(milliseconds: wait));
-    } else {
-      await Future.delayed(Duration(milliseconds: Random().nextInt(1000)));
-    }
-    _lastActionTime = DateTime.now();
-    _actionsSinceBreak++;
-
-    if (_breakEvery > 0 && _actionsSinceBreak >= _breakEvery) {
-      _nextBreakAt = DateTime.now().add(Duration(minutes: _breakMinutes));
-    }
-  }
-
-  Future<_XtMsg> _sendXtAndWaitAsync(
-    String cmd,
-    String payload, {
-    required String responseCmd,
-    int timeoutMs = 30000,
-    bool isAction = false,
-  }) async {
-    final completer = Completer<_XtMsg>();
-    _pending.putIfAbsent(responseCmd, () => []).add(completer);
-    final timer = Timer(Duration(milliseconds: timeoutMs), () {
-      if (!completer.isCompleted) {
-        _pending[responseCmd]?.remove(completer);
-        completer.completeError(TimeoutException('Timeout: $responseCmd'));
-      }
-    });
-    await _throttle(isAction: isAction);
-    _sendXt(cmd, payload);
-    try {
-      final resp = await completer.future;
-      timer.cancel();
-      return resp;
-    } catch (e) {
-      timer.cancel();
-      rethrow;
-    }
-  }
-
-  void _dispatchToPending(String raw) {
-    final xt = _parseXt(raw);
-    if (xt == null) return;
-    final list = _pending[xt.cmd];
-    if (list == null || list.isEmpty) return;
-    final completer = list.removeAt(0);
-    if (!completer.isCompleted) completer.complete(xt);
-  }
-
-  _XtMsg? _parseXt(String raw) {
-    final trimmed = raw.replaceAll(RegExp(r'^%+|%+$'), '');
-    final parts = trimmed.split('%');
-    if (parts.length < 2 || parts[0] != 'xt') return null;
-    int offset = 1;
-    if (parts.length > 1 && parts[1].startsWith('EmpireEx_')) offset = 2;
-    if (parts.length <= offset) return null;
-    final cmd = parts[offset];
-    final result = parts.length > offset + 2 ? (int.tryParse(parts[offset + 2]) ?? -1) : -1;
-    final payload = parts.length > offset + 3 ? parts.sublist(offset + 3).join('%') : null;
-    return _XtMsg(cmd, result, payload);
-  }
-
-  Future<void> _connect() async {
-    try {
-      await _saveStatus('CONNECTING');
-      _ws = await WebSocket.connect(_url).timeout(const Duration(seconds: 20));
-      _connected = true;
-      _hasSyncedMarches = false; // ✅ تصفير المزامنة عند الاتصال
-      _ws!.add('<msg t="sys"><body action="verChk" r="0"><ver v="166" /></body></msg>');
-      _sub = _ws!.listen((data) => _onMessage(data.toString()),
-        onDone: () { _connected = false; _loggedIn = false; _scheduleReconnect(); },
-        onError: (_) { _connected = false; _loggedIn = false; _scheduleReconnect(); },
-      );
-    } catch (e) {
-      _scheduleReconnect();
-    }
-  }
-
-  void _scheduleReconnect() {
-    Future.delayed(const Duration(seconds: 10), () {
-      if (!_connected) _connect();
-    });
-  }
-
-  void _sendXt(String cmd, String payload) {
-    if (!_connected) return;
-    try { _ws?.add('%xt%$_gameServer%$cmd%1%$payload%'); } catch (_) {}
-  }
-
-  void _sendSys(String xml) {
-    if (!_connected) return;
-    try { _ws?.add(xml); } catch (_) {}
-  }
-
-  Future<void> _onMessage(String text) async {
-    if (text.contains('apiOK')) {
-      _sendSys('<msg t="sys"><body action="login" r="0"><login z="$_gameServer"><nick><![CDATA[]]></nick><pword><![CDATA[undefined%en%0]]></pword></login></body></msg>');
-    } else if (text.contains('joinOK')) {
-      _sendSys('<msg t="sys"><body action="roundTrip" r="1"></body></msg>');
-      final rand = Random().nextDouble() * 9e307;
-      _sendXt('vck', 'undefined%web-html5%<RoundHouseKick>%${rand.toStringAsExponential(16)}');
-    } else if (text.startsWith('%xt%') && text.contains('%vck%')) {
-      _doLogin();
-    } else if (text.startsWith('%xt%') && text.contains('%lli%')) {
-      if (text.contains('%lli%1%0%')) {
-        _loggedIn = true;
-        await _saveStatus('ONLINE');
-        _runInit();
-      } else {
-        await _saveStatus('LOGIN_FAILED');
-      }
-    } else if (text.contains('bup%1%87%') || text.contains('bup%1%88%')) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('auto_last_train_time', DateTime.now().toIso8601String());
-    }
-
-    if (text.startsWith('%xt%')) {
-      _dispatchToPending(text);
-    }
-  }
-
-  void _doLogin() {
-    if (_token == null) return;
-    _sendXt('lli', jsonEncode({
-      'CONM': 350, 'RTM': 57, 'ID': 0, 'PL': 1,
-      'NOM': 'User', 'LT': _token, 'LANG': 'en', 'DID': '0',
-      'AID': '17254677223212351', 'KID': '', 'REF': 'https://empire.goodgamestudios.com',
-      'GCI': '', 'SID': 9, 'PLFID': 1,
-    }));
-  }
-
-  void _runInit() {
-    _sendXt('nch', '');
-    Future.delayed(const Duration(seconds: 1), () => _sendXt('gbl', '{}'));
-    Future.delayed(const Duration(seconds: 2), () => _sendXt('jca', '{"CID":-1,"KID":0}'));
-    Future.delayed(const Duration(seconds: 3), () => _sendXt('sli', '{}'));
-    Future.delayed(const Duration(seconds: 4), () => _sendXt('gie', '{}'));
-    Future.delayed(const Duration(seconds: 5), () => _sendXt('asc', '{}'));
-    Future.delayed(const Duration(seconds: 6), () => _sendXt('sie', '{}'));
-    Future.delayed(const Duration(seconds: 7), () => _sendXt('ffi', '{"FIDS":[1]}'));
-
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      if (_loggedIn) _sendXt('pin', '<RoundHouseKick>');
-    });
-  }
-
-  void _startAutoTrainTimer() {
-    _trainTimer?.cancel();
-    _trainTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
-      if (!_loggedIn || _isProcessing) return;
-      final prefs = await SharedPreferences.getInstance();
-      final autoEnabled = prefs.getBool('auto_enabled') ?? false;
-      if (!autoEnabled) return;
-      final isAppForeground = prefs.getBool('is_app_foreground') ?? false;
-      if (isAppForeground) return;
-
-      final useMaxTotal = prefs.getBool('auto_use_max') ?? false;
-      final maxTotal = int.tryParse(prefs.getString('auto_max_total') ?? '1000') ?? 1000;
-      final totalTrained = prefs.getInt('auto_total_trained') ?? 0;
-      if (useMaxTotal && totalTrained >= maxTotal) {
-        await prefs.setBool('auto_enabled', false);
-        return;
-      }
-
-      final triggerOnTime = prefs.getBool('auto_trigger_time') ?? false;
-      final timeInterval = prefs.getInt('auto_time_interval') ?? 5;
-      final timeUnit = prefs.getString('auto_time_unit') ?? 'minutes';
-      final lastTrainStr = prefs.getString('auto_last_train_time');
-      int intervalSeconds = timeInterval;
-      if (timeUnit == 'minutes') intervalSeconds *= 60;
-      if (timeUnit == 'hours') intervalSeconds *= 3600;
-      bool timeTriggered = false;
-      if (triggerOnTime) {
-        if (lastTrainStr == null) timeTriggered = true;
-        else {
-          final last = DateTime.parse(lastTrainStr);
-          if (DateTime.now().difference(last).inSeconds >= intervalSeconds) timeTriggered = true;
-        }
-      }
-
-      final selectedJson = prefs.getString('auto_selected_units');
-      if (selectedJson == null) return;
-      final Map<String, dynamic> selected = jsonDecode(selectedJson);
-      if (selected.isEmpty) return;
-      final List<int> validWods = selected.keys.map((e) => int.parse(e)).toList();
-      final currentIndex = prefs.getInt('auto_rotation_index') ?? 0;
-      final wodId = validWods[currentIndex % validWods.length];
-      final amount = selected[wodId.toString()] as int;
-      final triggerOnSlot = prefs.getBool('auto_trigger_slot') ?? true;
-
-      if (timeTriggered || triggerOnSlot) {
-        _isProcessing = true;
-        await _throttle();
-        _sendXt('bup', jsonEncode({
-          'LID': 0, 'WID': wodId, 'AMT': amount,
-          'PO': -1, 'PWR': 0, 'SK': 0, 'SID': 0, 'AID': _mainCastleArea ?? 1606327,
-        }));
-        await prefs.setString('auto_last_train_time', DateTime.now().toIso8601String());
-        await prefs.setInt('auto_total_trained', totalTrained + amount);
-        await prefs.setInt('auto_rotation_index', currentIndex + 1);
-        Future.delayed(const Duration(seconds: 3), () => _isProcessing = false);
-      }
-    });
-  }
-
-  void _scheduleNextDesertTick() {
-    const seconds = 30;
-    _desertTimer = Timer(const Duration(seconds: seconds), () async {
-      if (!_runningDesert && _loggedIn && _desertEnabled) {
-        await _desertTick();
-      }
-      _scheduleNextDesertTick();
-    });
-  }
-
-  // ✅ دالة مزامنة الجيوش النشطة
-  Future<void> _syncActiveMarches() async {
-    if (_hasSyncedMarches || _sourceX == null || _sourceY == null) return;
-    try {
-      final resp = await _sendXtAndWaitAsync('gam', '{}', responseCmd: 'gam', timeoutMs: 10000, isAction: false);
-      if (resp.result == 0 && resp.payload != null) {
-        final data = jsonDecode(resp.payload!) as Map;
-        final moves = data['M'] as List? ?? [];
-        final now = DateTime.now();
-        int synced = 0;
-        for (final m in moves) {
-          if (m is! Map) continue;
-          final mov = m['M'] as Map?;
-          if (mov == null) continue;
-          final type = int.tryParse(mov['T']?.toString() ?? '') ?? -1;
-          if (type != 0) continue; // 0 = Attack
-          final ta = mov['TA'] as List?;
-          final sa = mov['SA'] as List?;
-          if (ta == null || ta.length < 3) continue;
-          if (sa == null || sa.length < 3) continue;
-
-          final sx = int.tryParse(sa[1].toString()) ?? 0;
-          final sy = int.tryParse(sa[2].toString()) ?? 0;
-          final tx = int.tryParse(ta[1].toString()) ?? 0;
-          final ty = int.tryParse(ta[2].toString()) ?? 0;
-
-          if (sx == _sourceX && sy == _sourceY) {
-            final key = '$tx,$ty,$_sourceKid';
-            _failedTowers[key] = now.add(Duration(hours: _kTowerDeadCooldownHours));
-            synced++;
-          }
-        }
-        if (synced > 0) {
-          await _persistDesertState();
-          _log('🔄 Synced $synced active marches → 4h cooldown');
-        }
-        _hasSyncedMarches = true;
-      }
-    } catch (e) {
-      _log('gam sync error: $e');
-    }
-  }
-
-  Future<void> _desertTick() async {
-    if (!_loggedIn || !_desertEnabled) return;
-    if (_sourceAreaId == null || _sourceAreaId == 0) return;
-
-    final today = _todayStr();
-    if (_attacksDate != today) {
-      _attacksToday = 0;
-      _attacksDate = today;
-      await _persistDesertState();
-    }
-
-    if (_maxAttacksDay > 0 && _attacksToday >= _maxAttacksDay) {
-      await _saveStatus('LIMIT_REACHED', extra: '$_attacksToday/$_maxAttacksDay');
-      return;
-    }
-    if (_maxAttacksSession > 0 && _attacksThisSession >= _maxAttacksSession) {
-      await _saveStatus('SESSION_LIMIT', extra: '$_attacksThisSession/$_maxAttacksSession');
-      return;
-    }
-
-    _runningDesert = true;
-    try {
-      final kid = await _ensureKingdom();
-      if (kid == null) {
-        await _saveStatus('JCA_FAILED');
-        return;
-      }
-
-      // ✅ مزامنة الجيوش أول ما نشتغل أو نتصل
-      await _syncActiveMarches();
-
-      if (_towers.isEmpty) {
-        await _scanTowersAt(kid, _radiusTiles);
-      }
-
-      final needsRescan = _lastScanAt == null ||
-          DateTime.now().difference(_lastScanAt!).inMinutes >= 5;
-      if (needsRescan && _towers.isNotEmpty) {
-        await _scanTowersAt(kid, _kMaxRadius);
-      }
-
-      if (_towers.isEmpty) {
-        await _saveStatus('NO_TOWERS');
-        return;
-      }
-
-      int currentRadius = _radiusTiles;
-
-      while (_runningDesert) {
-        final now = DateTime.now();
-        bool changed = false;
-        for (final t in _towers) {
-          if (t.isDead && !_isTowerCooling(t) && !_isTowerFailed(t)) {
-            _failedTowers[t.key] = now.add(Duration(hours: _kTowerDeadCooldownHours));
-            changed = true;
-            _log('💀 ${t.coordsLabel} dead (rs=${t.rs}) → ${_kTowerDeadCooldownHours}h');
-          }
-        }
-        if (changed) await _persistDesertState();
-
-        _towers.sort((a, b) => a.distance.compareTo(b.distance));
-        final ready = _towers
-            .where((t) => !t.isDead)
-            .where((t) => !_isTowerCooling(t) && !_isTowerFailed(t))
-            .toList();
-
-        if (ready.isEmpty) {
-          if (currentRadius < _kMaxRadius) {
-            currentRadius = min(currentRadius + _kRadiusStep, _kMaxRadius);
-            await _saveStatus('RADIUS_UP', extra: '$currentRadius tiles');
-            await _scanTowersAt(kid, currentRadius);
-            continue;
-          }
-          await _saveStatus('ALL_COOLDOWN', extra: 'R=$_kMaxRadius');
-          break;
-        }
-
-        await _saveStatus('READY', extra: '${ready.length} towers');
-
-        bool stopTick = false;
-
-        for (final tower in ready) {
-          if (!_runningDesert) { stopTick = true; break; }
-          if (_maxAttacksDay > 0 && _attacksToday >= _maxAttacksDay) { stopTick = true; break; }
-          if (_maxAttacksSession > 0 && _attacksThisSession >= _maxAttacksSession) { stopTick = true; break; }
-
-          await _saveStatus('ATTACKING', extra: tower.coordsLabel);
-          final result = await _tryAttackTowerDirect(tower);
-
-          if (result == _AttackResult.success) {
-            _markTowerAttacked(tower);
-            _attacksToday++;
-            _attacksThisSession++;
-            await _persistDesertState();
-            await _saveStatus('ATTACK_HIT',
-                extra: '$_attacksToday/$_maxAttacksDay · $_attacksThisSession/$_maxAttacksSession');
-            _log('✅ ${tower.coordsLabel} → 4h cooldown');
-
-            final delaySec = _kInterAttackDelaySec + Random().nextInt(5);
-            _log('⏳ wait ${delaySec}s');
-            await Future.delayed(Duration(seconds: delaySec));
-
-          } else if (result == _AttackResult.lordBusy) {
-            _failedTowers.remove(tower.key); // ✅ القائد مشغول: شيل الـ 4 ساعات
-            await _persistDesertState();
-            await _saveStatus('WAITING_COMMANDER');
-            _log('⏸️ Lord busy');
-            stopTick = true;
-            break;
-
-          } else if (result == _AttackResult.noUnits) {
-            _failedTowers.remove(tower.key); // ✅ وحدات قليلة: شيل الـ 4 ساعات
-            await _persistDesertState();
-            await _saveStatus('WAITING_UNITS');
-            _log('⏸️ Not enough units');
-            stopTick = true;
-            break;
-
-          } else if (result == _AttackResult.tooManyUnits) {
-            _failedTowers.remove(tower.key); // شيل الـ 4 ساعات
-            await _on313(tower);
-            _markTowerFailed(tower, minutes: _kTower313CooldownMin);
-            await Future.delayed(const Duration(seconds: 3));
-
-          } else if (result == _AttackResult.timeout) {
-            // ✅ النت قطع: نسيب الـ 4 ساعات زي ما هي عشان ميبعتش تاني
-            await _saveStatus('WAITING_NET');
-            _log('⏸️ Timeout — keeping 4h cooldown to prevent duplicates');
-            stopTick = true;
-            break;
-
-          } else {
-            // CRA 95 برج مدمر: نسيب الـ 4 ساعات
-            await _persistDesertState();
-            _log('❌ ${tower.coordsLabel} failed → 4h (dead tower)');
-          }
-        }
-
-        if (stopTick) break;
-
-        if (currentRadius < _kMaxRadius) {
-          currentRadius = min(currentRadius + _kRadiusStep, _kMaxRadius);
-          await _saveStatus('RADIUS_UP', extra: '$currentRadius tiles');
-          await _scanTowersAt(kid, currentRadius);
-          continue;
-        }
-
-        await _saveStatus('MAX_RADIUS_DONE', extra: '${_towers.length} towers');
-        break;
-      }
-
-      await _persistDesertState();
-    } catch (e) {
-      _log('Desert tick error: $e');
-      await _saveStatus('ERROR', extra: '$e');
-    } finally {
-      _runningDesert = false;
-    }
-  }
-
-  Future<int?> _ensureKingdom() async {
-    try {
-      final resp = await _sendXtAndWaitAsync(
-        'jca',
-        jsonEncode({'CID': -1, 'KID': 1}),
-        responseCmd: 'jaa',
-        timeoutMs: 8000,
-        isAction: false,
-      );
-      if (resp.result == 0 && resp.payload != null) {
-        final data = jsonDecode(resp.payload!) as Map;
-        final gca = data['gca'] as Map?;
-        if (gca != null) {
-          final a = gca['A'] as List?;
-          if (a != null && a.length > 3) {
-            _sourceX = int.tryParse(a[1].toString());
-            _sourceY = int.tryParse(a[2].toString());
-            _sourceKid = 1;
-            return 1;
-          }
-        }
-      }
-    } catch (e) { _log('jca: $e'); }
-    return null;
-  }
-
-  bool _isTowerCooling(_DesertTower t) {
-    final dt = _cooldowns[t.key];
-    if (dt == null) return false;
-    if (dt.isBefore(DateTime.now())) { _cooldowns.remove(t.key); return false; }
-    return true;
-  }
-
-  bool _isTowerFailed(_DesertTower t) {
-    final dt = _failedTowers[t.key];
-    if (dt == null) return false;
-    if (dt.isBefore(DateTime.now())) { _failedTowers.remove(t.key); return false; }
-    return true;
-  }
-
-  void _markTowerFailed(_DesertTower t, {required int minutes}) {
-    _failedTowers[t.key] = DateTime.now().add(Duration(minutes: minutes));
-    _persistDesertState();
-  }
-
-  void _markTowerAttacked(_DesertTower t) {
-    _cooldowns[t.key] = DateTime.now().add(Duration(hours: _kTowerSuccessCooldownHours));
-    _persistDesertState();
-  }
-
-  Future<int> _capFor(_DesertTower t) async {
-    final p = await SharedPreferences.getInstance();
-    final start = p.getInt(_kCapStartKey) ?? 204;
-    final minC = p.getInt(_kCapMinKey) ?? 204;
-    final maxC = p.getInt(_kCapMaxKey) ?? 204;
-
-    final s = _lastSuccessCaps[t.key];
-    final f = _lastFailCaps[t.key];
-
-    if (s == null && f == null) return start;
-    if (s == null) {
-      final next = f! - 20;
-      return next < minC ? minC : (next > maxC ? maxC : next);
-    }
-    if (f == null) {
-      final next = s + 15;
-      return next > maxC ? maxC : next;
-    }
-    return s.clamp(minC, maxC);
-  }
-
-  Future<void> _onSuccess(_DesertTower t, int used) async {
-    _lastSuccessCaps[t.key] = used;
-    await _saveCaps();
-  }
-
-  Future<void> _on313(_DesertTower t) async {
-    final cap = await _capFor(t);
-    _lastFailCaps[t.key] = cap;
-    await _saveCaps();
-  }
-
-  Future<void> _scanTowersAt(int kid, int radius) async {
-    if (_sourceX == null || _sourceY == null) return;
-    _lastScanAt = DateTime.now();
-
-    final cx = _sourceX!, cy = _sourceY!;
-    const chunkSize = 13;
-
-    final minX = (cx - radius).clamp(1, 1000);
-    final maxX = (cx + radius).clamp(1, 1000);
-    final minY = (cy - radius).clamp(1, 1000);
-    final maxY = (cy + radius).clamp(1, 1000);
-    final startX = (minX ~/ chunkSize) * chunkSize;
-    final endX = (maxX ~/ chunkSize) * chunkSize;
-    final startY = (minY ~/ chunkSize) * chunkSize;
-    final endY = (maxY ~/ chunkSize) * chunkSize;
-
-    final chunks = <List<int>>[];
-    for (int x = startX; x <= endX; x += chunkSize) {
-      for (int y = startY; y <= endY; y += chunkSize) {
-        chunks.add([x, y, (x + chunkSize - 1).clamp(1, 1000), (y + chunkSize - 1).clamp(1, 1000)]);
-      }
-    }
-    if (chunks.length > 40) chunks.removeRange(40, chunks.length);
-
-    int done = 0;
-    int added = 0;
-    for (final chunk in chunks) {
-      try {
-        final resp = await _sendXtAndWaitAsync(
-          'gaa',
-          jsonEncode({'KID': kid, 'AX1': chunk[0], 'AY1': chunk[1], 'AX2': chunk[2], 'AY2': chunk[3]}),
-          responseCmd: 'gaa',
-          timeoutMs: 15000,
-          isAction: false,
-        );
-        if (resp.result == 0 && resp.payload != null) {
-          final data = jsonDecode(resp.payload!) as Map;
-          final ai = data['AI'] as List?;
-          if (ai != null) {
-            for (final entry in ai) {
-              if (entry is! List || entry.length < 3) continue;
-              if (int.tryParse(entry[0].toString()) != 2) continue;
-              final x = int.tryParse(entry[1].toString()) ?? 0;
-              final y = int.tryParse(entry[2].toString()) ?? 0;
-
-              final asVal = entry.length > 3 ? (int.tryParse(entry[3].toString()) ?? 0) : 0;
-              final rsVal = entry.length > 5 ? (int.tryParse(entry[5].toString()) ?? 0) : 0;
-
-              final dx = (x - cx).toDouble();
-              final dy = (y - cy).toDouble();
-              final dist = sqrt(dx * dx + dy * dy);
-
-              final idx = _towers.indexWhere((t) => t.x == x && t.y == y && t.kid == kid);
-              if (idx >= 0) {
-                _towers[idx] = _DesertTower(
-                  x: x, y: y, kid: kid, distance: dist,
-                  as: asVal, rs: rsVal,
-                );
-              } else {
-                _towers.add(_DesertTower(
-                  x: x, y: y, kid: kid, distance: dist,
-                  as: asVal, rs: rsVal,
-                ));
-                added++;
-              }
-            }
-          }
-        }
-      } catch (e) { _log('Scan chunk: $e'); }
-      done++;
-      await Future.delayed(Duration(milliseconds: 800 + Random().nextInt(400)));
-      await _saveStatus('SCANNING', extra: '$done/${chunks.length} · ${_towers.length} towers');
-    }
-  }
-
-  Future<_AttackResult> _tryAttackTowerDirect(_DesertTower tower) async {
-    final units = await _fetchUnits();
-    if (units.isEmpty) return _AttackResult.noUnits;
-
-    final totalUnits = units.values.fold<int>(0, (s, v) => s + v);
-    if (totalUnits < _kMinUnitsToAttack) return _AttackResult.noUnits;
-
-    final cap = await _capFor(tower);
-    final army = _buildArmyFromCap(units, cap);
-    if (army == null || army.total <= 0) return _AttackResult.noUnits;
-
-    // ✅ الحماية الاستباقية: نحط 4 ساعات قبل ما نبعت
-    _markTowerFailed(tower, minutes: _kTowerDeadCooldownHours * 60);
-
-    try {
-      final payload = {
-        'SX': _sourceX, 'SY': _sourceY,
-        'TX': tower.x, 'TY': tower.y,
-        'KID': tower.kid, 'LID': 0,
-        'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
-        'LP': 0, 'FC': 0, 'PTT': 1, 'SD': 0, 'ICA': 0, 'CD': 99,
-        'A': [{
-          'L': {'T': [[-1, 0], [-1, 0]], 'U': _fill(army.left, 2)},
-          'R': {'T': [[-1, 0], [-1, 0]], 'U': _fill(army.right, 2)},
-          'M': {'T': [[-1, 0], [-1, 0], [-1, 0]], 'U': _fill(army.middle, 6)},
-        }],
-        'BKS': [], 'AST': [-1, -1, -1],
-        'RW': List.generate(8, (_) => [-1, 0]),
-        'ASCT': 0,
-      };
-      final resp = await _sendXtAndWaitAsync(
-        'cra', jsonEncode(payload),
-        responseCmd: 'cra', timeoutMs: 25000, isAction: true,
-      );
-      if (resp.result == 0) {
-        await _onSuccess(tower, army.total);
-        return _AttackResult.success;
-      }
-      if (resp.result == 218) return _AttackResult.lordBusy;
-      if (resp.result == 313) return _AttackResult.tooManyUnits;
-
-      return _AttackResult.failed;
-    } on TimeoutException {
-      // ✅ الشبكة قطعت أثناء انتظار الرد: البوت مش هيعرف لو الهجمة نجحت ولا لأ، فبنسيب الـ 4 ساعات
-      return _AttackResult.timeout;
-    } catch (e) {
-      return _AttackResult.failed;
-    }
-  }
-
-  Future<Map<int, int>> _fetchUnits() async {
-    try {
-      final resp = await _sendXtAndWaitAsync(
-        'gui', '{}',
-        responseCmd: 'gui', timeoutMs: 10000, isAction: false,
-      );
-      if (resp.result == 0 && resp.payload != null) {
-        final data = jsonDecode(resp.payload!) as Map;
-        final i = data['I'] as List?;
-        final units = <int, int>{};
-        if (i != null) {
-          for (final u in i) {
-            if (u is List && u.length >= 2) {
-              final id = int.tryParse(u[0].toString()) ?? 0;
-              final amt = int.tryParse(u[1].toString()) ?? 0;
-              if (id > 0 && amt > 0) units[id] = amt;
-            }
-          }
-        }
-        return units;
-      }
-    } catch (e) {}
-    return {};
-  }
-
-  _BgArmy? _buildArmyFromCap(Map<int, int> available, int cap) {
-    if (available.isEmpty || cap <= 0) return null;
-
-    final flankMax = (cap * 0.2).round();
-    final middleMax = cap - 2 * flankMax;
-
-    final melee = <MapEntry<int, int>>[];
-    final ranged = <MapEntry<int, int>>[];
-    for (final e in available.entries) {
-      if (_rangedUnitIds.contains(e.key)) ranged.add(e);
-      else melee.add(e);
-    }
-    melee.sort((a, b) => b.value.compareTo(a.value));
-    ranged.sort((a, b) => b.value.compareTo(a.value));
-
-    final remaining = Map<int, int>.from(available);
-
-    List<List<int>> alloc(int maxUnits, int maxSlots) {
-      if (maxUnits <= 0 || maxSlots <= 0) return [];
-      final out = <List<int>>[];
-      final meleeTarget = (maxUnits * 0.5).round();
-      final rangedTarget = maxUnits - meleeTarget;
-      final meleeSlots = (maxSlots + 1) ~/ 2;
-      final rangedSlots = maxSlots - meleeSlots;
-
-      int meleeGot = 0, rangedGot = 0;
-      int meleeUsed = 0, rangedUsed = 0;
-
-      for (final e in melee) {
-        if (meleeGot >= meleeTarget || meleeUsed >= meleeSlots) break;
-        final rem = remaining[e.key] ?? 0;
-        if (rem <= 0) continue;
-        final take = (meleeTarget - meleeGot) < rem ? (meleeTarget - meleeGot) : rem;
-        if (take <= 0) continue;
-        out.add([e.key, take]);
-        remaining[e.key] = rem - take;
-        meleeGot += take;
-        meleeUsed++;
-      }
-
-      for (final e in ranged) {
-        if (rangedGot >= rangedTarget || rangedUsed >= rangedSlots) break;
-        final rem = remaining[e.key] ?? 0;
-        if (rem <= 0) continue;
-        final take = (rangedTarget - rangedGot) < rem ? (rangedTarget - rangedGot) : rem;
-        if (take <= 0) continue;
-        out.add([e.key, take]);
-        remaining[e.key] = rem - take;
-        rangedGot += take;
-        rangedUsed++;
-      }
-
-      return out;
-    }
-
-    final left = alloc(flankMax, 2);
-    final middle = alloc(middleMax, 6);
-    final right = alloc(flankMax, 2);
-
-    Set<int> allTypes() => {
-      ...left.map((e) => e[0]),
-      ...middle.map((e) => e[0]),
-      ...right.map((e) => e[0]),
-    };
-    while (allTypes().length > 10 && middle.isNotEmpty) middle.removeLast();
-    while (allTypes().length > 10 && right.isNotEmpty) right.removeLast();
-    while (allTypes().length > 10 && left.isNotEmpty) left.removeLast();
-
-    final total = left.fold<int>(0, (s, e) => s + e[1]) +
-        middle.fold<int>(0, (s, e) => s + e[1]) +
-        right.fold<int>(0, (s, e) => s + e[1]);
-    if (total == 0) return null;
-    return _BgArmy(left: left, middle: middle, right: right, total: total);
-  }
-
-  List<List<int>> _fill(List<List<int>> units, int count) {
-    final r = <List<int>>[];
-    for (int i = 0; i < count; i++) {
-      if (i < units.length && units[i][0] > 0 && units[i][1] > 0) {
-        r.add([units[i][0], units[i][1]]);
-      } else {
-        r.add([-1, 0]);
-      }
-    }
-    return r;
   }
 }
 
 // ═══════════════════════════════════════════════════════════
-//  BackgroundService static class
+//  BackgroundService static class — **بدون أي تغيير عن الأصلي**
 // ═══════════════════════════════════════════════════════════
 class BackgroundService {
   BackgroundService._();
@@ -1068,7 +246,8 @@ class BackgroundService {
         priority: NotificationPriority.LOW,
         onlyAlertOnce: true,
       ),
-      iosNotificationOptions: const IOSNotificationOptions(showNotification: false, playSound: false),
+      iosNotificationOptions: const IOSNotificationOptions(
+          showNotification: false, playSound: false),
       foregroundTaskOptions: ForegroundTaskOptions(
         eventAction: ForegroundTaskEventAction.repeat(60000),
         autoRunOnBoot: false,
@@ -1083,9 +262,12 @@ class BackgroundService {
     if (_running) return true;
     try {
       await init();
-      unawaited(FlutterForegroundTask.isIgnoringBatteryOptimizations.then((ignoring) async {
+      unawaited(FlutterForegroundTask.isIgnoringBatteryOptimizations
+          .then((ignoring) async {
         if (!ignoring) {
-          try { await FlutterForegroundTask.requestIgnoreBatteryOptimization(); } catch (_) {}
+          try {
+            await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+          } catch (_) {}
         }
       }).catchError((_) {}));
       await FlutterForegroundTask.startService(
@@ -1105,17 +287,26 @@ class BackgroundService {
 
   static Future<void> stop() async {
     if (!_running) return;
-    try { await FlutterForegroundTask.stopService(); } catch (_) {}
+    try {
+      await FlutterForegroundTask.stopService();
+    } catch (_) {}
     _running = false;
     GgeClient.allowBackgroundReconnect = false;
   }
 
   static Future<Map<String, dynamic>> readStatus() async {
     try {
-      final status = await FlutterForegroundTask.getData<String>(key: 'bg_status');
-      final time = await FlutterForegroundTask.getData<String>(key: 'bg_time');
-      final extra = await FlutterForegroundTask.getData<String>(key: 'bg_extra');
-      return {'status': status ?? 'never ran', 'time': time ?? '?', 'extra': extra ?? ''};
+      final status =
+          await FlutterForegroundTask.getData<String>(key: 'bg_status');
+      final time =
+          await FlutterForegroundTask.getData<String>(key: 'bg_time');
+      final extra =
+          await FlutterForegroundTask.getData<String>(key: 'bg_extra');
+      return {
+        'status': status ?? 'never ran',
+        'time': time ?? '?',
+        'extra': extra ?? '',
+      };
     } catch (e) {
       return {'status': 'read error: $e', 'time': '?', 'extra': ''};
     }

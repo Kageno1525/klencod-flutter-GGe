@@ -174,6 +174,9 @@ class AutoDefenseService {
   DateTime? _commandersCacheAt;
   static const _commandersTtl = Duration(seconds: 30);
 
+  // ✅ NEW: callback اختياري — يستخدمه الـ Background لفرض foreground check
+  Future<bool> Function()? onBeforeEvac;
+
   // Global evacuation state
   bool _globalEvacRunning = false;
   bool _globalEvacCancelled = false;
@@ -475,6 +478,13 @@ class AutoDefenseService {
     final existing = _evac[areaId];
     if (existing != null && !existing.recalled) return;
     if (_evacuationInProgress.contains(areaId)) return;
+
+    // ✅ NEW: فحص خارجي قبل التهريب (الـ UI بيسيبه null → مش بيتنفذ)
+    if (onBeforeEvac != null && !await onBeforeEvac!()) {
+      _addLog('⏸️ Evac blocked by callback', 'warn');
+      return;
+    }
+
     _evacuationInProgress.add(areaId);
 
     final isSpy = settings.spyModeEnabled;
