@@ -481,7 +481,7 @@ class DesertAutoService {
         return;
       }
 
-      // ✅ مفيش تجسس خلاص. بنقرا الأبراج المدمرة من السكان وبنحطلها 4 ساعات فوراً
+      // ✅ الأبراج المدمرة بتتحط 4 ساعات فوراً
       for (final t in _towers) {
         if (t.isDead && !_shouldSkipTower(t)) {
           _markTowerCooldown(t, minutes: kFailedCooldownH * 60);
@@ -523,7 +523,9 @@ class DesertAutoService {
           return;
         }
 
-        final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog: await _client!.loadCatalog());
+        // ✅ تصحيح الخطأ هنا: كلمة catalog: اتشالت
+        final catalog = await _client!.loadCatalog();
+        final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog);
         final sendable = freshUnits.where((u) => u.isCombat && u.amount > 0).toList();
         final totalUnits = sendable.fold<int>(0, (s, u) => s + u.amount);
 
