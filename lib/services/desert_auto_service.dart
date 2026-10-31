@@ -567,7 +567,10 @@ class DesertAutoService {
           return;
         }
 
-        final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog: await _client!.loadCatalog());
+        // ✅ تم تصليح الخطأ هنا:
+        final catalog = await _client!.loadCatalog();
+        final freshUnits = await _client!.getCastleUnits(desert.kingdomId, desert.areaId, catalog);
+        
         final sendable = freshUnits.where((u) => u.isCombat && u.amount > 0).toList();
         final totalUnits = sendable.fold<int>(0, (s, u) => s + u.amount);
 
