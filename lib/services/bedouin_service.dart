@@ -4,7 +4,7 @@ import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
 import '../models.dart';
-import 'samurai_service.dart' show SamuraiMath, kDefensiveUnitWodIds;
+import 'samurai_service.dart' show SamuraiMath;
 
 /// Type 27 = Bedouin Camp (NPC — owner = -1)
 const Set<int> kBedouinCampTypes = {27};
@@ -337,7 +337,6 @@ class BedouinService {
 
       if (result.success) return result;
 
-      // 313 (TOO_MANY_UNITS) — retry with 1 wave at 70% units
       if (result.error?.contains('313') == true) {
         TrafficLog.add('ST',
             '[Bedouin] 313 detected → retry: waves=1 at 70% units');
@@ -395,13 +394,13 @@ class BedouinService {
     final melee = combat.where((u) {
       if (u.info?.role == 'melee') return true;
       if (u.info?.role == 'ranged') return false;
-      return u.wodId >= 9 && u.wodId <= 18;
+      return u.wodId >= 9 && u.wodId <= 11;
     }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
 
     final ranged = combat.where((u) {
       if (u.info?.role == 'ranged') return true;
       if (u.info?.role == 'melee') return false;
-      return !(u.wodId >= 9 && u.wodId <= 18);
+      return !(u.wodId >= 9 && u.wodId <= 11);
     }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
 
     final perWaveUnits = maxAttackers;
@@ -537,7 +536,6 @@ class BedouinService {
     }
   }
 
-  /// Retry with scaled-down units (used for 313 recovery)
   Future<BedouinAttackResult> _tryAttackScaled({
     required BedouinCamp camp,
     required OwnedCastle source,
@@ -563,13 +561,13 @@ class BedouinService {
     final melee = combat.where((u) {
       if (u.info?.role == 'melee') return true;
       if (u.info?.role == 'ranged') return false;
-      return u.wodId >= 9 && u.wodId <= 18;
+      return u.wodId >= 9 && u.wodId <= 11;
     }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
 
     final ranged = combat.where((u) {
       if (u.info?.role == 'ranged') return true;
       if (u.info?.role == 'melee') return false;
-      return !(u.wodId >= 9 && u.wodId <= 18);
+      return !(u.wodId >= 9 && u.wodId <= 11);
     }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
 
     final remaining = <int, int>{};
@@ -722,27 +720,16 @@ class BedouinService {
     return 0;
   }
 
-  /// ✅ FIXED: excludes tools + defensive base units
+  /// ✅ STRICT WHITELIST — only verified working combat units:
+  ///   • 9-11     = basic melee soldiers
+  ///   • 601-690  = samurai event units
+  ///   • 714, 715 = advanced soldiers
+  /// Everything else (tools 25-38, 140-170, 700+ etc.) is rejected.
   bool _isOffensiveUnit(CastleUnit u) {
-    // Defensive base units (1-8)
-    if (kDefensiveUnitWodIds.contains(u.wodId)) return false;
-
-    // Known tool ranges (Ram, Ladder, Siege, etc.)
-    if (_isToolWodId(u.wodId)) return false;
-
-    // Must be melee/ranged per catalog
-    final role = u.info?.role?.toLowerCase() ?? '';
-    if (role == 'melee' || role == 'ranged') return true;
-
-    // Fallback fightType 0
-    if (u.info?.fightType == 0) return true;
-
-    return false;
-  }
-
-  bool _isToolWodId(int wodId) {
-    if (wodId >= 29 && wodId <= 38) return true;
-    if (wodId >= 140 && wodId <= 170) return true;
+    final id = u.wodId;
+    if (id >= 9 && id <= 11) return true;
+    if (id >= 601 && id <= 690) return true;
+    if (id == 714 || id == 715) return true;
     return false;
   }
 

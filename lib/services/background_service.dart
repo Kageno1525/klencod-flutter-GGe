@@ -51,7 +51,7 @@ class _GgeTaskHandler extends TaskHandler {
       return;
     }
 
-    // ✅ UI شغال → BG يستنى بس يكتب ONLINE
+    // ✅ UI في المقدمة → BG يفضل ONLINE (مش PAUSED_UI)
     final isFg = prefs.getBool('is_app_foreground') ?? false;
     if (isFg) {
       _log('App is in foreground — BG ready');
@@ -60,7 +60,6 @@ class _GgeTaskHandler extends TaskHandler {
       return;
     }
 
-    // UI مقفول → يبدأ كامل
     await _startAll();
     _watchPresence();
   }
@@ -261,6 +260,7 @@ class _GgeTaskHandler extends TaskHandler {
     } catch (_) {}
     _client = null;
 
+    // ✅ ONLINE (مش PAUSED_UI) — عشان الـ UI ميتلخبطش
     await _saveStatus('ONLINE');
   }
 

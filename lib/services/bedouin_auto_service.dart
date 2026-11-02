@@ -65,13 +65,6 @@ class BedouinAutoService {
 
   static const Set<int> kDefensiveWodIds = {1, 2, 3, 4, 5, 6, 7, 8};
 
-  static const Set<int> kToolWodIds = {
-    25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
-    140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150,
-    151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161,
-    162, 163, 164, 165, 166, 167, 168, 169, 170,
-  };
-
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<BedouinAutoStatusEntry> _history = [];
   List<BedouinAutoStatusEntry> get statusHistory => List.unmodifiable(_history);
@@ -290,19 +283,18 @@ class BedouinAutoService {
     final p = await SharedPreferences.getInstance();
     await p.remove(_kLastScan);
 
-    TrafficLog.add('ST',
-        '[Bedouin-Auto] Started (${_inBackground ? "BG" : "UI"}) | '
-        'failed_camps=${_failedCamps.length}');
-    _setStatus(_inBackground ? 'Started (BG)' : 'Started (UI)');
+    // Stop any legacy status sync (UI now drives its own status)
+    _syncTimer?.cancel();
+    _syncTimer = null;
 
-    if (!_inBackground) {
-      _syncTimer?.cancel();
-      _syncTimer = Timer.periodic(
-          const Duration(seconds: 5), (_) => _syncBackgroundStatus());
-    }
+    // ✅ Short, meaningful status — no "Started (UI)" noise
+    _setStatus('Scanning...');
 
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
+
+    // ✅ IMMEDIATE first tick — no 30s wait
+    unawaited(_tick());
   }
 
   Future<void> disable() async {
@@ -338,6 +330,7 @@ class BedouinAutoService {
       _syncTimer?.cancel();
       _syncTimer = Timer.periodic(
           const Duration(seconds: 5), (_) => _syncBackgroundStatus());
+      unawaited(_syncBackgroundStatus());
     } else {
       _setStatus('Paused (background off)');
     }
@@ -432,14 +425,11 @@ class BedouinAutoService {
     final prefs = await SharedPreferences.getInstance();
     final isFg = prefs.getBool('is_app_foreground') ?? true;
 
-    if (_inBackground) {
-      if (isFg) return;
-    } else {
-      if (!isFg) {
-        await _syncBackgroundStatus();
-        return;
-      }
-    }
+    // BG mode: only act when app is NOT foreground
+    if (_inBackground && isFg) return;
+
+    // UI mode: only act when app IS foreground
+    if (!_inBackground && !isFg) return;
 
     if (!await isEnabled()) return;
 
@@ -462,8 +452,6 @@ class BedouinAutoService {
   Future<void> _doTick() async {
     if (_client == null || _svc == null) return;
 
-    const initialStatus = 'Checking...';
-    _setStatus(initialStatus);
     _attackedThisTick.clear();
 
     try {
@@ -472,8 +460,15 @@ class BedouinAutoService {
       if (!_running) return;
       await _tryAttackCamps();
 
-      if (_running && statusNotifier.value == initialStatus) {
-        _setStatus('Idle');
+      if (_running &&
+          statusNotifier.value != 'Hit' &&
+          !statusNotifier.value.startsWith('Hit ') &&
+          !statusNotifier.value.startsWith('Attacking')) {
+        // No attack happened this tick — show Idle
+        if (statusNotifier.value.startsWith('Found') ||
+            statusNotifier.value.startsWith('Scanning')) {
+          _setStatus('Idle — no attacks');
+        }
       }
     } catch (e) {
       _setStatus('Error: $e');
@@ -572,10 +567,6 @@ class BedouinAutoService {
           usable.add(c);
         }
 
-        TrafficLog.add('ST',
-            '[Bedouin-Auto] Pool: ${usable.length}/${_camps.length} '
-            '(priority=$attackPriority)');
-
         switch (attackPriority) {
           case 'level':
             usable.sort((a, b) => a.level.compareTo(b.level));
@@ -594,8 +585,8 @@ class BedouinAutoService {
       var pool = buildPool();
       if (pool.isEmpty) {
         _setStatus(_camps.isEmpty
-            ? 'No camps — scanning next tick'
-            : 'All camps in cooldown — click Clear State');
+            ? 'No camps found'
+            : 'All ${_camps.length} camps in cooldown');
         return;
       }
 
@@ -618,8 +609,8 @@ class BedouinAutoService {
 
         TrafficLog.add('ST',
             '[Bedouin-Auto] sendable: '
-            '${sendable.take(10).map((u) => "${u.wodId}×${u.amount}").join(", ")}'
-            '${sendable.length > 10 ? "..." : ""} '
+            '${sendable.take(8).map((u) => "${u.wodId}×${u.amount}").join(", ")}'
+            '${sendable.length > 8 ? "..." : ""} '
             '(${sendable.length} types, $totalUnits total)');
 
         if (totalUnits < minUnits) {
@@ -669,6 +660,7 @@ class BedouinAutoService {
 
         bool attacked = false;
         for (final lordInfo in freeLords) {
+          if (!_running) return;
           _setStatus('Attacking ${camp.coordsLabel} · '
               'L${lordInfo.lord.id} (#${attacksThisTick + 1})');
 
@@ -747,18 +739,12 @@ class BedouinAutoService {
     }
   }
 
+  /// ✅ STRICT WHITELIST — mirrors BedouinService._isOffensiveUnit
   bool _isOffensiveUnit(CastleUnit u) {
-    if (u.wodId >= 1 && u.wodId <= 8) return false;
-    if (kToolWodIds.contains(u.wodId)) return false;
-
-    if (u.wodId >= 9 && u.wodId <= 24) return true;
-    if (u.wodId >= 601 && u.wodId <= 690) return true;
-    if (u.wodId == 714 || u.wodId == 715) return true;
-
-    final role = u.info?.role?.toLowerCase() ?? '';
-    if (role == 'melee' || role == 'ranged') return true;
-    if (u.info?.fightType == 0) return true;
-
+    final id = u.wodId;
+    if (id >= 9 && id <= 11) return true;
+    if (id >= 601 && id <= 690) return true;
+    if (id == 714 || id == 715) return true;
     return false;
   }
 
