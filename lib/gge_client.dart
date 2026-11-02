@@ -319,7 +319,6 @@ class GgeClient {
               final aid = _asInt(area['AID']);
               final areaSet = <int>{};
 
-              // U فقط (Unlocked) — استبعدنا L (Locked)
               final unlockedU = u['U'] as List?;
               if (unlockedU != null) {
                 for (final id in unlockedU) {
@@ -356,7 +355,7 @@ class GgeClient {
           if (a != null && a.length >= 4) {
             final areaId = _asInt(a[3]);
 
-            // ✅ Fix: Use BDB from gpa (Barracks Level = BDB / 25)
+            // ✅ Use BDB from gpa (Barracks Level = BDB / 25)
             final gpa = data['gpa'];
             if (gpa is Map) {
               final bdb = _asIntOrNull(gpa['BDB']);
@@ -800,10 +799,17 @@ class GgeClient {
       throw Exception('WebSocket ready failed: $e');
     }
 
+    // ✅ حماية من null check crash لو الـ channel اتمسح في race condition
+    final ch = _channel;
+    if (ch == null) {
+      _errorLog('WS channel became null after ready');
+      throw Exception('WebSocket channel null after ready');
+    }
+
     _connected = true;
     _status('Connected ✓');
 
-    _sub = _channel!.stream.listen(
+    _sub = ch.stream.listen(
       (data) => _onMessage(data),
       onDone: () {
         _connected = false;

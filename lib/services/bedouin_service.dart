@@ -107,7 +107,7 @@ class BedouinSettings {
   int radiusTiles;
   int sourceAreaId;
 
-  BedouinSettings({this.radiusTiles = 30, this.sourceAreaId = 0});
+  BedouinSettings({this.radiusTiles = 5, this.sourceAreaId = 0});
 
   static const _kRadius = 'bedouin_radius_v1';
   static const _kSource = 'bedouin_source_v1';
@@ -115,7 +115,7 @@ class BedouinSettings {
   static Future<BedouinSettings> load() async {
     final p = await SharedPreferences.getInstance();
     return BedouinSettings(
-      radiusTiles: (p.getInt(_kRadius) ?? 30).clamp(10, 100),
+      radiusTiles: (p.getInt(_kRadius) ?? 5).clamp(5, 100),
       sourceAreaId: p.getInt(_kSource) ?? 0,
     );
   }
@@ -139,7 +139,6 @@ class BedouinService {
   int? _playerLevel;
   int? get playerLevel => _playerLevel;
 
-  /// ✅ يجب استدعاؤها من AutoService أو من scanArea (auto-fetch)
   void setPlayerLevel(int lvl) {
     if (lvl > 0) _playerLevel = lvl;
   }
@@ -157,7 +156,6 @@ class BedouinService {
       _currentKid = kid;
       _lastJcaAt = DateTime.now();
 
-      // ✅ Auto-fetch player level
       if (_playerLevel == null && resp.payload != null) {
         try {
           final data = jsonDecode(resp.payload!) as Map<String, dynamic>;
@@ -365,7 +363,7 @@ class BedouinService {
       return BedouinAttackResult.fail('NO_OFFENSIVE_UNITS');
     }
 
-    // ✅✅✅ FIX: نفس صيغة الساموراي (5 * level + 8)
+    // نفس صيغة الساموراي (5 * level + 8)
     final lvl = _playerLevel ?? 1;
     final maxAttackers = SamuraiMath.maxAttackers(lvl);
     final flankCount = SamuraiMath.flankMax(lvl);
