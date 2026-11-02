@@ -5,6 +5,8 @@ import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:gge/widgets/unit_avatar.dart';
+import 'package:gge/screens/unit_catalog_screen.dart';
 
 class TransferScreen extends StatefulWidget {
   final GgeClient client;
@@ -710,20 +712,10 @@ class _TransferScreenState extends State<TransferScreen> {
       ),
       child: Row(
         children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  u.roleColor.withOpacity(0.3),
-                  u.roleColor.withOpacity(0.15),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: u.roleColor.withOpacity(0.4)),
-            ),
-            child: Icon(u.icon, color: u.roleColor, size: 22),
+          UnitAvatar(
+            info: u.info,
+            size: 48,
+            onLongPress: () => openUnitCatalog(context, u.info),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -731,7 +723,7 @@ class _TransferScreenState extends State<TransferScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  S.unitName(u.displayName), // ✅ Arabic
+                  u.displayName,
                   style: TextStyle(
                     color: AppTheme.textColor(context),
                     fontWeight: FontWeight.bold,

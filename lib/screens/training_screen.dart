@@ -8,6 +8,8 @@ import 'package:gge/models.dart';
 import 'package:gge/services/training_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:gge/widgets/unit_avatar.dart';
+import 'package:gge/screens/unit_catalog_screen.dart';
 
 class TrainingScreen extends StatefulWidget {
   final GgeClient client;
@@ -24,7 +26,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
   late final TrainingService _svc;
   late AutoTrainSettings _autoSettings;
 
-  // ─── UI State ───────────────────────────────────────────────
   bool _isAutoMode = false;
   bool _training = false;
   bool _slotsLoading = false;
@@ -53,7 +54,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
   DateTime _lastActionTime = DateTime.now();
 
-  // ─── Getters ────────────────────────────────────────────────
   int get _maxPerBatch {
     if (_castle == null) return _absoluteMaxPerBatch;
     return _svc.getMaxPerBatch(_castle!.areaId);
@@ -68,10 +68,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
   bool get _triggerOnSlot => _autoSettings.triggerOnSlot;
   bool get _triggerOnTime => _autoSettings.triggerOnTime;
   bool get _useMaxTotal => _autoSettings.useMaxTotal;
-
-  // ═══════════════════════════════════════════════════════════
-  //  LIFECYCLE
-  // ═══════════════════════════════════════════════════════════
 
   @override
   void initState() {
@@ -106,10 +102,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
     super.dispose();
   }
-
-  // ═══════════════════════════════════════════════════════════
-  //  BOOTSTRAP
-  // ═══════════════════════════════════════════════════════════
 
   Future<void> _bootstrap() async {
     try {
@@ -161,7 +153,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
       _autoAmountCtrls[e.key] =
           TextEditingController(text: e.value.toString());
     }
-    // امسح controllers لوحدات مش مختارة
     final ids = _autoSettings.selectedAmounts.keys.toSet();
     for (final id in _autoAmountCtrls.keys.toList()) {
       if (!ids.contains(id)) {
@@ -170,10 +161,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
       }
     }
   }
-
-  // ═══════════════════════════════════════════════════════════
-  //  DATA LOADING
-  // ═══════════════════════════════════════════════════════════
 
   void _refreshTrainable() {
     if (_castle == null) {
@@ -229,16 +216,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
     setState(() => _refreshTrainable());
 
-    // لو الـ amount اليدوي أكبر من max الجديد → اصلحه
     final amt = int.tryParse(_amountCtrl.text) ?? 10;
     if (amt > _maxPerBatch) _amountCtrl.text = _maxPerBatch.toString();
 
     await _loadSlots(force: true);
   }
-
-  // ═══════════════════════════════════════════════════════════
-  //  MANUAL TRAIN
-  // ═══════════════════════════════════════════════════════════
 
   Future<void> _trainManual() async {
     if (_castle == null || _selectedUnit == null) return;
@@ -277,17 +259,12 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  AUTO TRAIN (UI loop)
-  // ═══════════════════════════════════════════════════════════
-
   void _startAutoLoop() {
     _autoTimer?.cancel();
     _autoTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
       if (!mounted || !_isAutoMode || !_autoEnabled || _isAutoSending) return;
       if (_castle == null || _autoSettings.selectedAmounts.isEmpty) return;
 
-      // check total
       if (_useMaxTotal) {
         final max = int.tryParse(_autoSettings.maxTotal) ?? 0;
         if (_autoSettings.totalTrained >= max) {
@@ -298,7 +275,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
         }
       }
 
-      // check triggers
       bool shouldTrain = false;
       if (_triggerOnSlot && (_slots?.any((s) => s.isFree) ?? false)) {
         shouldTrain = true;
@@ -344,10 +320,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  HELPERS
-  // ═══════════════════════════════════════════════════════════
-
   Future<void> _throttle() async {
     final now = DateTime.now();
     final diff = now.difference(_lastActionTime).inMilliseconds;
@@ -370,10 +342,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
         behavior: SnackBarBehavior.floating,
       ));
   }
-
-  // ═══════════════════════════════════════════════════════════
-  //  BUILD
-  // ═══════════════════════════════════════════════════════════
 
   @override
   Widget build(BuildContext context) {
@@ -804,7 +772,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
     String unitName = '';
     if (s.isBusy && s.wodId != null) {
       final e = _catalog[s.wodId];
-      if (e != null) unitName = S.unitName(e.displayName);
+      if (e != null) unitName = e.displayName; // ✅ استخدمنا الاسم العربي
     }
 
     return Container(
@@ -987,17 +955,14 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       return DropdownMenuItem(
                         value: u,
                         child: Row(children: [
-                          Icon(
-                              u.role == 'ranged'
-                                  ? Icons.gps_fixed_rounded
-                                  : Icons.gavel_rounded,
-                              size: 14,
-                              color: u.role == 'ranged'
-                                  ? AppTheme.teal
-                                  : AppTheme.red),
-                          const SizedBox(width: 6),
+                          UnitAvatar(
+                            info: u,
+                            size: 28,
+                            onLongPress: () => openUnitCatalog(context, u),
+                          ),
+                          const SizedBox(width: 8),
                           Expanded(
-                              child: Text(S.unitName(u.displayName),
+                              child: Text(u.displayName, // ✅ اسم عربي
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
                                       fontSize: 13,
@@ -1132,24 +1097,17 @@ class _TrainingScreenState extends State<TrainingScreen> {
         ],
       ),
       child: Row(children: [
-        Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.22),
-                borderRadius: BorderRadius.circular(16)),
-            child: Icon(
-                isRanged
-                    ? Icons.gps_fixed_rounded
-                    : Icons.gavel_rounded,
-                color: Colors.white,
-                size: 32)),
+        UnitAvatar(
+          info: u,
+          size: 80,
+          onLongPress: () => openUnitCatalog(context, u),
+        ),
         const SizedBox(width: 16),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(S.unitName(u.displayName),
+              Text(u.displayName, // ✅ اسم عربي
                   style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -1402,8 +1360,14 @@ class _TrainingScreenState extends State<TrainingScreen> {
                           await _autoSettings.saveSelection();
                         },
                       ),
+                      UnitAvatar(
+                        info: u,
+                        size: 36,
+                        onLongPress: () => openUnitCatalog(context, u),
+                      ),
+                      const SizedBox(width: 10),
                       Expanded(
-                        child: Text(S.unitName(u.displayName),
+                        child: Text(u.displayName, // ✅ اسم عربي
                             style: TextStyle(
                                 color: AppTheme.textColor(context),
                                 fontSize: 13,

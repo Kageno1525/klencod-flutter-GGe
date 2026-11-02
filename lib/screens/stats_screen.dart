@@ -5,6 +5,7 @@ import 'package:gge/models.dart';
 import 'package:gge/services/stats_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:gge/screens/unit_catalog_screen.dart';
 
 class StatsScreen extends StatefulWidget {
   final GgeClient client;
@@ -275,12 +276,15 @@ class _StatsScreenState extends State<StatsScreen> {
                 spacing: 6,
                 runSpacing: 6,
                 children: c.units.take(8).map((u) {
-                  return InfoChip(
-                    icon: u.info?.role == 'ranged'
-                        ? Icons.gps_fixed_rounded
-                        : Icons.gavel_rounded,
-                    label: '${S.unitName(u.displayName)} ${u.amount}',
-                    color: u.roleColor,
+                  return GestureDetector(
+                    onLongPress: () => openUnitCatalog(context, u.info),
+                    child: InfoChip(
+                      icon: u.info?.role == 'ranged'
+                          ? Icons.gps_fixed_rounded
+                          : Icons.gavel_rounded,
+                      label: '${u.displayName} ${u.amount}',
+                      color: u.roleColor,
+                    ),
                   );
                 }).toList(),
               ),

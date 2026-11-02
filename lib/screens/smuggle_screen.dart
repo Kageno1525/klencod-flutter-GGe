@@ -6,6 +6,8 @@ import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:gge/widgets/unit_avatar.dart';
+import 'package:gge/screens/unit_catalog_screen.dart';
 
 class SmuggleScreen extends StatefulWidget {
   final GgeClient client;
@@ -38,16 +40,9 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   bool _sending = false;
 
   int _hiddenUnitsCount = 0;
-
-  // ✅ فلتر الجنود: all | offense | defense
   String _unitFilter = 'all';
-
-  // ✅ فلتر الأعضاء: all | peace
   String _memberFilter = 'all';
-
-  // ✅ ترتيب الأعضاء: default | closest | highest_peace
   String _memberSort = 'default';
-
   String? _error;
 
   @override
@@ -86,7 +81,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       setState(() {
         _commanders = cmds;
         _loadingCommanders = false;
-
         if (_selectedLord == null) {
           final free = cmds.where((c) => !c.isBusy).toList();
           if (free.isNotEmpty) {
@@ -134,25 +128,18 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     }
   }
 
-  /// ✅ White-list: فقط الجنود اللي role=melee/ranged.
-  ///    الأدوات (Shields, Chests, Boosts, Ram, Ladder) كلها role مختلف → بتختفي.
   bool _isSendableForSmuggle(CastleUnit u) {
-  final info = u.info;
-  if (info == null) return false;
-
-  // ✅ يقبل كل الجنود القتالية (هجوم + دفاع)
-  if (!u.isCombat) return false;
-
-  // ✅ يستبعد الجدران/البوابات/الخنادق (مش جنود — مباني دفاعية)
-  final type = info.type ?? '';
-  if (type.contains('Wall') ||
-      type.contains('Gate') ||
-      type.contains('Moat')) {
-    return false;
+    final info = u.info;
+    if (info == null) return false;
+    if (!u.isCombat) return false;
+    final type = info.type ?? '';
+    if (type.contains('Wall') ||
+        type.contains('Gate') ||
+        type.contains('Moat')) {
+      return false;
+    }
+    return true;
   }
-
-  return true;
-}
 
   Future<void> _loadUnits() async {
     if (_source == null) return;
@@ -209,7 +196,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
     }
   }
 
-  /// ✅ فلترة + ترتيب الأعضاء
   List<AllyMember> get _filteredMembers {
     var list = _memberFilter == 'peace'
         ? _members.where((m) => m.hasPeace).toList()
@@ -789,7 +775,6 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header row: title + filter chips + sort
           Row(children: [
             Container(
                 width: 32,
@@ -1296,20 +1281,17 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
         border: Border.all(color: u.roleColor.withOpacity(0.2)),
       ),
       child: Row(children: [
-        Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-                color: u.roleColor.withOpacity(0.18),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: u.roleColor.withOpacity(0.4))),
-            child: Icon(u.icon, color: u.roleColor, size: 20)),
+        UnitAvatar(
+          info: u.info,
+          size: 44,
+          onLongPress: () => openUnitCatalog(context, u.info),
+        ),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(S.unitName(u.displayName),
+              Text(u.displayName,
                   style: TextStyle(
                       color: AppTheme.textColor(context),
                       fontWeight: FontWeight.bold,

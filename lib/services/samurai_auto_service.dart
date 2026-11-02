@@ -62,8 +62,6 @@ class SamuraiAutoService {
   static const int kFailedCampCooldownMin = 30;
   static const int kSuccessCooldownMin = 5;
 
-  static const Set<int> kDefensiveWodIds = {1, 2, 3, 4, 5, 6, 7, 8};
-
   // ═══ State ═══
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<SamuraiAutoStatusEntry> _history = [];
@@ -217,7 +215,6 @@ class SamuraiAutoService {
     await p.setInt(_kMaxAttacksDay, v.clamp(0, 9999));
   }
 
-  // ✅ NEW: Attack priority
   Future<String> getAttackPriority() async =>
       (await SharedPreferences.getInstance()).getString(_kAttackPriority) ??
       kDefAttackPriority;
@@ -247,7 +244,6 @@ class SamuraiAutoService {
 
   // ═══ Start / Stop ═══
 
-  /// UI mode: بدأ من الواجهة (يضمن تشغيل BG)
   Future<void> startFromUI(GgeClient client, {int? sourceAreaId}) async {
     _inBackground = false;
     await setEnabled(true);
@@ -275,13 +271,11 @@ class SamuraiAutoService {
     await _startCore(client);
   }
 
-  /// BG mode: بدأ من الـ Background Service (الـ service شغال بالفعل)
   Future<void> startInBackground(GgeClient client) async {
     _inBackground = true;
     await _startCore(client);
   }
 
-  /// للتوافق مع الكود القديم
   Future<void> start(GgeClient client, {int? sourceAreaId}) async {
     await startFromUI(client, sourceAreaId: sourceAreaId);
   }
@@ -308,13 +302,11 @@ class SamuraiAutoService {
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
   }
 
-  /// UI only: يقفل (يخلي enabled=false)
   Future<void> disable() async {
     await setEnabled(false);
     await stop();
   }
 
-  /// BG & UI: يوقف الـ timers فقط (بدون تغيير prefs)
   Future<void> stop() async {
     _timer?.cancel();
     _timer = null;
@@ -327,7 +319,6 @@ class SamuraiAutoService {
     _setStatus('🛑 Stopped');
   }
 
-  /// ✅ استدعها في initState عشان الـ toggle يطابق الحقيقة
   Future<void> restoreState() async {
     final enabled = await isEnabled();
     if (!enabled) {
@@ -373,7 +364,6 @@ class SamuraiAutoService {
     TrafficLog.add('ST', '[Samurai-Auto] $s');
   }
 
-  // ═══ Persistence ═══
   Future<void> _loadCooldowns() async {
     final p = await SharedPreferences.getInstance();
     final raw = p.getString(_kCooldowns);
@@ -436,19 +426,15 @@ class SamuraiAutoService {
     _setStatus('🧹 State cleared');
   }
 
-  // ═══ Tick ═══
   Future<void> _tick() async {
     if (!_running) return;
 
-    // ✅ تنسيق UI ↔ BG عبر is_app_foreground
     final prefs = await SharedPreferences.getInstance();
     final isFg = prefs.getBool('is_app_foreground') ?? true;
 
     if (_inBackground) {
-      // BG: يشتغل فقط لو UI في الخلفية
       if (isFg) return;
     } else {
-      // UI: يشتغل فقط لو UI في المقدمة
       if (!isFg) {
         await _syncBackgroundStatus();
         return;
@@ -496,7 +482,6 @@ class SamuraiAutoService {
     }
   }
 
-  // ═══ Scan ═══
   Future<void> _maybeRescan() async {
     if (_client == null || _svc == null) return;
 
@@ -554,7 +539,6 @@ class SamuraiAutoService {
     }
   }
 
-  // ═══ Attack Loop ═══
   Future<void> _tryAttackCamps() async {
     if (_client == null || _svc == null) return;
 
@@ -582,7 +566,6 @@ class SamuraiAutoService {
       int attacksThisTick = 0;
       int failStreak = 0;
 
-      // ✅ NEW: sort by priority instead of random shuffle
       List<SamuraiCamp> buildPool() {
         final now = DateTime.now();
         final list = _camps
@@ -767,10 +750,9 @@ class SamuraiAutoService {
     }
   }
 
+  /// ✅ يعتمد على fightType من الـ units.json
   bool _isOffensiveUnit(CastleUnit u) {
-    if (kDefensiveWodIds.contains(u.wodId)) return false;
-    if (u.info?.fightType != null) return u.info!.fightType == 0;
-    return u.info?.role == 'melee' || u.info?.role == 'ranged';
+    return u.info?.fightType == 0;
   }
 
   Future<void> _incrementAttacksToday() async {

@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
+import 'package:gge/services/local_catalog_service.dart';
 import 'package:gge/services/notifications_service.dart';
-import 'package:gge/screens/auto_defense_screen.dart'; // ✅ NEW
+import 'package:gge/screens/auto_defense_screen.dart';
 import 'package:gge/screens/notifications_settings_screen.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:gge/widgets/unit_avatar.dart';
+import 'package:gge/screens/unit_catalog_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   final GgeClient client;
@@ -119,7 +122,6 @@ class _NotificationsScreenState extends State<NotificationsScreen>
               ],
             ),
           ),
-          // ✅ NEW: زر الدفاع التلقائي
           AppIconBtn(
             icon: Icons.shield_moon_rounded,
             color: AppTheme.teal,
@@ -1084,14 +1086,20 @@ class _AlertDetailsDialog extends StatelessWidget {
     List<AttackUnit> attackUnits, {
     required Color color,
   }) {
-    final grouped = <String, int>{};
+    final grouped = <int, Map<String, dynamic>>{};
     for (final u in attackUnits) {
-      final name = S.unitName(u.displayName);
-      grouped[name] = (grouped[name] ?? 0) + u.amount;
+      final name = u.displayName;
+      grouped.putIfAbsent(u.wodId, () => {'name': name, 'amount': 0});
+      grouped[u.wodId]!['amount'] += u.amount;
     }
     return grouped.entries
-        .map((e) =>
-            _unitRow(context, name: e.key, amount: e.value, color: color))
+        .map((e) => _unitRow(
+              context,
+              wodId: e.key,
+              name: e.value['name'],
+              amount: e.value['amount'],
+              color: color,
+            ))
         .toList();
   }
 
@@ -1100,23 +1108,31 @@ class _AlertDetailsDialog extends StatelessWidget {
     List<CastleUnit> castleUnits, {
     required Color color,
   }) {
-    final grouped = <String, int>{};
+    final grouped = <int, Map<String, dynamic>>{};
     for (final u in castleUnits) {
-      final name = S.unitName(u.displayName);
-      grouped[name] = (grouped[name] ?? 0) + u.amount;
+      final name = u.displayName;
+      grouped.putIfAbsent(u.wodId, () => {'name': name, 'amount': 0});
+      grouped[u.wodId]!['amount'] += u.amount;
     }
     return grouped.entries
-        .map((e) =>
-            _unitRow(context, name: e.key, amount: e.value, color: color))
+        .map((e) => _unitRow(
+              context,
+              wodId: e.key,
+              name: e.value['name'],
+              amount: e.value['amount'],
+              color: color,
+            ))
         .toList();
   }
 
   Widget _unitRow(
     BuildContext context, {
+    required int wodId,
     required String name,
     required int amount,
     required Color color,
   }) {
+    final info = LocalCatalogService.cache?[wodId];
     return Container(
       margin: const EdgeInsets.only(bottom: 5),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -1127,14 +1143,11 @@ class _AlertDetailsDialog extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Container(
-            width: 26,
-            height: 26,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(Icons.gavel_rounded, color: color, size: 13),
+          UnitAvatar(
+            info: info,
+            size: 32,
+            tint: color,
+            onLongPress: () => openUnitCatalog(context, info),
           ),
           const SizedBox(width: 10),
           Expanded(

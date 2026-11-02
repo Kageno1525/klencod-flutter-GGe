@@ -236,7 +236,7 @@ class NotificationsService {
     final unitsLine = alert.units.isEmpty
         ? (S.isAr ? 'حركة مرصودة' : 'Movement detected')
         : alert.units
-            .map((u) => '${S.unitName(u.displayName)}: ${u.amount}')
+            .map((u) => '${u.displayName}: ${u.amount}')
             .take(5)
             .join(' · ');
 

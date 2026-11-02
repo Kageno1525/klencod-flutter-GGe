@@ -22,6 +22,7 @@ import 'package:gge/screens/samurai_screen.dart';
 import 'package:gge/screens/bedouin_screen.dart';
 import 'package:gge/screens/logs_screen.dart';
 import 'package:gge/screens/inventory_screen.dart';
+import 'package:gge/screens/unit_catalog_screen.dart';
 
 class MainScreen extends StatefulWidget {
   final GgeClient client;
@@ -67,7 +68,6 @@ class _MainScreenState extends State<MainScreen> {
     } catch (_) {}
   }
 
-  // ✅ NEW: check if BG detected suspicious clean close while UI was closed
   Future<void> _checkBgSuspiciousClose() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -78,7 +78,6 @@ class _MainScreenState extends State<MainScreen> {
       final when = DateTime.tryParse(s);
       if (when == null) return;
 
-      // Ignore if older than 2 hours
       if (DateTime.now().difference(when).inHours > 2) return;
 
       if (!mounted) return;
@@ -119,11 +118,9 @@ class _MainScreenState extends State<MainScreen> {
     await _performLogout();
   }
 
-  // ✅ NEW: handle clean WS close (server closed connection - likely multi-session)
   Future<void> _handleSuspiciousClose(DateTime when) async {
     if (_isKicked || !mounted) return;
 
-    // Rate limit: only once per 5 minutes
     if (_lastSuspiciousDialogAt != null &&
         DateTime.now().difference(_lastSuspiciousDialogAt!).inMinutes < 5) {
       return;
@@ -180,7 +177,6 @@ class _MainScreenState extends State<MainScreen> {
     if (!mounted) return;
 
     if (shouldReconnect == true) {
-      // User chose to reconnect
       try {
         final ok = await widget.client.autoReconnect();
         if (!mounted) return;
@@ -206,7 +202,6 @@ class _MainScreenState extends State<MainScreen> {
           ));
       }
     } else {
-      // User chose to logout
       _isKicked = true;
       await _performLogout();
     }
@@ -597,6 +592,23 @@ class _MainScreenState extends State<MainScreen> {
               context,
               MaterialPageRoute(
                   builder: (_) => InventoryScreen(client: widget.client)),
+            ),
+          ),
+        ),
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 680),
+          child: EnterTile(
+            icon: Icons.menu_book_rounded,
+            title: 'كاتلوج الجنود',
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF00838F), Color(0xFF00ACC1)],
+            ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const UnitCatalogScreen()),
             ),
           ),
         ),

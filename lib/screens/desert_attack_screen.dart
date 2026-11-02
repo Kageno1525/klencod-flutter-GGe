@@ -10,6 +10,8 @@ import 'package:gge/services/desert_auto_service.dart';
 import 'package:gge/services/background_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:gge/widgets/unit_avatar.dart';
+import 'package:gge/screens/unit_catalog_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const Color kDesertSand = Color(0xFFE8A317);
@@ -39,19 +41,16 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
   int _scanDone = 0, _scanTotal = 0;
   bool _loading = true;
 
-  // Auto tab state
   List<CommanderInfo> _allCommanders = [];
   List<CastleUnit> _mainUnits = [];
   Set<int> _selectedCommanderIds = {};
   Set<int> _selectedTransferIds = {};
   bool _loadingAutoData = false;
 
-  // ✅ الأرقام التلاتة اللي هتتحكم فيها (204)
   int _capStart = DesertAutoService.kDefaultCapStart;
   int _capMin = DesertAutoService.kDefaultCapMin;
   int _capMax = DesertAutoService.kDefaultCapMax;
 
-  // Background attack limits
   int _maxAttacksDay = 0;
   int _maxAttacksSession = 0;
   int _breakEvery = 0;
@@ -59,7 +58,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
   int _attacksToday = 0;
   int _attacksThisSession = 0;
 
-  // Background service status
   String _bgStatus = '—';
   String _bgExtra = '';
 
@@ -115,7 +113,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
   Future<void> _init() async {
     _settings = await DesertAttackSettings.load();
 
-    // Load background limits + caps
     final p = await SharedPreferences.getInstance();
     _maxAttacksDay = p.getInt('desert_bg_max_attacks_day') ?? 0;
     _maxAttacksSession = p.getInt('desert_bg_max_attacks_session') ?? 0;
@@ -124,7 +121,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     _attacksToday = p.getInt('desert_bg_attacks_today') ?? 0;
     _attacksThisSession = 0;
 
-    // ✅ تحميل الأرقام التلاتة
     _capStart = p.getInt(DesertAutoService.kCapStartKey) ?? DesertAutoService.kDefaultCapStart;
     _capMin = p.getInt(DesertAutoService.kCapMinKey) ?? DesertAutoService.kDefaultCapMin;
     _capMax = p.getInt(DesertAutoService.kCapMaxKey) ?? DesertAutoService.kDefaultCapMax;
@@ -165,9 +161,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     super.dispose();
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Manual scan
-  // ═══════════════════════════════════════════════════════
   Future<void> _scan() async {
     if (_source == null) {
       _snack('اختر قلعة مصدر أولاً', color: AppTheme.red);
@@ -217,9 +210,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     return list;
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Auto: load commanders + main units
-  // ═══════════════════════════════════════════════════════
   Future<void> _loadAutoData() async {
     if (_loadingAutoData) return;
     setState(() => _loadingAutoData = true);
@@ -315,6 +305,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
                   id: u.wodId,
                   label: u.displayName,
                   subtitle: 'متاح: ${u.amount}',
+                  info: u.info,
                 ))
             .toList(),
         selected: _selectedTransferIds,
@@ -327,9 +318,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     if (mounted) setState(() => _selectedTransferIds = result);
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Tower sheet
-  // ═══════════════════════════════════════════════════════
   Future<void> _openTowerSheet(DesertTower tower) async {
     if (_source == null) {
       _snack('اختر قلعة مصدر', color: AppTheme.red);
@@ -422,9 +410,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Header + tabs
-  // ═══════════════════════════════════════════════════════
   Widget _header(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
@@ -512,9 +497,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Manual Tab
-  // ═══════════════════════════════════════════════════════
   Widget _manualTab() {
     final filtered = _filteredTowers;
     return Column(
@@ -538,9 +520,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     );
   }
 
-  // ═══════════════════════════════════════════════════════
-  //  Auto Tab
-  // ═══════════════════════════════════════════════════════
   Widget _autoTab() {
     final svc = DesertAutoService.instance;
     return ListView(
@@ -1013,7 +992,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
     );
   }
 
-  // ✅ تعديل كارت الإعدادات عشان يشمل الأرقام التلاتة (204)
   Widget _autoSettingsCard(BuildContext context) {
     return AppTheme.glassCard(
       context: context,
@@ -1032,8 +1010,6 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
                     decoration: TextDecoration.none)),
           ]),
           const SizedBox(height: 10),
-          
-          // ✅ الخانات التلاتة
           Row(children: [
             Expanded(
               child: _numberField(
@@ -1100,7 +1076,7 @@ class _DesertAttackScreenState extends State<DesertAttackScreen>
               child: const Text('تعديل', style: TextStyle(color: kDesertSand)),
             ),
           ]),
-          
+
           const SizedBox(height: 8),
           Divider(color: AppTheme.subTextColor(context).withOpacity(0.15)),
           const SizedBox(height: 8),
@@ -1638,7 +1614,13 @@ class _SelectItem {
   final int id;
   final String label;
   final String? subtitle;
-  _SelectItem({required this.id, required this.label, this.subtitle});
+  final UnitCatalogEntry? info;
+  _SelectItem({
+    required this.id,
+    required this.label,
+    this.subtitle,
+    this.info,
+  });
 }
 
 class _MultiSelectSheet extends StatefulWidget {
@@ -1736,6 +1718,14 @@ class _MultiSelectSheetState extends State<_MultiSelectSheet> {
                 return CheckboxListTile(
                   value: sel,
                   activeColor: kDesertSand,
+                  secondary: it.info != null
+                      ? UnitAvatar(
+                          info: it.info,
+                          size: 40,
+                          onLongPress: () =>
+                              openUnitCatalog(context, it.info),
+                        )
+                      : null,
                   title: Text(it.label,
                       style: const TextStyle(
                           color: Colors.white,
@@ -2750,15 +2740,20 @@ class _DesertAttackSheetState extends State<_DesertAttackSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Icon(u.icon, color: u.roleColor, size: 16),
-            const SizedBox(width: 6),
+            UnitAvatar(
+              info: u.info,
+              size: 36,
+              onLongPress: () => openUnitCatalog(context, u.info),
+            ),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(u.displayName,
                   style: const TextStyle(
                       color: Colors.white,
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
-                      decoration: TextDecoration.none)),
+                      decoration: TextDecoration.none),
+                  overflow: TextOverflow.ellipsis),
             ),
             Text('متاح: ${u.amount}',
                 style: const TextStyle(

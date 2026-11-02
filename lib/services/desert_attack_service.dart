@@ -17,10 +17,8 @@ class DesertTower {
   final double distanceFromSource;
   final int sourceAreaId;
   final String sourceName;
-  
-  // ✅ الحقول الجديدة (as و rs)
-  final int as; 
-  final int rs; 
+  final int as;
+  final int rs;
 
   DateTime? lastSpyAt;
   int? lastSpyMid;
@@ -52,9 +50,8 @@ class DesertTower {
         lastAttackMid: lastAttackMid ?? this.lastAttackMid,
       );
 
-  // ✅ فحص إذا كان البرج مدمر (بناءً على الـ Scan)
   bool get isDead => rs > 0 && rs < 100000;
-  
+
   bool get isSpied => lastSpyAt != null;
   bool get isSpyRecent {
     if (lastSpyAt == null) return false;
@@ -390,11 +387,10 @@ class DesertAttackService {
               if (_asInt(entry[0]) != 2) continue;
               final x = _asInt(entry[1]);
               final y = _asInt(entry[2]);
-              
-              // ✅ قراءة as و rs من رد السيرفر
+
               final asVal = entry.length > 3 ? _asInt(entry[3]) : 0;
               final rsVal = entry.length > 5 ? _asInt(entry[5]) : 0;
-              
+
               final key = '$x,$y';
               if (seen.contains(key)) continue;
               seen.add(key);
@@ -522,16 +518,24 @@ class DesertAttackService {
     } catch (e) { return null; }
   }
 
+  /// ✅ محسّن: يعتمد على role من الـ units.json أولاً (أدق + أسرع)
+  /// الـ name matching بقى fallback للوحدات اللي مش في الـ catalog
   bool _isRangedWodId(int wodId, Map<int, UnitCatalogEntry> catalog) {
     final entry = catalog[wodId];
     if (entry != null) {
-      final n = entry.displayName.toLowerCase();
-      if (n.contains('bow') || n.contains('archer') || n.contains('crossbow') || n.contains('slinger') ||
-          n.contains('mangonel') || n.contains('trebuchet') || n.contains('ballista') || n.contains('ranged') ||
-          n.contains('قوس') || n.contains('نابل') || n.contains('رامي') || n.contains('منجنيق') || n.contains('عرادة') || n.contains('قاذف')) return true;
+      if (entry.role == 'ranged') return true;
+      if (entry.role == 'melee') return false;
     }
-    const knownRanged = {603, 604, 605, 606, 611, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 627, 628, 629, 630, 631, 632, 633, 634, 635, 636, 637, 638, 639, 675, 676, 677, 678, 679, 680};
-    return knownRanged.contains(wodId);
+    // Fallback: name matching (English + Arabic keywords)
+    final n = (entry?.displayName ?? '').toLowerCase();
+    if (n.contains('bow') || n.contains('archer') || n.contains('crossbow') ||
+        n.contains('slinger') || n.contains('mangonel') || n.contains('trebuchet') ||
+        n.contains('ballista') || n.contains('ranged') ||
+        n.contains('قوس') || n.contains('نابل') || n.contains('نشاب') ||
+        n.contains('رامي') || n.contains('منجنيق') || n.contains('عرادة') || n.contains('قاذف')) {
+      return true;
+    }
+    return false;
   }
 
   static String _defKey(DesertTower t) => 'desert_def_${t.x}_${t.y}_${t.kid}';

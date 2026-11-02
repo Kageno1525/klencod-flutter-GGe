@@ -7,6 +7,8 @@ import 'package:gge/models.dart';
 import 'package:gge/services/attack_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
+import 'package:gge/widgets/unit_avatar.dart';
+import 'package:gge/screens/unit_catalog_screen.dart';
 
 Color _uiLevelColor(int lvl, BuildContext context) {
   if (lvl >= 80) return const Color(0xFFD4AF37);
@@ -133,7 +135,6 @@ class _AttackScreenState extends State<AttackScreen> {
         return;
       }
 
-      // enrich النوادي الذهبية الأول (type 25) عشان تظهر بمستوى
       final goldFirst = [
         ...found.where((t) => t.type == 25),
         ...found.where((t) => t.type == 24),
@@ -694,7 +695,6 @@ class _AttackScreenState extends State<AttackScreen> {
                                 fontSize: 10.5,
                                 decoration: TextDecoration.none)),
                         const SizedBox(width: 8),
-                        // ✅ الهجمات: من index[7] للـ gold camps
                         if (isGold && t.hasAttacksLimit) ...[
                           const Icon(Icons.gavel_rounded,
                               size: 11, color: AppTheme.red),
@@ -861,9 +861,6 @@ class _AttackScreenState extends State<AttackScreen> {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Filter Sheet
-// ═══════════════════════════════════════════════════════════
 class _FilterSheet extends StatefulWidget {
   final AttackFilterSettings settings;
   final VoidCallback onChanged;
@@ -1002,9 +999,6 @@ class _FilterSheetState extends State<_FilterSheet> {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Attack Sheet
-// ═══════════════════════════════════════════════════════════
 class _AttackSheet extends StatefulWidget {
   final GgeClient client;
   final OwnedCastle source;
@@ -1039,9 +1033,8 @@ class _AttackSheetState extends State<_AttackSheet> {
       final catalog = await widget.client.loadCatalog();
       final units = await widget.client.getCastleUnits(
           widget.source.kingdomId, widget.source.areaId, catalog);
-      // ✅ شيلنا فلتر unlocked — كل وحدة موجودة في AC قابلة للإرسال
-final sendable =
-    units.where((u) => u.isCombat && u.amount > 0).toList();
+      final sendable =
+          units.where((u) => u.isCombat && u.amount > 0).toList();
       final cmds = await widget.client.getCommanders();
 
       if (!mounted) return;
@@ -1347,13 +1340,17 @@ final sendable =
         border: Border.all(color: u.roleColor.withOpacity(0.2)),
       ),
       child: Row(children: [
-        Icon(u.icon, color: u.roleColor, size: 18),
+        UnitAvatar(
+          info: u.info,
+          size: 38,
+          onLongPress: () => openUnitCatalog(context, u.info),
+        ),
         const SizedBox(width: 8),
         Expanded(
             child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(S.unitName(u.displayName),
+            Text(u.displayName,
                 style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12,

@@ -45,6 +45,15 @@ class UnitCatalogEntry {
   final String? role;
   final String? name;
   final int? fightType;
+  final String? imageUrl;
+  final int rangedAttack;
+  final int meleeAttack;
+  final int rangedDefence;
+  final int meleeDefence;
+  final int speed;
+  final int loot;
+  final int might;
+  final int food;
 
   UnitCatalogEntry({
     required this.wodId,
@@ -52,6 +61,15 @@ class UnitCatalogEntry {
     this.role,
     this.name,
     this.fightType,
+    this.imageUrl,
+    this.rangedAttack = 0,
+    this.meleeAttack = 0,
+    this.rangedDefence = 0,
+    this.meleeDefence = 0,
+    this.speed = 0,
+    this.loot = 0,
+    this.might = 0,
+    this.food = 0,
   });
 
   bool get isCombat => role == 'melee' || role == 'ranged';
@@ -70,6 +88,7 @@ class UnitCatalogEntry {
   bool get isTrainable => isCombat;
 
   String get displayName {
+    if (name != null && name!.isNotEmpty) return name!;
     final t = (type ?? '').replaceFirst('Barracks_Unit_', '');
     return t.isEmpty ? 'Unit #$wodId' : t;
   }
@@ -127,20 +146,15 @@ class Lord {
 class LordMovement {
   final int movementId;
   final int type;
-  final int totalTime; // TT — travel time
-  final int paidTime; // PT — travel time paid
+  final int totalTime;
+  final int paidTime;
   final int targetX;
   final int targetY;
   final int targetKid;
   final String? targetPlayerName;
   final String? targetAllianceName;
   final DateTime fetchedAt;
-
-  /// ⚠️ مدة الدعم الكلية في قلعة الحليف (TWD من UM)
-  /// null لو الحركة مش support أو مفيش بيانات support
   final int? stationTotalSeconds;
-
-  /// ⚠️ مدة الدعم المدفوعة لحد الآن (PWD من UM)
   final int? stationPaidSeconds;
 
   LordMovement({
@@ -158,7 +172,6 @@ class LordMovement {
     this.stationPaidSeconds,
   }) : fetchedAt = fetchedAt ?? DateTime.now();
 
-  // ─── حركة السفر ─────────────────────────────
   int get timeRemaining => totalTime - paidTime;
 
   int get liveRemainingSeconds {
@@ -168,8 +181,6 @@ class LordMovement {
 
   bool get isArrived => liveRemainingSeconds <= 0;
 
-  /// عدد الثواني المتبقية من الدعم في قلعة الحليف.
-  /// القيمة 0 لو الحركة مش stationed أو معلومات الدعم مش متوفرة.
   int get stationRemainingSeconds {
     if (stationTotalSeconds == null || stationPaidSeconds == null) return 0;
     final elapsed = DateTime.now().difference(fetchedAt).inSeconds;
@@ -177,20 +188,17 @@ class LordMovement {
         .clamp(0, 999999);
   }
 
-  /// الوقت المطلق اللي القائد هيرجع فيه من الدعم.
   DateTime? get stationReturnAt {
     if (stationTotalSeconds == null || stationPaidSeconds == null) return null;
     return fetchedAt
         .add(Duration(seconds: stationTotalSeconds! - stationPaidSeconds!));
   }
 
-  /// نوع support + وصل + لسه في الدعم
   bool get isStationed =>
       type == 1 && isArrived && stationRemainingSeconds > 0;
 
   bool get isReturning => type == 2;
 
-  /// حركة لسه "شغالة" فعلياً (تستحق العداد والتحديث)
   bool get isActive => !isArrived || isStationed;
 
   DateTime get startedAt => fetchedAt.subtract(Duration(seconds: paidTime));
@@ -206,8 +214,6 @@ class LordMovement {
   String? get stationReturnAtLabel =>
       stationReturnAt == null ? null : _fmt(stationReturnAt!);
 
-  /// العداد الحي — بيتحدث كل ثانية في الـ UI.
-  /// لو stationed → عدّاد الدعم، غير كده → عدّاد السفر.
   String get timeLabel {
     if (isStationed) {
       final s = stationRemainingSeconds;
@@ -256,11 +262,6 @@ class CommanderInfo {
 
   CommanderInfo({required this.lord, this.movement});
 
-  /// القائد "مشغول" فقط لو:
-  ///   • لسه بيسافر (مش وصل) ، أو
-  ///   • متمركز في قلعة حليف ووقت الدعم لسه ما خلصش
-  ///
-  /// بعد السفر + انتهاء الدعم → القائد متاح فوراً بدون refresh.
   bool get isBusy => movement != null && movement!.isActive;
 }
 
