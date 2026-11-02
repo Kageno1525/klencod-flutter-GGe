@@ -24,8 +24,12 @@ if (flutterVersionName == null) {
 
 android {
     namespace = "com.kageno.gge"
-    compileSdk = 36
-    // ✅ تثبيت NDK مستقر بدل flutter.ndkVersion (اللي بيجبر 28.2)
+
+    // ✅ compileSdk = 35 (Android 15) — أعلى إصدار مستقر
+    //    (كان 36 = Android 16 Preview — غير آمن مع الـ plugins)
+    compileSdk = 35
+
+    // ✅ تثبيت NDK مستقر بدل flutter.ndkVersion
     ndkVersion = "27.0.12077973"
 
     compileOptions {
@@ -51,6 +55,10 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.debug
+
+            // ✅ مهم — منع ProGuard/R8 من كسر Flutter plugins
+            minifyEnabled false
+            shrinkResources false
         }
     }
 }
