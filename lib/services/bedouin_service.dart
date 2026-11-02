@@ -9,6 +9,9 @@ import 'samurai_service.dart' show SamuraiMath;
 /// Type 27 = Bedouin Camp (NPC — owner = -1)
 const Set<int> kBedouinCampTypes = {27};
 
+/// ✅ The ONLY units that work for Bedouin attacks (validated manually)
+const Set<int> kBedouinValidUnits = {9, 10, 11, 714, 715};
+
 class BedouinCamp {
   final int x, y, kid, type;
   final int level;
@@ -376,6 +379,8 @@ class BedouinService {
         .where((u) => u.amount > 0 && _isOffensiveUnit(u))
         .toList();
     if (combat.isEmpty) {
+      TrafficLog.add('ST',
+          '[Bedouin] ❌ No combat units (need 9, 10, 11, 714, 715)');
       return BedouinAttackResult.fail('NO_OFFENSIVE_UNITS');
     }
 
@@ -389,25 +394,35 @@ class BedouinService {
     TrafficLog.add('ST',
         '[Bedouin] Lvl=$lvl max=$maxAttackers '
         '(L/R=$flankCount M=$middleCount) '
-        'tools(L/R=$toolCapL M=$toolCapM)');
+        'waves=${config.waves} tools=${config.useTools}');
 
-    final melee = combat.where((u) {
-      if (u.info?.role == 'melee') return true;
-      if (u.info?.role == 'ranged') return false;
-      return u.wodId >= 9 && u.wodId <= 11;
-    }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
+    // ✅ Separate melee and ranged using valid units
+    final melee = <CastleUnit>[];
+    final ranged = <CastleUnit>[];
 
-    final ranged = combat.where((u) {
-      if (u.info?.role == 'ranged') return true;
-      if (u.info?.role == 'melee') return false;
-      return !(u.wodId >= 9 && u.wodId <= 11);
-    }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
+    for (final u in combat) {
+      final role = u.info?.role?.toLowerCase();
+      if (role == 'ranged') {
+        ranged.add(u);
+      } else {
+        // Default: melee (units 9, 10, 11, 714, 715 are all melee in GGE)
+        melee.add(u);
+      }
+    }
+
+    melee.sort((a, b) => b.amount.compareTo(a.amount));
+    ranged.sort((a, b) => b.amount.compareTo(a.amount));
 
     final perWaveUnits = maxAttackers;
     final totalAvailable = combat.fold<int>(0, (s, u) => s + u.amount);
     final maxWavesPossible =
         (totalAvailable / perWaveUnits).floor().clamp(1, config.waves);
     final actualWaves = min(config.waves, maxWavesPossible);
+
+    TrafficLog.add('ST',
+        '[Bedouin] combat: total=$totalAvailable '
+        'melee=${melee.length} ranged=${ranged.length} '
+        'actualWaves=$actualWaves');
 
     if (actualWaves < config.waves) {
       TrafficLog.add('ST',
@@ -423,16 +438,19 @@ class BedouinService {
     int toolsUsed = 0;
 
     for (int w = 0; w < actualWaves; w++) {
-      final isFirstWave = (w == 0);
-      final flankPool = (isFirstWave || melee.isEmpty) ? ranged : melee;
-      final middlePool = ranged.isNotEmpty ? ranged : melee;
+      // ✅ Use melee for both flanks and middle (that's what works)
+      final flankPool = melee.isNotEmpty ? melee : ranged;
+      final middlePool = melee.isNotEmpty ? melee : ranged;
 
       final lU = _fillFromPool(remaining, flankPool, flankCount, 2);
       final rU = _fillFromPool(remaining, flankPool, flankCount, 2);
       final mU = _fillFromPool(remaining, middlePool, middleCount, 6);
 
       final waveSum = _sum(lU) + _sum(rU) + _sum(mU);
-      if (waveSum == 0) break;
+      if (waveSum == 0) {
+        TrafficLog.add('ST', '[Bedouin] Wave $w: waveSum=0, breaking');
+        break;
+      }
 
       totalSent += waveSum;
 
@@ -451,6 +469,12 @@ class BedouinService {
         rT2 = List.generate(2, (_) => [-1, 0]);
         mT2 = List.generate(3, (_) => [-1, 0]);
       }
+
+      // Log wave contents
+      TrafficLog.add('ST',
+          '[Bedouin] Wave ${w + 1}: '
+          'L=${_unitsStr(lU)} R=${_unitsStr(rU)} M=${_unitsStr(mU)} '
+          'tool=${effectiveTool ?? "none"}');
 
       wavesPayload.add({
         'L': {'T': lT2, 'U': lU},
@@ -558,17 +582,14 @@ class BedouinService {
     final toolCapL = SamuraiMath.toolCapFlank(lvl);
     final toolCapM = SamuraiMath.toolCapMiddle(lvl);
 
-    final melee = combat.where((u) {
-      if (u.info?.role == 'melee') return true;
-      if (u.info?.role == 'ranged') return false;
-      return u.wodId >= 9 && u.wodId <= 11;
-    }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
-
-    final ranged = combat.where((u) {
-      if (u.info?.role == 'ranged') return true;
-      if (u.info?.role == 'melee') return false;
-      return !(u.wodId >= 9 && u.wodId <= 11);
-    }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
+    final melee = <CastleUnit>[];
+    final ranged = <CastleUnit>[];
+    for (final u in combat) {
+      if (u.info?.role == 'ranged') ranged.add(u);
+      else melee.add(u);
+    }
+    melee.sort((a, b) => b.amount.compareTo(a.amount));
+    ranged.sort((a, b) => b.amount.compareTo(a.amount));
 
     final remaining = <int, int>{};
     for (final u in combat) remaining[u.wodId] = u.amount;
@@ -578,9 +599,8 @@ class BedouinService {
     int toolsUsed = 0;
 
     for (int w = 0; w < config.waves; w++) {
-      final isFirstWave = (w == 0);
-      final flankPool = (isFirstWave || melee.isEmpty) ? ranged : melee;
-      final middlePool = ranged.isNotEmpty ? ranged : melee;
+      final flankPool = melee.isNotEmpty ? melee : ranged;
+      final middlePool = melee.isNotEmpty ? melee : ranged;
 
       final lU = _fillFromPool(remaining, flankPool, flankCount, 2);
       final rU = _fillFromPool(remaining, flankPool, flankCount, 2);
@@ -720,17 +740,19 @@ class BedouinService {
     return 0;
   }
 
-  /// ✅ STRICT WHITELIST — only verified working combat units:
-  ///   • 9-11     = basic melee soldiers
-  ///   • 601-690  = samurai event units
-  ///   • 714, 715 = advanced soldiers
-  /// Everything else (tools 25-38, 140-170, 700+ etc.) is rejected.
+  /// ✅ ONLY 9, 10, 11, 714, 715 — validated to work in Bedouin attacks
   bool _isOffensiveUnit(CastleUnit u) {
-    final id = u.wodId;
-    if (id >= 9 && id <= 11) return true;
-    if (id >= 601 && id <= 690) return true;
-    if (id == 714 || id == 715) return true;
-    return false;
+    return kBedouinValidUnits.contains(u.wodId);
+  }
+
+  String _unitsStr(List<List<int>> units) {
+    final parts = <String>[];
+    for (final u in units) {
+      if (u.length >= 2 && u[0] > 0 && u[1] > 0) {
+        parts.add('${u[0]}×${u[1]}');
+      }
+    }
+    return parts.isEmpty ? 'none' : parts.join(',');
   }
 
   List<List<int>> _fillFromPool(

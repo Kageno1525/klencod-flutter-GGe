@@ -63,8 +63,6 @@ class BedouinAutoService {
   static const int kCampsScanCacheMin = 5;
   static const int kFailedCampCooldownMin = 5;
 
-  static const Set<int> kDefensiveWodIds = {1, 2, 3, 4, 5, 6, 7, 8};
-
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<BedouinAutoStatusEntry> _history = [];
   List<BedouinAutoStatusEntry> get statusHistory => List.unmodifiable(_history);
@@ -283,17 +281,14 @@ class BedouinAutoService {
     final p = await SharedPreferences.getInstance();
     await p.remove(_kLastScan);
 
-    // Stop any legacy status sync (UI now drives its own status)
     _syncTimer?.cancel();
     _syncTimer = null;
 
-    // ✅ Short, meaningful status — no "Started (UI)" noise
     _setStatus('Scanning...');
 
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
 
-    // ✅ IMMEDIATE first tick — no 30s wait
     unawaited(_tick());
   }
 
@@ -425,10 +420,7 @@ class BedouinAutoService {
     final prefs = await SharedPreferences.getInstance();
     final isFg = prefs.getBool('is_app_foreground') ?? true;
 
-    // BG mode: only act when app is NOT foreground
     if (_inBackground && isFg) return;
-
-    // UI mode: only act when app IS foreground
     if (!_inBackground && !isFg) return;
 
     if (!await isEnabled()) return;
@@ -464,7 +456,6 @@ class BedouinAutoService {
           statusNotifier.value != 'Hit' &&
           !statusNotifier.value.startsWith('Hit ') &&
           !statusNotifier.value.startsWith('Attacking')) {
-        // No attack happened this tick — show Idle
         if (statusNotifier.value.startsWith('Found') ||
             statusNotifier.value.startsWith('Scanning')) {
           _setStatus('Idle — no attacks');
@@ -739,13 +730,9 @@ class BedouinAutoService {
     }
   }
 
-  /// ✅ STRICT WHITELIST — mirrors BedouinService._isOffensiveUnit
+  /// ✅ ONLY 9, 10, 11, 714, 715 work for Bedouin attacks (validated manually)
   bool _isOffensiveUnit(CastleUnit u) {
-    final id = u.wodId;
-    if (id >= 9 && id <= 11) return true;
-    if (id >= 601 && id <= 690) return true;
-    if (id == 714 || id == 715) return true;
-    return false;
+    return kBedouinValidUnits.contains(u.wodId);
   }
 
   Future<void> _incrementAttacksToday() async {
