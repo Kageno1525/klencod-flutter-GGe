@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart'; // ✅ NEW
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/main.dart' show GgeApp, GgeAppState;
@@ -18,8 +18,9 @@ import 'package:gge/services/background_service.dart';
 import 'package:gge/screens/auto_defense_screen.dart';
 import 'package:gge/screens/attack_screen.dart';
 import 'package:gge/screens/desert_attack_screen.dart';
+import 'package:gge/screens/samurai_screen.dart'; // ✅ NEW
 import 'package:gge/screens/logs_screen.dart';
-import 'package:gge/screens/inventory_screen.dart'; // ✅ NEW
+import 'package:gge/screens/inventory_screen.dart';
 
 class MainScreen extends StatefulWidget {
   final GgeClient client;
@@ -38,7 +39,7 @@ class _MainScreenState extends State<MainScreen> {
     super.initState();
     _loadUser();
     widget.client.onSessionConflict = _handleSessionConflict;
-    _checkBgSessionConflict(); // ✅ NEW
+    _checkBgSessionConflict();
   }
 
   Future<void> _loadUser() async {
@@ -46,20 +47,15 @@ class _MainScreenState extends State<MainScreen> {
     if (mounted) setState(() => _username = u ?? '');
   }
 
-  // ✅✅✅ NEW: يفحص لو الـ Background سجّل session conflict
-  // بينما التطبيق كان مقفول، ويعرضه للمستخدم أول ما يفتح.
   Future<void> _checkBgSessionConflict() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final conflict = prefs.getBool('bg_session_conflict') ?? false;
       if (!conflict) return;
 
-      // نمسح الـ flag عشان ميتكررش
       await prefs.setBool('bg_session_conflict', false);
-
       if (!mounted) return;
 
-      // استنى شوية عشان الـ UI يترسم قبل الـ dialog
       await Future.delayed(const Duration(milliseconds: 500));
       if (!mounted) return;
 
@@ -434,9 +430,26 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // ✅ المخزن / البيع (جديد)
+        // ✅ NEW: Samurai Camps
         FadeSlideIn(
           delay: const Duration(milliseconds: 600),
+          child: EnterTile(
+            icon: Icons.sports_martial_arts_rounded,
+            title: 'معسكرات الساموراي',
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFFDC2626), Color(0xFF7F1D1D)],
+            ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => SamuraiScreen(client: widget.client)),
+            ),
+          ),
+        ),
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 650),
           child: EnterTile(
             icon: Icons.inventory_2_rounded,
             title: 'المخزن / البيع',
@@ -452,9 +465,8 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // ✅ Logs
         FadeSlideIn(
-          delay: const Duration(milliseconds: 650),
+          delay: const Duration(milliseconds: 700),
           child: EnterTile(
             icon: Icons.terminal_rounded,
             title: 'Logs',

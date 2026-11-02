@@ -8,6 +8,7 @@ import '../gge_client.dart';
 import 'auto_train_service.dart';
 import 'auto_defense_service.dart';
 import 'desert_auto_service.dart';
+import 'samurai_auto_service.dart';
 import 'notifications_service.dart';
 
 @pragma('vm:entry-point')
@@ -19,14 +20,6 @@ void ggeBackgroundCallback() {
 
 final _callbackRef = ggeBackgroundCallback;
 
-// ═══════════════════════════════════════════════════════════
-//  Task Handler — Orchestrator + UI-aware
-//
-//  ✅ نمط العمل الجديد:
-//    • UI مفتوح → BG متوقف تماماً (WS مقفول + services متوقفة)
-//    • UI مقفول → BG يشتغل كامل
-//    • الانتقال فوري عبر sendDataToTask + polling كل 2s
-// ═══════════════════════════════════════════════════════════
 class _GgeTaskHandler extends TaskHandler {
   GgeClient? _client;
   Timer? _statusTimer;
@@ -54,7 +47,6 @@ class _GgeTaskHandler extends TaskHandler {
       return;
     }
 
-    // ✅ لو UI شغال دلوقتي → BG يستنى
     final isFg = prefs.getBool('is_app_foreground') ?? false;
     if (isFg) {
       _log('App is in foreground — BG waiting');
@@ -63,12 +55,10 @@ class _GgeTaskHandler extends TaskHandler {
       return;
     }
 
-    // UI مقفول → يبدأ كامل
     await _startAll();
     _watchPresence();
   }
 
-  /// ✅ راقب UI كل 2 ثانية (fail-safe إذا الإشارة الفورية فشلت)
   void _watchPresence() {
     _presenceTimer?.cancel();
     _presenceTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
@@ -77,7 +67,6 @@ class _GgeTaskHandler extends TaskHandler {
       final p = await SharedPreferences.getInstance();
       final fg = p.getBool('is_app_foreground') ?? false;
 
-      // الحالة 1: UI مفتوح و BG شغال → أوقف
       if (fg && _running) {
         _log('Presence: UI opened → pausing');
         _presenceTimer?.cancel();
@@ -87,14 +76,12 @@ class _GgeTaskHandler extends TaskHandler {
         return;
       }
 
-      // الحالة 2: UI مقفول و BG متوقف → شغّل
       if (!fg && !_running) {
-        // تأخير بسيط للتأكد إن UI خلص + تحديث الـ flag
         await Future.delayed(const Duration(seconds: 2));
         final fg2 = (await SharedPreferences.getInstance())
                 .getBool('is_app_foreground') ??
             false;
-        if (fg2) return; // رجع للـ foreground، استنى الدورة الجاية
+        if (fg2) return;
 
         _log('Presence: UI closed → starting');
         _presenceTimer?.cancel();
@@ -112,19 +99,16 @@ class _GgeTaskHandler extends TaskHandler {
 
     final prefs = await SharedPreferences.getInstance();
 
-    // ── مزامنة desert source ──
     final desertSourceV2 = prefs.getInt('desert_source_v2') ?? 0;
     if (desertSourceV2 > 0 &&
         (prefs.getInt('desert_auto_source') ?? 0) == 0) {
       await prefs.setInt('desert_auto_source', desertSourceV2);
     }
 
-    // ── Init client ──
     _client = GgeClient();
     GgeClient.allowBackgroundReconnect = true;
     _client!.onAppLifecycleChanged(AppLifecycleState.paused);
 
-    // ── Connect + Login ──
     await _saveStatus('CONNECTING');
     try {
       await _client!.connect();
@@ -144,7 +128,6 @@ class _GgeTaskHandler extends TaskHandler {
     _log('Online');
     await _saveStatus('ONLINE');
 
-    // ── Session conflict handler ──
     _client!.onSessionConflict = () async {
       _log('⚠️ Session conflict — stopping');
       try {
@@ -154,7 +137,6 @@ class _GgeTaskHandler extends TaskHandler {
       await _pauseAll();
     };
 
-    // ── Services ──
     try {
       NotificationsService.startListening();
       _log('Notifications listening');
@@ -189,17 +171,46 @@ class _GgeTaskHandler extends TaskHandler {
       _log('DesertAuto error: $e');
     }
 
-    // ── Status sync ──
+    // ✅ NEW: Start Samurai if enabled
+    try {
+      await _syncSamuraiState(initial: true);
+    } catch (e) {
+      _log('SamuraiAuto error: $e');
+    }
+
+    // ✅ Periodic status + sync samurai state
     _statusTimer?.cancel();
-    _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       _saveStatus(
         DesertAutoService.instance.isRunning ? 'RUNNING' : 'IDLE',
         extra: 'atk=${DesertAutoService.instance.attacksThisSession} · '
             'towers=${DesertAutoService.instance.towersScanned} · '
             'train=${AutoTrainService.instance.isRunning ? "ON" : "OFF"} · '
-            'def=${AutoDefenseService.instance.isRunning ? "ON" : "OFF"}',
+            'def=${AutoDefenseService.instance.isRunning ? "ON" : "OFF"} · '
+            'sam=${SamuraiAutoService.instance.isRunning ? "ON" : "OFF"}',
       );
+      if (_running) {
+        await _syncSamuraiState();
+      }
     });
+  }
+
+  Future<void> _syncSamuraiState({bool initial = false}) async {
+    if (_client == null) return;
+    try {
+      final enabled = await SamuraiAutoService.instance.isEnabled();
+      final running = SamuraiAutoService.instance.isRunning;
+
+      if (enabled && !running) {
+        _log('SamuraiAuto: starting${initial ? " (initial)" : " (sync)"}');
+        await SamuraiAutoService.instance.startInBackground(_client!);
+      } else if (!enabled && running) {
+        _log('SamuraiAuto: stopping (disabled)');
+        SamuraiAutoService.instance.stop();
+      }
+    } catch (e) {
+      _log('SamuraiAuto sync error: $e');
+    }
   }
 
   Future<void> _pauseAll() async {
@@ -218,6 +229,9 @@ class _GgeTaskHandler extends TaskHandler {
       DesertAutoService.instance.stop();
     } catch (_) {}
     try {
+      SamuraiAutoService.instance.stop();
+    } catch (_) {}
+    try {
       NotificationsService.stopListening();
     } catch (_) {}
 
@@ -232,9 +246,7 @@ class _GgeTaskHandler extends TaskHandler {
   void _setupDesertCallbacks() {
     DesertAutoService.instance.onBeforeAttack = () async {
       final p = await SharedPreferences.getInstance();
-
       if (p.getBool('is_app_foreground') ?? false) return false;
-
       if (AutoDefenseService.instance.activeEvacuations.isNotEmpty) {
         return false;
       }
@@ -279,7 +291,6 @@ class _GgeTaskHandler extends TaskHandler {
 
   @override
   void onReceiveData(Object data) {
-    // ✅ إشارة فورية من UI
     if (data is String) {
       if (data == 'UI_RESUMED') {
         _log('Signal: UI_RESUMED');
@@ -290,7 +301,6 @@ class _GgeTaskHandler extends TaskHandler {
       } else if (data == 'UI_PAUSED') {
         _log('Signal: UI_PAUSED');
         if (!_running && _token != null) {
-          // تأخير بسيط ثم بدء
           Future.delayed(const Duration(seconds: 2), () async {
             final fg = (await SharedPreferences.getInstance())
                     .getBool('is_app_foreground') ??
@@ -313,21 +323,12 @@ class _GgeTaskHandler extends TaskHandler {
     _statusTimer?.cancel();
     _statusTimer = null;
 
-    try {
-      AutoTrainService.instance.stop();
-    } catch (_) {}
-    try {
-      AutoDefenseService.instance.stop();
-    } catch (_) {}
-    try {
-      DesertAutoService.instance.stop();
-    } catch (_) {}
-    try {
-      NotificationsService.stopListening();
-    } catch (_) {}
-    try {
-      await _client?.dispose();
-    } catch (_) {}
+    try { AutoTrainService.instance.stop(); } catch (_) {}
+    try { AutoDefenseService.instance.stop(); } catch (_) {}
+    try { DesertAutoService.instance.stop(); } catch (_) {}
+    try { SamuraiAutoService.instance.stop(); } catch (_) {}
+    try { NotificationsService.stopListening(); } catch (_) {}
+    try { await _client?.dispose(); } catch (_) {}
     _client = null;
     _running = false;
 
@@ -353,8 +354,6 @@ class _GgeTaskHandler extends TaskHandler {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  BackgroundService static class — بدون تغيير
 // ═══════════════════════════════════════════════════════════
 class BackgroundService {
   BackgroundService._();
