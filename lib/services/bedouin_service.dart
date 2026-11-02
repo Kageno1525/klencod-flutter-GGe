@@ -167,7 +167,7 @@ class BedouinService {
             if (lvl > 0) {
               _playerLevel = lvl + ll;
               TrafficLog.add('ST',
-                  '[Bedouin] 👤 Player level: $_playerLevel');
+                  '[Bedouin] Player level: $_playerLevel');
             }
           }
         } catch (_) {}
@@ -326,7 +326,7 @@ class BedouinService {
     BedouinAttackResult? lastResult;
     for (final lid in lordsToTry) {
       TrafficLog.add('ST',
-          '[Bedouin] ⚔️ Try Lord $lid on ${camp.coordsLabel}');
+          '[Bedouin] Try Lord $lid on ${camp.coordsLabel}');
 
       final result = await _tryAttack(
         camp: camp, source: source, lordId: lid,
@@ -336,6 +336,23 @@ class BedouinService {
       );
 
       if (result.success) return result;
+
+      // ✅ 313 (TOO_MANY_UNITS) — retry with 1 wave at 70% units
+      if (result.error?.contains('313') == true) {
+        TrafficLog.add('ST',
+            '[Bedouin] 313 detected → retry: waves=1 at 70% units');
+        final retryResult = await _tryAttackScaled(
+          camp: camp, source: source, lordId: lid,
+          availableUnits: availableUnits,
+          allUnitsForTools: allUnitsForTools,
+          config: config.copyWith(waves: 1),
+          unitScale: 0.7,
+        );
+        if (retryResult.success) return retryResult;
+        lastResult = retryResult;
+        continue;
+      }
+
       lastResult = result;
 
       final err = result.error ?? '';
@@ -363,7 +380,6 @@ class BedouinService {
       return BedouinAttackResult.fail('NO_OFFENSIVE_UNITS');
     }
 
-    // نفس صيغة الساموراي (5 * level + 8)
     final lvl = _playerLevel ?? 1;
     final maxAttackers = SamuraiMath.maxAttackers(lvl);
     final flankCount = SamuraiMath.flankMax(lvl);
@@ -372,9 +388,9 @@ class BedouinService {
     final toolCapM = SamuraiMath.toolCapMiddle(lvl);
 
     TrafficLog.add('ST',
-        '[Bedouin] 📐 Lvl=$lvl → max=$maxAttackers '
+        '[Bedouin] Lvl=$lvl max=$maxAttackers '
         '(L/R=$flankCount M=$middleCount) '
-        'tools (L/R=$toolCapL M=$toolCapM)');
+        'tools(L/R=$toolCapL M=$toolCapM)');
 
     final melee = combat.where((u) {
       if (u.info?.role == 'melee') return true;
@@ -396,7 +412,7 @@ class BedouinService {
 
     if (actualWaves < config.waves) {
       TrafficLog.add('ST',
-          '[Bedouin] ⚠️ Reducing waves ${config.waves} → $actualWaves '
+          '[Bedouin] Reducing waves ${config.waves} → $actualWaves '
           '(units: $totalAvailable / $perWaveUnits per wave)');
     }
 
@@ -521,6 +537,147 @@ class BedouinService {
     }
   }
 
+  /// ✅ Retry with scaled-down units (used for 313 recovery)
+  Future<BedouinAttackResult> _tryAttackScaled({
+    required BedouinCamp camp,
+    required OwnedCastle source,
+    required int lordId,
+    required List<CastleUnit> availableUnits,
+    required List<CastleUnit> allUnitsForTools,
+    required BedouinAttackConfig config,
+    required double unitScale,
+  }) async {
+    final combat = availableUnits
+        .where((u) => u.amount > 0 && _isOffensiveUnit(u))
+        .toList();
+    if (combat.isEmpty) {
+      return BedouinAttackResult.fail('NO_OFFENSIVE_UNITS');
+    }
+
+    final lvl = _playerLevel ?? 1;
+    final flankCount = (SamuraiMath.flankMax(lvl) * unitScale).round();
+    final middleCount = (SamuraiMath.middleMax(lvl) * unitScale).round();
+    final toolCapL = SamuraiMath.toolCapFlank(lvl);
+    final toolCapM = SamuraiMath.toolCapMiddle(lvl);
+
+    final melee = combat.where((u) {
+      if (u.info?.role == 'melee') return true;
+      if (u.info?.role == 'ranged') return false;
+      return u.wodId >= 9 && u.wodId <= 18;
+    }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
+
+    final ranged = combat.where((u) {
+      if (u.info?.role == 'ranged') return true;
+      if (u.info?.role == 'melee') return false;
+      return !(u.wodId >= 9 && u.wodId <= 18);
+    }).toList()..sort((a, b) => b.amount.compareTo(a.amount));
+
+    final remaining = <int, int>{};
+    for (final u in combat) remaining[u.wodId] = u.amount;
+
+    final wavesPayload = <Map<String, dynamic>>[];
+    int totalSent = 0;
+    int toolsUsed = 0;
+
+    for (int w = 0; w < config.waves; w++) {
+      final isFirstWave = (w == 0);
+      final flankPool = (isFirstWave || melee.isEmpty) ? ranged : melee;
+      final middlePool = ranged.isNotEmpty ? ranged : melee;
+
+      final lU = _fillFromPool(remaining, flankPool, flankCount, 2);
+      final rU = _fillFromPool(remaining, flankPool, flankCount, 2);
+      final mU = _fillFromPool(remaining, middlePool, middleCount, 6);
+
+      final waveSum = _sum(lU) + _sum(rU) + _sum(mU);
+      if (waveSum == 0) break;
+
+      totalSent += waveSum;
+
+      final waveToolId = _getToolIdForWave(w, config);
+      final effectiveTool = _resolveTool(
+          waveToolId, allUnitsForTools, config);
+
+      List<List<int>> lT2, rT2, mT2;
+      if (effectiveTool != null) {
+        lT2 = _fillTools(effectiveTool, config.toolL, 2, toolCapL);
+        rT2 = _fillTools(effectiveTool, config.toolR, 2, toolCapL);
+        mT2 = _fillTools(effectiveTool, config.toolM, 3, toolCapM);
+        toolsUsed += _sumTools(lT2) + _sumTools(rT2) + _sumTools(mT2);
+      } else {
+        lT2 = List.generate(2, (_) => [-1, 0]);
+        rT2 = List.generate(2, (_) => [-1, 0]);
+        mT2 = List.generate(3, (_) => [-1, 0]);
+      }
+
+      wavesPayload.add({
+        'L': {'T': lT2, 'U': lU},
+        'R': {'T': rT2, 'U': rU},
+        'M': {'T': mT2, 'U': mU},
+      });
+    }
+
+    if (wavesPayload.isEmpty) {
+      return BedouinAttackResult.fail('NO_WAVES');
+    }
+
+    try {
+      await conn.sendXtAndWait(
+        'adi',
+        jsonEncode({
+          'SX': source.x, 'SY': source.y,
+          'TX': camp.x, 'TY': camp.y,
+          'KID': camp.kid,
+        }),
+        responseCmd: 'adi', timeoutMs: 8000, isAction: false,
+      );
+    } catch (_) {}
+
+    final payload = {
+      'SX': source.x, 'SY': source.y,
+      'TX': camp.x, 'TY': camp.y,
+      'KID': camp.kid, 'LID': lordId,
+      'WT': 0, 'HBW': -1, 'BPC': 0, 'ATT': 0, 'AV': 0,
+      'LP': 0, 'FC': 0, 'PTT': 1, 'SD': 0, 'ICA': 0, 'CD': 99,
+      'A': wavesPayload,
+      'BKS': [],
+      'AST': [-1, -1, -1],
+      'RW': List.generate(8, (_) => [-1, 0]),
+      'ASCT': 0,
+    };
+
+    await _ensureKingdom(camp.kid);
+
+    try {
+      final resp = await conn.sendXtAndWait(
+        'cra', jsonEncode(payload),
+        responseCmd: 'cra', timeoutMs: 25000, isAction: true,
+      );
+
+      if (resp.resultCode == 0) {
+        int? mid;
+        if (resp.payload != null) {
+          try {
+            mid = _extractMovementMid(
+                jsonDecode(resp.payload!) as Map<String, dynamic>);
+          } catch (_) {}
+        }
+        return BedouinAttackResult.ok(
+          mid: mid ?? -1, t: camp,
+          units: totalSent, waves: wavesPayload.length,
+          tools: toolsUsed,
+        );
+      }
+
+      final code = resp.resultCode;
+      if (code == 313) return BedouinAttackResult.fail('TOO_MANY_UNITS_313');
+      if (code == 91) return BedouinAttackResult.fail('UNIT_NOT_SENDABLE_91');
+      if (code == 218) return BedouinAttackResult.fail('LORD_BUSY_218');
+      return BedouinAttackResult.fail('CRA_$code');
+    } catch (e) {
+      return BedouinAttackResult.fail('$e');
+    }
+  }
+
   int _getToolIdForWave(int waveIndex, BedouinAttackConfig config) {
     switch (waveIndex) {
       case 0: return config.toolIdWave1;
@@ -548,13 +705,13 @@ class BedouinService {
       final altCount = _toolAmountIn(tools, alt);
       if (altCount >= needed) {
         TrafficLog.add('ST',
-            '[Bedouin] 🔁 Fallback tool $alt (preferred $preferredId)');
+            '[Bedouin] Fallback tool $alt (preferred $preferredId)');
         return alt;
       }
     }
 
     TrafficLog.add('ST',
-        '[Bedouin] 🚫 No tools available → attacking without tools');
+        '[Bedouin] No tools available → attacking without tools');
     return null;
   }
 

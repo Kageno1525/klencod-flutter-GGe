@@ -19,7 +19,6 @@ class BedouinAutoService {
   static final BedouinAutoService instance = BedouinAutoService._();
   BedouinAutoService._();
 
-  // ═══ Keys ═══
   static const _kEnabled = 'bedouin_auto_enabled';
   static const _kSourceAreaId = 'bedouin_auto_source_area';
   static const _kSourceKid = 'bedouin_auto_source_kid';
@@ -59,14 +58,13 @@ class BedouinAutoService {
   static const int kDefDelayMax = 15;
   static const int kDefMaxAttacksDay = 0;
   static const String kDefAttackPriority = 'distance';
-  static const int kDefScanRadius = 30;
+  static const int kDefScanRadius = 5;
 
   static const int kCampsScanCacheMin = 5;
-  static const int kFailedCampCooldownMin = 30;
+  static const int kFailedCampCooldownMin = 5;
 
   static const Set<int> kDefensiveWodIds = {1, 2, 3, 4, 5, 6, 7, 8};
 
-  // ═══ State ═══
   final ValueNotifier<String> statusNotifier = ValueNotifier('Idle');
   final List<BedouinAutoStatusEntry> _history = [];
   List<BedouinAutoStatusEntry> get statusHistory => List.unmodifiable(_history);
@@ -94,7 +92,6 @@ class BedouinAutoService {
   bool get isRunning => _running;
   bool get isInBackground => _inBackground;
 
-  // ═══ Config ═══
   Future<bool> isEnabled() async =>
       (await SharedPreferences.getInstance()).getBool(_kEnabled) ?? false;
 
@@ -139,7 +136,6 @@ class BedouinAutoService {
     TrafficLog.add('ST', '[Bedouin-Auto] cmds: $ids');
   }
 
-  // ─── Waves ───
   Future<int> getWaves() async =>
       ((await SharedPreferences.getInstance()).getInt(_kWaves) ?? kDefWaves)
           .clamp(1, 3);
@@ -149,7 +145,6 @@ class BedouinAutoService {
     await p.setInt(_kWaves, v.clamp(1, 3));
   }
 
-  // ─── Tools ───
   Future<bool> getUseTools() async =>
       (await SharedPreferences.getInstance()).getBool(_kUseTools) ?? true;
 
@@ -159,16 +154,11 @@ class BedouinAutoService {
   }
 
   Future<int> getToolIdWave1() async =>
-      (await SharedPreferences.getInstance()).getInt(_kToolIdW1) ??
-      kDefToolIdW1;
-
+      (await SharedPreferences.getInstance()).getInt(_kToolIdW1) ?? kDefToolIdW1;
   Future<int> getToolIdWave2() async =>
-      (await SharedPreferences.getInstance()).getInt(_kToolIdW2) ??
-      kDefToolIdW2;
-
+      (await SharedPreferences.getInstance()).getInt(_kToolIdW2) ?? kDefToolIdW2;
   Future<int> getToolIdWave3() async =>
-      (await SharedPreferences.getInstance()).getInt(_kToolIdW3) ??
-      kDefToolIdW3;
+      (await SharedPreferences.getInstance()).getInt(_kToolIdW3) ?? kDefToolIdW3;
 
   Future<void> setToolIds({int? w1, int? w2, int? w3}) async {
     final p = await SharedPreferences.getInstance();
@@ -179,10 +169,8 @@ class BedouinAutoService {
 
   Future<int> getToolL() async =>
       (await SharedPreferences.getInstance()).getInt(_kToolL) ?? kDefToolL;
-
   Future<int> getToolR() async =>
       (await SharedPreferences.getInstance()).getInt(_kToolR) ?? kDefToolR;
-
   Future<int> getToolM() async =>
       (await SharedPreferences.getInstance()).getInt(_kToolM) ?? kDefToolM;
 
@@ -193,7 +181,6 @@ class BedouinAutoService {
     if (m != null) await p.setInt(_kToolM, m);
   }
 
-  // ─── Priority ───
   Future<String> getAttackPriority() async =>
       (await SharedPreferences.getInstance()).getString(_kAttackPriority) ??
       kDefAttackPriority;
@@ -201,13 +188,10 @@ class BedouinAutoService {
   Future<void> setAttackPriority(String v) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_kAttackPriority, v);
-    TrafficLog.add('ST', '[Bedouin-Auto] attack priority: $v');
   }
 
-  // ─── Limits ───
   Future<int> getMaxLevel() async =>
-      (await SharedPreferences.getInstance()).getInt(_kMaxLevel) ??
-      kDefMaxLevel;
+      (await SharedPreferences.getInstance()).getInt(_kMaxLevel) ?? kDefMaxLevel;
 
   Future<void> setMaxLevel(int v) async {
     final p = await SharedPreferences.getInstance();
@@ -215,8 +199,7 @@ class BedouinAutoService {
   }
 
   Future<int> getRadius() async =>
-      (await SharedPreferences.getInstance()).getInt(_kRadius) ??
-      kDefScanRadius;
+      (await SharedPreferences.getInstance()).getInt(_kRadius) ?? kDefScanRadius;
 
   Future<void> setRadius(int v) async {
     final p = await SharedPreferences.getInstance();
@@ -224,12 +207,9 @@ class BedouinAutoService {
   }
 
   Future<int> getDelayMin() async =>
-      (await SharedPreferences.getInstance()).getInt(_kDelayMin) ??
-      kDefDelayMin;
-
+      (await SharedPreferences.getInstance()).getInt(_kDelayMin) ?? kDefDelayMin;
   Future<int> getDelayMax() async =>
-      (await SharedPreferences.getInstance()).getInt(_kDelayMax) ??
-      kDefDelayMax;
+      (await SharedPreferences.getInstance()).getInt(_kDelayMax) ?? kDefDelayMax;
 
   Future<void> setDelay({int? min, int? max}) async {
     final p = await SharedPreferences.getInstance();
@@ -305,9 +285,19 @@ class BedouinAutoService {
     attacksThisSession = 0;
     campsScanned = 0;
 
+    // ✅ Fresh start: reset camps + load failed camps from prefs
+    _camps.clear();
+    _failedCamps.clear();
+    await _loadFailedCamps();
+
+    // ✅ Force fresh scan on next tick
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_kLastScan);
+
     TrafficLog.add('ST',
-        '[Bedouin-Auto] 🚀 Started (${_inBackground ? "BG" : "UI"})');
-    _setStatus(_inBackground ? '🚀 Started (BG)' : '🚀 Started (UI)');
+        '[Bedouin-Auto] Started (${_inBackground ? "BG" : "UI"}) | '
+        'failed_camps=${_failedCamps.length}');
+    _setStatus(_inBackground ? 'Started (BG)' : 'Started (UI)');
 
     if (!_inBackground) {
       _syncTimer?.cancel();
@@ -332,8 +322,8 @@ class BedouinAutoService {
     _running = false;
     _inBackground = false;
 
-    TrafficLog.add('ST', '[Bedouin-Auto] 🛑 Stopped');
-    _setStatus('🛑 Stopped');
+    TrafficLog.add('ST', '[Bedouin-Auto] Stopped');
+    _setStatus('Stopped');
   }
 
   Future<void> restoreState() async {
@@ -348,12 +338,12 @@ class BedouinAutoService {
     _running = bgRunning;
 
     if (bgRunning) {
-      _setStatus('🚀 Active (background)');
+      _setStatus('Active (background)');
       _syncTimer?.cancel();
       _syncTimer = Timer.periodic(
           const Duration(seconds: 5), (_) => _syncBackgroundStatus());
     } else {
-      _setStatus('⏸️ Paused (background off)');
+      _setStatus('Paused (background off)');
     }
   }
 
@@ -381,7 +371,6 @@ class BedouinAutoService {
     TrafficLog.add('ST', '[Bedouin-Auto] $s');
   }
 
-  // ═══ Persistence ═══
   Future<void> _loadFailedCamps() async {
     final p = await SharedPreferences.getInstance();
     final raw = p.getString(_kFailedCamps);
@@ -389,7 +378,6 @@ class BedouinAutoService {
     try {
       final data = jsonDecode(raw) as Map<String, dynamic>;
       final now = DateTime.now();
-      _failedCamps.clear();
       for (final e in data.entries) {
         final dt = DateTime.tryParse(e.value as String);
         if (dt != null && dt.isAfter(now)) _failedCamps[e.key] = dt;
@@ -413,11 +401,10 @@ class BedouinAutoService {
     final p = await SharedPreferences.getInstance();
     await p.remove(_kFailedCamps);
     await p.remove(_kLastScan);
-    TrafficLog.add('ST', '[Bedouin-Auto] 🧹 State cleared');
-    _setStatus('🧹 State cleared');
+    TrafficLog.add('ST', '[Bedouin-Auto] State cleared');
+    _setStatus('State cleared');
   }
 
-  // ═══ Player Level ═══
   Future<void> _ensurePlayerLevel() async {
     if (_playerLevel != null && _playerLevel! > 0) return;
     if (_client == null) return;
@@ -435,7 +422,7 @@ class BedouinAutoService {
           final ll = _asInt(o['LL']);
           _playerLevel = lvl + ll;
           TrafficLog.add('ST',
-              '[Bedouin-Auto] 👤 Player level: $_playerLevel');
+              '[Bedouin-Auto] Player level: $_playerLevel');
         }
       }
     } catch (e) {
@@ -443,7 +430,6 @@ class BedouinAutoService {
     }
   }
 
-  // ═══ Tick ═══
   Future<void> _tick() async {
     if (!_running) return;
 
@@ -464,7 +450,6 @@ class BedouinAutoService {
     if (_client == null || _svc == null) {
       _client ??= GgeClient();
       _svc ??= BedouinService(_client!);
-      await _loadFailedCamps();
     }
 
     if (_activeTick != null) return;
@@ -481,7 +466,7 @@ class BedouinAutoService {
   Future<void> _doTick() async {
     if (_client == null || _svc == null) return;
 
-    const initialStatus = '⏱️ Checking...';
+    const initialStatus = 'Checking...';
     _setStatus(initialStatus);
     _attackedThisTick.clear();
 
@@ -492,14 +477,13 @@ class BedouinAutoService {
       await _tryAttackCamps();
 
       if (_running && statusNotifier.value == initialStatus) {
-        _setStatus('💤 Idle · ⏱ 30s');
+        _setStatus('Idle');
       }
     } catch (e) {
-      _setStatus('❌ Error: $e');
+      _setStatus('Error: $e');
     }
   }
 
-  // ═══ Scan ═══
   Future<void> _maybeRescan() async {
     if (_client == null || _svc == null) return;
 
@@ -516,7 +500,7 @@ class BedouinAutoService {
 
     final srcArea = p.getInt(_kSourceAreaId) ?? 0;
     if (srcArea == 0) {
-      _setStatus('❌ No source area');
+      _setStatus('No source area');
       return;
     }
 
@@ -527,14 +511,14 @@ class BedouinAutoService {
         if (c.areaId == srcArea) source = c;
       }
       if (source == null) {
-        _setStatus('❌ Source castle not found');
+        _setStatus('Source castle not found');
         return;
       }
 
       final maxLevel = p.getInt(_kMaxLevel) ?? kDefMaxLevel;
       final radius = p.getInt(_kRadius) ?? kDefScanRadius;
 
-      _setStatus('🔍 Scanning camps...');
+      _setStatus('Scanning camps...');
       _camps = await _svc!.scanArea(
         source: source,
         radiusTiles: radius,
@@ -542,19 +526,18 @@ class BedouinAutoService {
         skipPlayerCamps: true,
         onProgress: (d, t) {
           if (_running) {
-            _setStatus('🔍 Scanning $d/$t · ${_camps.length}');
+            _setStatus('Scanning $d/$t · ${_camps.length}');
           }
         },
       );
       campsScanned = _camps.length;
       await p.setString(_kLastScan, DateTime.now().toIso8601String());
-      _setStatus('✓ Found ${_camps.length} camps');
+      _setStatus('Found ${_camps.length} camps');
     } catch (e) {
-      _setStatus('❌ Scan error: $e');
+      _setStatus('Scan error: $e');
     }
   }
 
-  // ═══ Attack Loop ═══
   Future<void> _tryAttackCamps() async {
     if (_client == null || _svc == null) return;
 
@@ -582,7 +565,7 @@ class BedouinAutoService {
 
     final attacksToday = await getAttacksToday();
     if (maxAttacksDay > 0 && attacksToday >= maxAttacksDay) {
-      _setStatus('🛑 Daily limit ($attacksToday/$maxAttacksDay)');
+      _setStatus('Daily limit ($attacksToday/$maxAttacksDay)');
       return;
     }
 
@@ -592,34 +575,59 @@ class BedouinAutoService {
 
       List<BedouinCamp> buildPool() {
         final now = DateTime.now();
-        final list = _camps
-            .where((c) => !c.isPlayerCamp)
-            .where((c) {
-              final fail = _failedCamps[c.key];
-              return fail == null || !fail.isAfter(now);
-            })
-            .toList();
+        final playerCamps = <String>[];
+        final failedCamps = <String>[];
+        final usable = <BedouinCamp>[];
+
+        for (final c in _camps) {
+          if (c.isPlayerCamp) {
+            playerCamps.add(c.key);
+            continue;
+          }
+          final fail = _failedCamps[c.key];
+          if (fail != null && fail.isAfter(now)) {
+            final remainMin = fail.difference(now).inMinutes;
+            failedCamps.add('${c.coordsLabel}($remainMin m)');
+            continue;
+          }
+          usable.add(c);
+        }
+
+        TrafficLog.add('ST',
+            '[Bedouin-Auto] Pool filter: total=${_camps.length} '
+            'player=${playerCamps.length} '
+            'in_cooldown=${failedCamps.length} '
+            'usable=${usable.length}');
+
+        if (usable.isEmpty && _camps.isNotEmpty) {
+          if (failedCamps.isNotEmpty) {
+            TrafficLog.add('ST',
+                '[Bedouin-Auto] Blocked: ${failedCamps.join(", ")}');
+          }
+        }
 
         switch (attackPriority) {
           case 'level':
-            list.sort((a, b) => a.level.compareTo(b.level));
+            usable.sort((a, b) => a.level.compareTo(b.level));
             break;
           case 'troops':
-            list.sort((a, b) => a.totalTroops.compareTo(b.totalTroops));
+            usable.sort((a, b) => a.totalTroops.compareTo(b.totalTroops));
             break;
           case 'distance':
           default:
-            list.sort((a, b) =>
+            usable.sort((a, b) =>
                 a.distanceFromSource.compareTo(b.distanceFromSource));
         }
-        return list;
+        return usable;
       }
 
       var pool = buildPool();
       TrafficLog.add('ST',
-          '[Bedouin-Auto] 🎯 Pool: ${pool.length}/${_camps.length} (priority=$attackPriority)');
+          '[Bedouin-Auto] Pool: ${pool.length}/${_camps.length} (priority=$attackPriority)');
       if (pool.isEmpty) {
-        _setStatus('⏳ All camps blocked — clear state or wait');
+        _setStatus(_camps.isEmpty
+            ? 'No camps — scanning next tick'
+            : 'All camps in cooldown — click Clear State');
         return;
       }
 
@@ -630,7 +638,7 @@ class BedouinAutoService {
           if (c.areaId == srcArea) source = c;
         }
         if (source == null) {
-          _setStatus('❌ Source castle not found');
+          _setStatus('Source castle not found');
           return;
         }
 
@@ -644,11 +652,7 @@ class BedouinAutoService {
             sendable.fold<int>(0, (s, u) => s + u.amount);
 
         if (totalUnits < minUnits) {
-          _setStatus('💤 Idle — units: $totalUnits (< $minUnits)');
-          if (attacksThisTick > 0) {
-            TrafficLog.add('ST',
-                '[Bedouin-Auto] ✅ Done $attacksThisTick attacks — units ran out');
-          }
+          _setStatus('Idle — units: $totalUnits (< $minUnits)');
           return;
         }
 
@@ -660,26 +664,16 @@ class BedouinAutoService {
               .toList();
         }
         if (freeLords.isEmpty) {
-          _setStatus('💤 Idle — no free commanders');
-          if (attacksThisTick > 0) {
-            TrafficLog.add('ST',
-                '[Bedouin-Auto] ✅ Done $attacksThisTick attacks — all lords busy');
-          }
+          _setStatus('Idle — no free commanders');
           return;
         }
 
         if (pool.isEmpty) {
           pool = buildPool();
           if (pool.isEmpty) {
-            _setStatus('⏳ All camps blocked — waiting next cycle');
-            if (attacksThisTick > 0) {
-              TrafficLog.add('ST',
-                  '[Bedouin-Auto] ✅ Done $attacksThisTick attacks — no targets');
-            }
+            _setStatus('All camps in cooldown');
             return;
           }
-          TrafficLog.add('ST',
-              '[Bedouin-Auto] 🔄 New round: ${pool.length} camps');
         }
 
         final camp = pool.removeAt(0);
@@ -697,8 +691,8 @@ class BedouinAutoService {
 
         bool attacked = false;
         for (final lordInfo in freeLords) {
-          _setStatus('⚔️ ${camp.coordsLabel} · L${lordInfo.lord.id} '
-              '(#${attacksThisTick + 1})');
+          _setStatus('Attacking ${camp.coordsLabel} · '
+              'L${lordInfo.lord.id} (#${attacksThisTick + 1})');
 
           final result = await _svc!.attack(
             camp: camp,
@@ -708,6 +702,7 @@ class BedouinAutoService {
             availableUnits: sendable,
             allUnitsForTools: freshUnits,
             config: config,
+            playerLevel: _playerLevel,
           );
 
           if (result.success) {
@@ -716,15 +711,12 @@ class BedouinAutoService {
             await _incrementAttacksToday();
             failStreak = 0;
             TrafficLog.add('ST',
-                '[Bedouin-Auto] ✅ HIT ${camp.coordsLabel} '
-                'units=${result.totalUnits} tools=${result.toolsUsed} '
-                '(#${attacksThisTick})');
-            _setStatus('✅ Hit ${camp.coordsLabel}! (#$attacksThisTick)');
+                '[Bedouin-Auto] HIT ${camp.coordsLabel} '
+                'units=${result.totalUnits} tools=${result.toolsUsed}');
+            _setStatus('Hit ${camp.coordsLabel}! (#$attacksThisTick)');
 
             final gapMs = (delayMin * 1000) +
                 Random().nextInt(max(1, (delayMax - delayMin) * 1000));
-            TrafficLog.add('ST',
-                '[Bedouin-Auto] ⏱ gap ${gapMs}ms');
             await Future.delayed(Duration(milliseconds: gapMs));
             if (!_running) return;
             attacked = true;
@@ -744,7 +736,7 @@ class BedouinAutoService {
                 DateTime.now().add(const Duration(hours: 2));
             await _saveFailedCamps();
             TrafficLog.add('ER',
-                '[Bedouin-Auto] ⛔ ${camp.coordsLabel}: $err (2h)');
+                '[Bedouin-Auto] ${camp.coordsLabel}: $err (2h)');
             break;
           }
 
@@ -753,33 +745,27 @@ class BedouinAutoService {
                 .add(Duration(minutes: kFailedCampCooldownMin));
             await _saveFailedCamps();
             TrafficLog.add('ER',
-                '[Bedouin-Auto] ⛔ ${camp.coordsLabel}: 313 (30m)');
+                '[Bedouin-Auto] ${camp.coordsLabel}: 313 '
+                '($kFailedCampCooldownMin m)');
             break;
           }
 
           TrafficLog.add('ER',
-              '[Bedouin-Auto] ❌ ${camp.coordsLabel}: $err (will retry)');
+              '[Bedouin-Auto] ${camp.coordsLabel}: $err (will retry)');
           break;
         }
 
         if (!attacked) {
           failStreak++;
-          TrafficLog.add('ST',
-              '[Bedouin-Auto] ⚠️ fail streak: $failStreak/$maxFailStreak');
           if (failStreak >= maxFailStreak) {
-            _setStatus('🛑 Too many failures — waiting next cycle');
+            _setStatus('Too many failures — waiting next cycle');
             return;
           }
           await Future.delayed(const Duration(seconds: 3));
         }
       }
-
-      if (attacksThisTick >= safetyMaxAttacks) {
-        TrafficLog.add('ST',
-            '[Bedouin-Auto] ⚠️ Safety limit ($safetyMaxAttacks) reached');
-      }
     } catch (e) {
-      _setStatus('❌ Attack loop error: $e');
+      _setStatus('Attack loop error: $e');
     }
   }
 
