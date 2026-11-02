@@ -133,7 +133,8 @@ class TrafficLog {
         l.contains('login') || l.contains('token') || l.contains('websocket') ||
         l.contains('auto-reconnect') || l.contains('reconnect') ||
         l.contains('init sequence') || l.contains('connected') ||
-        l.contains('opening') || l.contains('handshake')) {
+        l.contains('opening') || l.contains('handshake') ||
+        l.contains('suspicious') || l.contains('clean')) {
       return LogCategory.login;
     }
     if (l.contains('[desert') || l.contains('desert-auto') ||
@@ -201,6 +202,10 @@ class GgeClient {
   DateTime? _lastRxTime;
   bool _networkWaitActive = false;
 
+  // ✅ NEW: suspicious close detection
+  bool _lastCloseWasClean = false;
+  bool _closingIntentionally = false;
+
   int? _cachedPlayerId;
   final Map<int, AttackAlert> _latestAlertByMid = {};
 
@@ -219,6 +224,10 @@ class GgeClient {
   set cachedStatsByArea(Map<int, CastleStats>? v) => _cachedStatsByArea = v;
 
   void Function()? onSessionConflict;
+
+  /// ✅ NEW: fires when WS closes cleanly (server-initiated) with internet OK
+  /// This almost always means someone logged in elsewhere
+  void Function(DateTime when)? onSuspiciousClose;
 
   final List<String> debugLog = [];
   void Function()? onLog;
@@ -355,7 +364,6 @@ class GgeClient {
           if (a != null && a.length >= 4) {
             final areaId = _asInt(a[3]);
 
-            // ✅ Use BDB from gpa (Barracks Level = BDB / 25)
             final gpa = data['gpa'];
             if (gpa is Map) {
               final bdb = _asIntOrNull(gpa['BDB']);
@@ -367,7 +375,6 @@ class GgeClient {
               }
             }
 
-            // Fallback to BG if BDB is missing
             if (!_barracksLevelByCastle.containsKey(areaId)) {
               final bg = gca['BG'] as List?;
               if (bg != null) {
@@ -763,6 +770,7 @@ class GgeClient {
     _cachedAllianceId = null;
     _cachedAllianceMembers = null;
     _gbdReceived = false;
+    _lastCloseWasClean = false;
 
     _status('Opening WebSocket...');
     final uri = Uri.parse('wss://$_gameUrl/');
@@ -799,7 +807,6 @@ class GgeClient {
       throw Exception('WebSocket ready failed: $e');
     }
 
-    // ✅ حماية من null check crash لو الـ channel اتمسح في race condition
     final ch = _channel;
     if (ch == null) {
       _errorLog('WS channel became null after ready');
@@ -813,11 +820,22 @@ class GgeClient {
       (data) => _onMessage(data),
       onDone: () {
         _connected = false;
-        _status('Connection closed');
+        if (!_closingIntentionally && !_disposed) {
+          // ✅ Clean close from server - suspect session conflict
+          _lastCloseWasClean = true;
+          _status('⚠️ WS closed by server (clean close)');
+        } else {
+          _lastCloseWasClean = false;
+          _status('Connection closed (intentional)');
+        }
         _scheduleReconnect();
       },
       onError: (e) {
         _connected = false;
+        if (!_closingIntentionally && !_disposed) {
+          _lastCloseWasClean = false;
+          _status('⚠️ WS error close (network)');
+        }
         _errorLog('WS error: $e');
         _scheduleReconnect();
       },
@@ -1017,6 +1035,15 @@ class GgeClient {
         return;
       }
 
+      // ✅ CLEAN CLOSE + INTERNET OK = SUSPICIOUS (likely session conflict)
+      if (_lastCloseWasClean) {
+        _lastCloseWasClean = false;
+        _status('🔴 Server closed connection — possible session conflict');
+        onSuspiciousClose?.call(DateTime.now());
+        return; // Don't auto-reconnect - wait for user decision
+      }
+
+      // Network error path — normal auto-reconnect
       _status('🔄 Connection lost — checking...');
       await Future.delayed(const Duration(seconds: 5));
       if (_disposed || _connected) return;
@@ -1072,6 +1099,7 @@ class GgeClient {
   }
 
   Future<void> _closeWebSocket() async {
+    _closingIntentionally = true;
     try {
       await _sub?.cancel();
     } catch (_) {}
@@ -1081,6 +1109,8 @@ class GgeClient {
     _channel = null;
     _sub = null;
     _connected = false;
+    _closingIntentionally = false;
+    _lastCloseWasClean = false;
   }
 
   Future<bool> autoReconnect() async {

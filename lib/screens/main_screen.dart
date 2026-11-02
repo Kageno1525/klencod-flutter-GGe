@@ -34,13 +34,16 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   String _username = '';
   bool _isKicked = false;
+  DateTime? _lastSuspiciousDialogAt;
 
   @override
   void initState() {
     super.initState();
     _loadUser();
     widget.client.onSessionConflict = _handleSessionConflict;
+    widget.client.onSuspiciousClose = _handleSuspiciousClose;
     _checkBgSessionConflict();
+    _checkBgSuspiciousClose();
   }
 
   Future<void> _loadUser() async {
@@ -61,6 +64,28 @@ class _MainScreenState extends State<MainScreen> {
       if (!mounted) return;
 
       await _handleSessionConflict();
+    } catch (_) {}
+  }
+
+  // ✅ NEW: check if BG detected suspicious clean close while UI was closed
+  Future<void> _checkBgSuspiciousClose() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final s = prefs.getString('bg_suspicious_close_at');
+      if (s == null) return;
+
+      await prefs.remove('bg_suspicious_close_at');
+      final when = DateTime.tryParse(s);
+      if (when == null) return;
+
+      // Ignore if older than 2 hours
+      if (DateTime.now().difference(when).inHours > 2) return;
+
+      if (!mounted) return;
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+
+      await _handleSuspiciousClose(when);
     } catch (_) {}
   }
 
@@ -92,6 +117,99 @@ class _MainScreenState extends State<MainScreen> {
     );
 
     await _performLogout();
+  }
+
+  // ✅ NEW: handle clean WS close (server closed connection - likely multi-session)
+  Future<void> _handleSuspiciousClose(DateTime when) async {
+    if (_isKicked || !mounted) return;
+
+    // Rate limit: only once per 5 minutes
+    if (_lastSuspiciousDialogAt != null &&
+        DateTime.now().difference(_lastSuspiciousDialogAt!).inMinutes < 5) {
+      return;
+    }
+    _lastSuspiciousDialogAt = DateTime.now();
+
+    final timeStr =
+        '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}';
+
+    final shouldReconnect = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.orange.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.wifi_off_rounded,
+                color: AppTheme.orange, size: 22),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text('انقطع الاتصال',
+                style: TextStyle(decoration: TextDecoration.none)),
+          ),
+        ]),
+        content: Text(
+          'السيرفر قطع الاتصال الساعة $timeStr.\n\n'
+          '⚠️ السبب الغالب: تم فتح الحساب من مكان تاني (متصفح، موبايل، جهاز تاني).\n\n'
+          'تحب تعمل إيه؟',
+          style: const TextStyle(decoration: TextDecoration.none, height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.red),
+            child: const Text('تسجيل خروج'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.green),
+            child:
+                const Text('إعادة اتصال', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (shouldReconnect == true) {
+      // User chose to reconnect
+      try {
+        final ok = await widget.client.autoReconnect();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text(
+              ok ? '✅ تم إعادة الاتصال' : '❌ فشل الاتصال — سجل دخول من جديد',
+              style: const TextStyle(decoration: TextDecoration.none),
+            ),
+            backgroundColor: ok ? AppTheme.green : AppTheme.red,
+            behavior: SnackBarBehavior.floating,
+          ));
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text('❌ $e',
+                style: const TextStyle(decoration: TextDecoration.none)),
+            backgroundColor: AppTheme.red,
+            behavior: SnackBarBehavior.floating,
+          ));
+      }
+    } else {
+      // User chose to logout
+      _isKicked = true;
+      await _performLogout();
+    }
   }
 
   Future<void> _performLogout() async {
@@ -431,7 +549,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // ⚔️ Samurai
         FadeSlideIn(
           delay: const Duration(milliseconds: 580),
           child: EnterTile(
@@ -449,7 +566,6 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // 🏰 Bedouin (NEW)
         FadeSlideIn(
           delay: const Duration(milliseconds: 620),
           child: EnterTile(

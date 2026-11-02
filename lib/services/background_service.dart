@@ -21,9 +21,6 @@ void ggeBackgroundCallback() {
 
 final _callbackRef = ggeBackgroundCallback;
 
-// ═══════════════════════════════════════════════════════════
-//  Task Handler — Orchestrator
-// ═══════════════════════════════════════════════════════════
 class _GgeTaskHandler extends TaskHandler {
   GgeClient? _client;
   Timer? _statusTimer;
@@ -51,7 +48,6 @@ class _GgeTaskHandler extends TaskHandler {
       return;
     }
 
-    // ✅ UI في المقدمة → BG يفضل ONLINE (مش PAUSED_UI)
     final isFg = prefs.getBool('is_app_foreground') ?? false;
     if (isFg) {
       _log('App is in foreground — BG ready');
@@ -139,6 +135,18 @@ class _GgeTaskHandler extends TaskHandler {
         await prefs.setBool('bg_session_conflict', true);
       } catch (_) {}
       await _saveStatus('SESSION_CONFLICT');
+      await _pauseAll();
+    };
+
+    // ✅ NEW: suspicious clean close handler
+    _client!.onSuspiciousClose = (DateTime when) async {
+      _log('Suspicious close at ${when.toIso8601String()}');
+      try {
+        await prefs.setString(
+            'bg_suspicious_close_at', when.toIso8601String());
+      } catch (_) {}
+      await _saveStatus('SUSPICIOUS_CLOSE',
+          extra: 'Server closed connection');
       await _pauseAll();
     };
 
@@ -260,7 +268,6 @@ class _GgeTaskHandler extends TaskHandler {
     } catch (_) {}
     _client = null;
 
-    // ✅ ONLINE (مش PAUSED_UI) — عشان الـ UI ميتلخبطش
     await _saveStatus('ONLINE');
   }
 
@@ -378,9 +385,6 @@ class _GgeTaskHandler extends TaskHandler {
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  BackgroundService static class
-// ═══════════════════════════════════════════════════════════
 class BackgroundService {
   BackgroundService._();
   static bool _initialized = false;
