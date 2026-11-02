@@ -243,7 +243,6 @@ class BedouinAutoService {
     return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
   }
 
-  // ═══ Start / Stop ═══
   Future<void> startFromUI(GgeClient client, {int? sourceAreaId}) async {
     _inBackground = false;
     await setEnabled(true);
@@ -285,12 +284,10 @@ class BedouinAutoService {
     attacksThisSession = 0;
     campsScanned = 0;
 
-    // ✅ Fresh start: reset camps + load failed camps from prefs
     _camps.clear();
     _failedCamps.clear();
     await _loadFailedCamps();
 
-    // ✅ Force fresh scan on next tick
     final p = await SharedPreferences.getInstance();
     await p.remove(_kLastScan);
 
@@ -769,10 +766,23 @@ class BedouinAutoService {
     }
   }
 
+  /// ✅ FIXED: excludes tools + defensive base units
   bool _isOffensiveUnit(CastleUnit u) {
+    // Defensive base units (1-8)
     if (kDefensiveWodIds.contains(u.wodId)) return false;
-    if (u.info?.fightType != null) return u.info!.fightType == 0;
-    return u.info?.role == 'melee' || u.info?.role == 'ranged';
+
+    // Known tool ranges (Ram, Ladder, Siege, etc.)
+    if (u.wodId >= 29 && u.wodId <= 38) return false;
+    if (u.wodId >= 140 && u.wodId <= 170) return false;
+
+    // Must be melee/ranged per catalog
+    final role = u.info?.role?.toLowerCase() ?? '';
+    if (role == 'melee' || role == 'ranged') return true;
+
+    // Fallback fightType 0
+    if (u.info?.fightType == 0) return true;
+
+    return false;
   }
 
   Future<void> _incrementAttacksToday() async {

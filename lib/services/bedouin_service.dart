@@ -4,7 +4,7 @@ import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
 import '../models.dart';
-import 'samurai_service.dart' show SamuraiMath;
+import 'samurai_service.dart' show SamuraiMath, kDefensiveUnitWodIds;
 
 /// Type 27 = Bedouin Camp (NPC — owner = -1)
 const Set<int> kBedouinCampTypes = {27};
@@ -167,7 +167,7 @@ class BedouinService {
             if (lvl > 0) {
               _playerLevel = lvl + ll;
               TrafficLog.add('ST',
-                  '[Bedouin] Player level: $_playerLevel');
+                  '[Bedouin] 👤 Player level: $_playerLevel');
             }
           }
         } catch (_) {}
@@ -337,7 +337,7 @@ class BedouinService {
 
       if (result.success) return result;
 
-      // ✅ 313 (TOO_MANY_UNITS) — retry with 1 wave at 70% units
+      // 313 (TOO_MANY_UNITS) — retry with 1 wave at 70% units
       if (result.error?.contains('313') == true) {
         TrafficLog.add('ST',
             '[Bedouin] 313 detected → retry: waves=1 at 70% units');
@@ -537,7 +537,7 @@ class BedouinService {
     }
   }
 
-  /// ✅ Retry with scaled-down units (used for 313 recovery)
+  /// Retry with scaled-down units (used for 313 recovery)
   Future<BedouinAttackResult> _tryAttackScaled({
     required BedouinCamp camp,
     required OwnedCastle source,
@@ -722,11 +722,28 @@ class BedouinService {
     return 0;
   }
 
+  /// ✅ FIXED: excludes tools + defensive base units
   bool _isOffensiveUnit(CastleUnit u) {
-    if (u.info?.fightType != null) {
-      return u.info!.fightType == 0;
-    }
-    return u.info?.role == 'melee' || u.info?.role == 'ranged';
+    // Defensive base units (1-8)
+    if (kDefensiveUnitWodIds.contains(u.wodId)) return false;
+
+    // Known tool ranges (Ram, Ladder, Siege, etc.)
+    if (_isToolWodId(u.wodId)) return false;
+
+    // Must be melee/ranged per catalog
+    final role = u.info?.role?.toLowerCase() ?? '';
+    if (role == 'melee' || role == 'ranged') return true;
+
+    // Fallback fightType 0
+    if (u.info?.fightType == 0) return true;
+
+    return false;
+  }
+
+  bool _isToolWodId(int wodId) {
+    if (wodId >= 29 && wodId <= 38) return true;
+    if (wodId >= 140 && wodId <= 170) return true;
+    return false;
   }
 
   List<List<int>> _fillFromPool(
