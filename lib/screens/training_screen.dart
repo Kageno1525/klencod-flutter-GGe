@@ -58,7 +58,10 @@ class TrainingScreen extends StatefulWidget {
 }
 
 class _TrainingScreenState extends State<TrainingScreen> {
-  static const int _maxPerBatch = 80;
+  // ✅ Max barracks = 20 → max per batch = 80
+  static const int _barracksMaxLevel = 20;
+  static const int _absoluteMaxPerBatch = 80;
+
   bool _isAutoMode = false;
 
   List<OwnedCastle> _castles = [];
@@ -94,9 +97,25 @@ class _TrainingScreenState extends State<TrainingScreen> {
   int _autoRotationIndex = 0;
   int _autoTotalTrained = 0;
 
-  // متغيرات الحماية من البان
   DateTime _lastActionTime = DateTime.now();
   bool _isAutoSending = false;
+
+  // ✅✅✅ NEW: max per batch ديناميكي من مستوى الثكنات
+  int get _maxPerBatch {
+    final lvl = _currentBarracksLevel;
+    if (lvl == null || lvl <= 0) {
+      return _absoluteMaxPerBatch;
+    }
+    // Lv 20 → 80 · Lv 10 → 40 · Lv 1 → 4 · بحد أدنى 10
+    final computed = (lvl * 4).clamp(10, _absoluteMaxPerBatch);
+    return computed;
+  }
+
+  // ✅✅✅ NEW: مستوى الثكنات للقلعة الحالية
+  int? get _currentBarracksLevel {
+    if (_castle == null) return null;
+    return widget.client.getBarracksLevel(_castle!.areaId);
+  }
 
   @override
   void initState() {
@@ -153,7 +172,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
       if (!_isAutoMode || !_autoEnabled || _isAutoSending) return;
       if (_castle == null || _autoSelectedAmounts.isEmpty) return;
 
-      // ✅ التحقق الإجباري: لو مفيش شرط متعلم عليه، نعلم على الخانة
       if (!_triggerOnSlot && !_triggerOnTime) {
         setState(() => _triggerOnSlot = true);
       }
@@ -207,8 +225,13 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
   Future<void> _executeFrontendAutoTrain() async {
     _isAutoSending = true;
+    final unlocked = widget.client.getUnlockedForArea(_castle!.areaId);
+    final source = unlocked.isNotEmpty
+        ? unlocked
+        : widget.client.unlockedUnitIds;
+
     final validUnits = _autoSelectedAmounts.keys
-        .where((id) => widget.client.unlockedUnitIds.contains(id))
+        .where((id) => source.contains(id))
         .toList();
 
     if (validUnits.isEmpty) {
@@ -221,18 +244,21 @@ class _TrainingScreenState extends State<TrainingScreen> {
     final wodId = validUnits[_autoRotationIndex];
     final amount = _autoSelectedAmounts[wodId] ?? 10;
 
+    // ✅ تأكد إن amount لا يتجاوز max batch
+    final safeAmount = amount.clamp(1, _maxPerBatch);
+
     try {
       await _throttle();
 
       final res = await widget.client.trainUnits(
         areaId: _castle!.areaId,
         wodId: wodId,
-        amount: amount,
+        amount: safeAmount,
       );
 
       if (res.success) {
         setState(() {
-          _autoTotalTrained += amount;
+          _autoTotalTrained += safeAmount;
           _autoRotationIndex =
               (_autoRotationIndex + 1) % validUnits.length;
         });
@@ -242,7 +268,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
         await prefs.setInt('auto_total_trained', _autoTotalTrained);
         await prefs.setInt('auto_rotation_index', _autoRotationIndex);
 
-        _log('Success! WID=$wodId AMT=$amount');
+        _log('Success! WID=$wodId AMT=$safeAmount');
         await _loadSlots(force: true);
       } else {
         final prefs = await SharedPreferences.getInstance();
@@ -303,14 +329,11 @@ class _TrainingScreenState extends State<TrainingScreen> {
       final catalog = await widget.client.loadCatalog();
       if (!mounted) return;
 
-      // ✅ FIX #1: نشمل areaType=12 (External Kingdom castles)
-      //    عشان قلاع الخرائط التانية تظهر (بركان, ICY, Spicy, Landy)
-      //    استبعدنا 10 (Village) و 15 (Camp) — عادةً مفيش فيهم باراكس
       final trainableCastles = castles
           .where((c) =>
-              c.areaType == 1 || // Main Castle
-              c.areaType == 4 || // Outpost
-              c.areaType == 12) // External Kingdom Castle
+              c.areaType == 1 ||
+              c.areaType == 4 ||
+              c.areaType == 12)
           .toList();
 
       setState(() {
@@ -332,7 +355,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
       });
 
       if (_castle != null) {
-        // ✅ FIX #3: chain sequential — jca first, then spl
         await _fetchBarracksLevel();
         await _loadSlots(force: true);
       }
@@ -341,8 +363,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  /// ✅ FIX #2: يستخدم `_castle!.kingdomId` بدل `KID: 0` الثابت
-  ///    عشان jca يروح للمملكة الصحيحة (KID=1,2,3,4 مش بس 0)
   Future<void> _fetchBarracksLevel() async {
     if (_castle == null) return;
     try {
@@ -359,25 +379,23 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  /// ✅ FIX #3: castle switch — sequential: jca → spl
   Future<void> _onCastleChanged(OwnedCastle v) async {
     setState(() {
       _castle = v;
       _slots = null;
       _selectedUnit = null;
+      _autoRotationIndex = 0;
     });
 
-    // 1. اذهب لمملكة القلعة الجديدة (jca) — هيرجع barracks level في jaa
     await _fetchBarracksLevel();
-
-    // 2. دلوقتي إحنا في سياق المملكة الصح — نطلب الخانات
     await _loadSlots(force: true);
 
-    // 3. اختيار وحدة افتراضية
     if (!mounted) return;
     setState(() {
       _selectedUnit =
           _filteredTrainable.isNotEmpty ? _filteredTrainable.first : null;
+      final amt = int.tryParse(_amountCtrl.text) ?? 10;
+      if (amt > _maxPerBatch) _amountCtrl.text = _maxPerBatch.toString();
     });
   }
 
@@ -413,36 +431,45 @@ class _TrainingScreenState extends State<TrainingScreen> {
       final now = DateTime.now();
       final parsedSlots = <SlotInfo>[];
 
-      if (ps != null && ps.isNotEmpty) {
-        final rct = ps['RCT'] as num? ?? 0;
-        final tua = ps['TUA'] as num? ?? 0;
-        final wid = ps['WID'] as num? ?? 0;
-        parsedSlots.add(SlotInfo(
-          rut: rct.toInt(),
-          fetchedAt: now,
-          isTraining: true,
-          units: tua.toInt(),
-          wodId: wid.toInt(),
-        ));
-      } else {
-        parsedSlots.add(SlotInfo(rut: 0, fetchedAt: now, isTraining: true));
-      }
-
+      // ✅ QS هي القائمة الأساسية للخانات (دايماً 5)
       if (qs != null) {
         for (final q in qs) {
           if (q is! Map) continue;
           final si = q['SI'];
           final rut = (si is Map ? si['RUT'] : null) ?? q['RUT'];
-          final wid = q['WID'] as num?;
-          final tua = q['TUA'] as num?;
-          if (rut is num) {
-            parsedSlots.add(SlotInfo(
-              rut: rut.toInt(),
-              fetchedAt: now,
-              wodId: wid?.toInt(),
-              units: tua?.toInt() ?? 0,
-            ));
+          if (rut is! num) continue;
+
+          parsedSlots.add(SlotInfo(
+            rut: rut.toInt(),
+            fetchedAt: now,
+            wodId: (q['WID'] as num?)?.toInt(),
+            units: (q['TUA'] as num?)?.toInt() ?? 0,
+          ));
+        }
+      }
+
+      // ✅ PS = تفاصيل التدريب النشط — بنحسّن slot موجود (مش بنضيف جديد)
+      if (ps != null && ps.isNotEmpty && parsedSlots.isNotEmpty) {
+        final psWid = (ps['WID'] as num?)?.toInt();
+        final psTua = (ps['TUA'] as num?)?.toInt() ?? 0;
+
+        int trainingIdx = -1;
+        for (int i = 0; i < parsedSlots.length; i++) {
+          if (parsedSlots[i].rut > 0) {
+            trainingIdx = i;
+            break;
           }
+        }
+
+        if (trainingIdx >= 0) {
+          final old = parsedSlots[trainingIdx];
+          parsedSlots[trainingIdx] = SlotInfo(
+            rut: old.rut,
+            fetchedAt: now,
+            isTraining: true,
+            wodId: psWid ?? old.wodId,
+            units: psTua > 0 ? psTua : old.units,
+          );
         }
       }
 
@@ -458,10 +485,17 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
+  // ✅✅✅ فلتر الوحدات حسب القلعة الحالية (per-area)
   List<UnitCatalogEntry> get _filteredTrainable {
-    final unlocked = widget.client.unlockedUnitIds;
-    if (unlocked.isEmpty) return [];
-    return _trainable.where((u) => unlocked.contains(u.wodId)).toList();
+    if (_castle == null) return [];
+
+    final perArea = widget.client.getUnlockedForArea(_castle!.areaId);
+    final source = perArea.isNotEmpty
+        ? perArea
+        : widget.client.unlockedUnitIds;
+
+    if (source.isEmpty) return [];
+    return _trainable.where((u) => source.contains(u.wodId)).toList();
   }
 
   Future<void> _trainManual() async {
@@ -472,7 +506,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
       return;
     }
     if (amt > _maxPerBatch) {
-      _snack(S.isAr ? 'الحد الأقصى $_maxPerBatch' : 'Max $_maxPerBatch',
+      _snack(
+          S.isAr
+              ? 'الحد الأقصى ${_maxPerBatch} بناءً على مستوى الثكنات'
+              : 'Max $_maxPerBatch for barracks level',
           color: AppTheme.orange);
       return;
     }
@@ -693,73 +730,140 @@ class _TrainingScreenState extends State<TrainingScreen> {
   }
 
   Widget _castlePicker(BuildContext context) {
+    final lvl = _currentBarracksLevel;
+    final unlockedCount = _filteredTrainable.length;
+
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                  color: AppTheme.blue.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(12),
-                  border:
-                      Border.all(color: AppTheme.blue.withOpacity(0.3))),
-              child: const Icon(Icons.castle_rounded,
-                  color: AppTheme.blue, size: 20)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(S.selectCastle,
-                    style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.subTextColor(context),
-                        letterSpacing: 0.8,
-                        decoration: TextDecoration.none)),
-                const SizedBox(height: 2),
-                if (_castles.isEmpty)
-                  Text(S.isAr ? 'لا توجد قلاع' : 'No castles',
-                      style: TextStyle(
-                          color: AppTheme.subTextColor(context),
-                          fontSize: 12,
-                          decoration: TextDecoration.none))
-                else
-                  DropdownButtonHideUnderline(
-                    child: DropdownButton<OwnedCastle>(
-                      value: _castle,
-                      isExpanded: true,
-                      isDense: true,
-                      dropdownColor: Theme.of(context).colorScheme.surface,
-                      borderRadius: BorderRadius.circular(14),
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.textColor(context)),
-                      items: _castles
-                          .map((c) => DropdownMenuItem(
-                              value: c,
-                              child: Text(c.fullLabel,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                      color: AppTheme.textColor(context),
-                                      fontSize: 13))))
-                          .toList(),
-                      onChanged: (v) {
-                        if (v == null) return;
-                        // ✅ fire and forget — التنفيذ داخل _onCastleChanged
-                        unawaited(_onCastleChanged(v));
-                      },
-                    ),
-                  ),
-              ],
-            ),
+          Row(
+            children: [
+              Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                      color: AppTheme.blue.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                      border:
+                          Border.all(color: AppTheme.blue.withOpacity(0.3))),
+                  child: const Icon(Icons.castle_rounded,
+                      color: AppTheme.blue, size: 20)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(S.selectCastle,
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.subTextColor(context),
+                            letterSpacing: 0.8,
+                            decoration: TextDecoration.none)),
+                    const SizedBox(height: 2),
+                    if (_castles.isEmpty)
+                      Text(S.isAr ? 'لا توجد قلاع' : 'No castles',
+                          style: TextStyle(
+                              color: AppTheme.subTextColor(context),
+                              fontSize: 12,
+                              decoration: TextDecoration.none))
+                    else
+                      DropdownButtonHideUnderline(
+                        child: DropdownButton<OwnedCastle>(
+                          value: _castle,
+                          isExpanded: true,
+                          isDense: true,
+                          dropdownColor:
+                              Theme.of(context).colorScheme.surface,
+                          borderRadius: BorderRadius.circular(14),
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.textColor(context)),
+                          items: _castles.map((c) {
+                            final cLvl =
+                                widget.client.getBarracksLevel(c.areaId);
+                            final lvlLabel =
+                                cLvl != null ? ' · Lv $cLvl' : '';
+                            return DropdownMenuItem(
+                                value: c,
+                                child: Text('${c.fullLabel}$lvlLabel',
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        color: AppTheme.textColor(context),
+                                        fontSize: 13)));
+                          }).toList(),
+                          onChanged: (v) {
+                            if (v == null) return;
+                            unawaited(_onCastleChanged(v));
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              _infoChip(
+                context,
+                icon: Icons.military_tech_rounded,
+                label: lvl != null
+                    ? 'الثكنات: Lv $lvl/$_barracksMaxLevel'
+                    : 'الثكنات: ?',
+                color: lvl != null && lvl >= _barracksMaxLevel
+                    ? AppTheme.orange
+                    : (lvl != null
+                        ? AppTheme.teal
+                        : AppTheme.subTextColor(context)),
+              ),
+              _infoChip(
+                context,
+                icon: Icons.groups_rounded,
+                label: 'وحدات متاحة: $unlockedCount',
+                color: AppTheme.purple,
+              ),
+              _infoChip(
+                context,
+                icon: Icons.format_list_numbered_rounded,
+                label: 'Max/batch: $_maxPerBatch',
+                color: AppTheme.blue,
+              ),
+            ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _infoChip(BuildContext context,
+      {required IconData icon,
+      required String label,
+      required Color color}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 4),
+        Text(label,
+            style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                decoration: TextDecoration.none)),
+      ]),
     );
   }
 
@@ -767,13 +871,28 @@ class _TrainingScreenState extends State<TrainingScreen> {
     final slots = _slots;
     final loading = _slotsLoading;
 
-    final activeSlot = slots?.firstWhere(
-          (s) => s.isTraining,
-          orElse: () => SlotInfo(rut: 0, fetchedAt: DateTime.now()),
-        ) ??
-        SlotInfo(rut: 0, fetchedAt: DateTime.now());
+    SlotInfo? mainSlot;
+    List<SlotInfo> queueSlots = [];
 
-    final queueSlots = slots?.where((s) => !s.isTraining).toList() ?? [];
+    if (slots != null && slots.isNotEmpty) {
+      final trainingIdx = slots.indexWhere((s) => s.isTraining);
+      if (trainingIdx >= 0) {
+        mainSlot = slots[trainingIdx];
+        queueSlots = slots.where((s) => !s.isTraining).toList();
+      } else {
+        final freeIdx = slots.indexWhere((s) => s.isFree);
+        final mainIdx = freeIdx >= 0 ? freeIdx : 0;
+        mainSlot = slots[mainIdx];
+        queueSlots = <SlotInfo>[];
+        for (int i = 0; i < slots.length; i++) {
+          if (i != mainIdx) queueSlots.add(slots[i]);
+        }
+      }
+    }
+
+    final freeCount = slots?.where((s) => s.isFree).length ?? 0;
+    final busyCount = slots?.where((s) => s.isBusy).length ?? 0;
+    final lockedCount = slots?.where((s) => s.isLocked).length ?? 0;
 
     final elapsed = _lastSlotFetch == null
         ? 0
@@ -829,14 +948,44 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 ),
             ],
           ),
-          if (slots != null) ...[
+
+          // ✅ إحصائيات سريعة
+          if (slots != null && slots.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _statChip(
+                  icon: Icons.check_circle_outline_rounded,
+                  label: S.isAr ? '$freeCount متاحة' : '$freeCount free',
+                  color: AppTheme.green,
+                ),
+                _statChip(
+                  icon: Icons.hourglass_top_rounded,
+                  label: S.isAr ? '$busyCount مشغولة' : '$busyCount busy',
+                  color: AppTheme.orange,
+                ),
+                _statChip(
+                  icon: Icons.lock_rounded,
+                  label: S.isAr
+                      ? '$lockedCount مقفولة'
+                      : '$lockedCount locked',
+                  color: AppTheme.subTextColor(context),
+                ),
+              ],
+            ),
+          ],
+
+          if (slots != null && slots.isNotEmpty) ...[
             const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                    flex: 2,
-                    child: _slotBox(context, activeSlot, isMain: true)),
+                if (mainSlot != null)
+                  Expanded(
+                      flex: 2,
+                      child: _slotBox(context, mainSlot, isMain: true)),
                 const SizedBox(width: 8),
                 Expanded(
                   flex: 4,
@@ -844,7 +993,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
                     spacing: 6,
                     runSpacing: 6,
                     children: queueSlots
-                        .take(5)
                         .map((s) => SizedBox(
                               width: (MediaQuery.of(context).size.width -
                                       100) /
@@ -896,74 +1044,125 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
+  Widget _statChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 4),
+        Text(label,
+            style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                decoration: TextDecoration.none)),
+      ]),
+    );
+  }
+
   Widget _slotBox(BuildContext context, SlotInfo s, {bool isMain = false}) {
-    Color c = s.isFree
-        ? AppTheme.green
-        : (s.isBusy ? AppTheme.orange : AppTheme.subTextColor(context));
+    Color c;
+    IconData icon;
+    String label;
+
+    if (s.isLocked) {
+      c = AppTheme.subTextColor(context);
+      icon = Icons.lock_rounded;
+      label = 'مقفولة';
+    } else if (s.isBusy) {
+      c = AppTheme.orange;
+      icon = Icons.hourglass_top_rounded;
+      label = 'مشغولة';
+    } else if (s.isFree) {
+      c = AppTheme.green;
+      icon = Icons.check_circle_rounded;
+      label = 'متاحة';
+    } else {
+      c = AppTheme.subTextColor(context);
+      icon = Icons.help_outline_rounded;
+      label = '?';
+    }
 
     String unitName = '';
     if (s.isBusy && s.wodId != null) {
-      final catalogEntry = _catalog[s.wodId];
-      if (catalogEntry != null) {
-        unitName = S.unitName(catalogEntry.displayName);
-      }
+      final entry = _catalog[s.wodId];
+      if (entry != null) unitName = S.unitName(entry.displayName);
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+      padding: EdgeInsets.symmetric(vertical: isMain ? 10 : 6, horizontal: 4),
       decoration: BoxDecoration(
         color: c.withOpacity(0.1),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: c.withOpacity(0.4), width: 1.5),
+        border: Border.all(
+          color: c.withOpacity(0.55),
+          width: isMain ? 2 : 1.5,
+        ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            s.isFree
-                ? Icons.check_circle_outline_rounded
-                : (s.isBusy
-                    ? Icons.hourglass_top_rounded
-                    : Icons.lock_rounded),
-            color: c,
-            size: isMain ? 24 : 18,
-          ),
-          const SizedBox(height: 4),
-          if (isMain) ...[
-            Text(s.timeLabel,
-                style: TextStyle(
-                    color: c,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    decoration: TextDecoration.none),
-                textAlign: TextAlign.center),
-            if (s.isBusy) ...[
-              Text(unitName,
-                  style: TextStyle(
-                      color: c, fontSize: 10, decoration: TextDecoration.none),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center),
-              Text('${s.units} جندي',
-                  style: TextStyle(
-                      color: c,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      decoration: TextDecoration.none)),
-            ]
-          ] else ...[
-            Text(
-              s.isFree ? 'متاحة' : (s.isBusy ? 'مشغولة' : 'مقفولة'),
-              style: TextStyle(
-                  color: c,
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.none),
+          Icon(icon, color: c, size: isMain ? 26 : 20),
+          SizedBox(height: isMain ? 6 : 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: c,
+              fontSize: isMain ? 12 : 10,
+              fontWeight: FontWeight.bold,
+              decoration: TextDecoration.none,
             ),
-            if (s.isBusy)
-              Text(s.timeLabel,
-                  style: TextStyle(
-                      color: c, fontSize: 8, decoration: TextDecoration.none)),
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (s.isBusy) ...[
+            const SizedBox(height: 2),
+            Text(
+              s.timeLabel,
+              style: TextStyle(
+                color: c,
+                fontSize: isMain ? 11 : 9,
+                fontWeight: FontWeight.w600,
+                decoration: TextDecoration.none,
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (isMain && unitName.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(
+                unitName,
+                style: TextStyle(
+                  color: c.withOpacity(0.9),
+                  fontSize: 10,
+                  decoration: TextDecoration.none,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              Text(
+                '${s.units} جندي',
+                style: TextStyle(
+                  color: c,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ],
         ],
       ),
@@ -984,7 +1183,40 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
   Widget _unitPickerManual(BuildContext context) {
     final filtered = _filteredTrainable;
-    if (filtered.isEmpty) return const SizedBox.shrink();
+    if (filtered.isEmpty) {
+      return AppTheme.glassCard(
+        context: context,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            const Icon(Icons.info_outline_rounded,
+                color: AppTheme.orange, size: 32),
+            const SizedBox(height: 10),
+            Text(
+              S.isAr
+                  ? 'لا توجد وحدات متاحة في هذه القلعة'
+                  : 'No units available in this castle',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: AppTheme.textColor(context),
+                  fontSize: 13,
+                  decoration: TextDecoration.none),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              S.isAr
+                  ? 'جرّب قلعة تانية أو تأكد من مستوى الثكنات'
+                  : 'Try another castle or check barracks level',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: AppTheme.subTextColor(context),
+                  fontSize: 11,
+                  decoration: TextDecoration.none),
+            ),
+          ],
+        ),
+      );
+    }
 
     return AppTheme.glassCard(
       context: context,
@@ -1064,6 +1296,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
   }
 
   Widget _amountInputManual(BuildContext context) {
+    final maxB = _maxPerBatch;
     return AppTheme.glassCard(
       context: context,
       padding: const EdgeInsets.all(14),
@@ -1094,7 +1327,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                             letterSpacing: 0.8,
                             decoration: TextDecoration.none)),
                     const SizedBox(width: 6),
-                    Text('(حد أقصى $_maxPerBatch)',
+                    Text('(حد أقصى $maxB)',
                         style: TextStyle(
                             fontSize: 9,
                             color: AppTheme.subTextColor(context)
@@ -1131,10 +1364,10 @@ class _TrainingScreenState extends State<TrainingScreen> {
                     _stepBtn(
                         icon: Icons.keyboard_double_arrow_up_rounded,
                         color: AppTheme.green,
-                        tooltip: '80',
+                        tooltip: '$maxB',
                         onTap: () {
                           HapticFeedback.lightImpact();
-                          _amountCtrl.text = _maxPerBatch.toString();
+                          _amountCtrl.text = maxB.toString();
                           setState(() {});
                         }),
                     const SizedBox(width: 6),
@@ -1265,6 +1498,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
   Widget _autoTrainPanel(BuildContext context) {
     final filtered = _filteredTrainable;
+    final maxB = _maxPerBatch;
 
     return AppTheme.glassCard(
       context: context,
@@ -1421,148 +1655,169 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   fontWeight: FontWeight.bold,
                   decoration: TextDecoration.none)),
           const SizedBox(height: 8),
-          ...filtered.map((u) {
-            final isSelected = _autoSelectedAmounts.containsKey(u.wodId);
-            if (!_autoAmountCtrls.containsKey(u.wodId)) {
-              _autoAmountCtrls[u.wodId] =
-                  TextEditingController(text: '10');
-            }
-            return Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? AppTheme.purple.withOpacity(0.1)
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                    color: isSelected
-                        ? AppTheme.purple.withOpacity(0.5)
-                        : Colors.grey.withOpacity(0.2)),
+          if (filtered.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Center(
+                child: Text(
+                  S.isAr
+                      ? 'لا توجد وحدات متاحة في هذه القلعة'
+                      : 'No units available in this castle',
+                  style: TextStyle(
+                      color: AppTheme.orange,
+                      fontSize: 12,
+                      decoration: TextDecoration.none),
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Checkbox(
-                        value: isSelected,
-                        activeColor: AppTheme.purple,
-                        onChanged: (v) {
-                          setState(() {
-                            if (v == true) {
-                              _autoSelectedAmounts[u.wodId] = int.tryParse(
-                                      _autoAmountCtrls[u.wodId]!.text) ??
-                                  10;
-                            } else {
-                              _autoSelectedAmounts.remove(u.wodId);
-                            }
-                          });
-                          _saveAutoSettings();
-                        },
-                      ),
-                      Expanded(
-                        child: Text(S.unitName(u.displayName),
-                            style: TextStyle(
-                                color: AppTheme.textColor(context),
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                decoration: TextDecoration.none)),
-                      ),
-                    ],
-                  ),
-                  if (isSelected)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8, right: 40),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: SizedBox(
-                              height: 40,
-                              child: TextField(
-                                controller: _autoAmountCtrls[u.wodId],
-                                keyboardType: TextInputType.number,
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.digitsOnly
-                                ],
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                    color: AppTheme.textColor(context),
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold),
-                                decoration: InputDecoration(
-                                  isDense: true,
-                                  contentPadding:
-                                      const EdgeInsets.symmetric(
-                                          vertical: 8),
-                                  filled: true,
-                                  fillColor: AppTheme.isDark(context)
-                                      ? Colors.black26
-                                      : Colors.grey.shade200,
-                                  border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                      borderSide: BorderSide.none),
+            )
+          else
+            ...filtered.map((u) {
+              final isSelected = _autoSelectedAmounts.containsKey(u.wodId);
+              if (!_autoAmountCtrls.containsKey(u.wodId)) {
+                _autoAmountCtrls[u.wodId] =
+                    TextEditingController(text: '10');
+              }
+              return Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? AppTheme.purple.withOpacity(0.1)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: isSelected
+                          ? AppTheme.purple.withOpacity(0.5)
+                          : Colors.grey.withOpacity(0.2)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: isSelected,
+                          activeColor: AppTheme.purple,
+                          onChanged: (v) {
+                            setState(() {
+                              if (v == true) {
+                                _autoSelectedAmounts[u.wodId] = int.tryParse(
+                                        _autoAmountCtrls[u.wodId]!.text) ??
+                                    10;
+                              } else {
+                                _autoSelectedAmounts.remove(u.wodId);
+                              }
+                            });
+                            _saveAutoSettings();
+                          },
+                        ),
+                        Expanded(
+                          child: Text(S.unitName(u.displayName),
+                              style: TextStyle(
+                                  color: AppTheme.textColor(context),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  decoration: TextDecoration.none)),
+                        ),
+                      ],
+                    ),
+                    if (isSelected)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8, right: 40),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: SizedBox(
+                                height: 40,
+                                child: TextField(
+                                  controller: _autoAmountCtrls[u.wodId],
+                                  keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.digitsOnly
+                                  ],
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: AppTheme.textColor(context),
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold),
+                                  decoration: InputDecoration(
+                                    isDense: true,
+                                    contentPadding:
+                                        const EdgeInsets.symmetric(
+                                            vertical: 8),
+                                    filled: true,
+                                    fillColor: AppTheme.isDark(context)
+                                        ? Colors.black26
+                                        : Colors.grey.shade200,
+                                    border: OutlineInputBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(8),
+                                        borderSide: BorderSide.none),
+                                  ),
+                                  onChanged: (v) {
+                                    _autoSelectedAmounts[u.wodId] =
+                                        int.tryParse(v) ?? 10;
+                                    _saveAutoSettings();
+                                  },
                                 ),
-                                onChanged: (v) {
-                                  _autoSelectedAmounts[u.wodId] =
-                                      int.tryParse(v) ?? 10;
-                                  _saveAutoSettings();
-                                },
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          InkWell(
-                            onTap: () {
-                              _autoAmountCtrls[u.wodId]!.text = '80';
-                              _autoSelectedAmounts[u.wodId] = 80;
-                              _saveAutoSettings();
-                              setState(() {});
-                            },
-                            borderRadius: BorderRadius.circular(8),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 10),
-                              decoration: BoxDecoration(
-                                  color: AppTheme.green.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                      color:
-                                          AppTheme.green.withOpacity(0.4))),
-                              child: const Text('80',
-                                  style: TextStyle(
-                                      color: AppTheme.green,
-                                      fontWeight: FontWeight.bold)),
+                            const SizedBox(width: 8),
+                            InkWell(
+                              onTap: () {
+                                _autoAmountCtrls[u.wodId]!.text =
+                                    maxB.toString();
+                                _autoSelectedAmounts[u.wodId] = maxB;
+                                _saveAutoSettings();
+                                setState(() {});
+                              },
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 10),
+                                decoration: BoxDecoration(
+                                    color: AppTheme.green.withOpacity(0.2),
+                                    borderRadius:
+                                        BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color:
+                                            AppTheme.green.withOpacity(0.4))),
+                                child: Text('$maxB',
+                                    style: const TextStyle(
+                                        color: AppTheme.green,
+                                        fontWeight: FontWeight.bold)),
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 4),
-                          InkWell(
-                            onTap: () {
-                              _autoAmountCtrls[u.wodId]!.text = '0';
-                              _autoSelectedAmounts[u.wodId] = 0;
-                              _saveAutoSettings();
-                              setState(() {});
-                            },
-                            borderRadius: BorderRadius.circular(8),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 10),
-                              decoration: BoxDecoration(
-                                  color: AppTheme.red.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                      color: AppTheme.red.withOpacity(0.4))),
-                              child: const Icon(Icons.refresh_rounded,
-                                  color: AppTheme.red, size: 18),
+                            const SizedBox(width: 4),
+                            InkWell(
+                              onTap: () {
+                                _autoAmountCtrls[u.wodId]!.text = '0';
+                                _autoSelectedAmounts[u.wodId] = 0;
+                                _saveAutoSettings();
+                                setState(() {});
+                              },
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 10),
+                                decoration: BoxDecoration(
+                                    color: AppTheme.red.withOpacity(0.2),
+                                    borderRadius:
+                                        BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color:
+                                            AppTheme.red.withOpacity(0.4))),
+                                child: const Icon(Icons.refresh_rounded,
+                                    color: AppTheme.red, size: 18),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                ],
-              ),
-            );
-          }),
+                  ],
+                ),
+              );
+            }),
           if (_autoEnabled && _autoSelectedAmounts.isEmpty)
             Padding(
               padding: const EdgeInsets.all(8.0),

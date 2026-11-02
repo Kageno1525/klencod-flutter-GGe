@@ -4,10 +4,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../gge_client.dart';
 
 /// تدريب تلقائي — يستخدمه الـ Background فقط.
-/// المنطق منقول من `_GgeTaskHandler._startAutoTrainTimer` الأصلي بدون أي تغيير.
 class AutoTrainService {
   AutoTrainService._();
   static final AutoTrainService instance = AutoTrainService._();
+
+  // ✅ نفس القيم اللي في UI
+  static const int _barracksMaxLevel = 20;
+  static const int _absoluteMaxPerBatch = 80;
 
   GgeClient? _client;
   Timer? _timer;
@@ -44,18 +47,24 @@ class AutoTrainService {
     }
   }
 
+  // ✅ max per batch ديناميكي من مستوى الثكنات
+  int _maxPerBatchFor(int? level) {
+    if (level == null || level <= 0) return _absoluteMaxPerBatch;
+    return (level * 4).clamp(10, _absoluteMaxPerBatch);
+  }
+
   Future<void> _doTrain() async {
     final prefs = await SharedPreferences.getInstance();
 
-    // ── تشغيل/إيقاف من الإعدادات ──
+    // ── تشغيل/إيقاف ──
     final autoEnabled = prefs.getBool('auto_enabled') ?? false;
     if (!autoEnabled) return;
 
-    // ── حماية: متدربش لو الـ UI شغال في المقدمة ──
+    // ── متدربش لو الـ UI شغال ──
     final isAppForeground = prefs.getBool('is_app_foreground') ?? false;
     if (isAppForeground) return;
 
-    // ── حد أقصى للعدد الكلي ──
+    // ── حد أقصى ──
     final useMaxTotal = prefs.getBool('auto_use_max') ?? false;
     final maxTotal =
         int.tryParse(prefs.getString('auto_max_total') ?? '1000') ?? 1000;
@@ -67,7 +76,7 @@ class AutoTrainService {
       return;
     }
 
-    // ── شروط التشغيل ──
+    // ── شروط ──
     final triggerOnTime = prefs.getBool('auto_trigger_time') ?? false;
     final triggerOnSlot = prefs.getBool('auto_trigger_slot') ?? true;
 
@@ -91,7 +100,19 @@ class AutoTrainService {
 
     if (!timeTriggered && !triggerOnSlot) return;
 
-    // ── الوحدات المختارة من UI ──
+    // ✅✅✅ الحل: استخدم auto_train_area_id (اللي الـ UI بيحفظه)
+    //    بدل main_castle_area الثابت
+    final trainAreaId = prefs.getInt('auto_train_area_id') ??
+        prefs.getInt('main_castle_area') ??
+        0;
+
+    if (trainAreaId <= 0) {
+      TrafficLog.add('ER',
+          '[AutoTrain] No area selected — open Training screen once');
+      return;
+    }
+
+    // ── الوحدات ──
     final selectedJson = prefs.getString('auto_selected_units');
     if (selectedJson == null) return;
     final Map<String, dynamic> selected = jsonDecode(selectedJson);
@@ -103,28 +124,29 @@ class AutoTrainService {
     final amount = selected[wodId.toString()] as int;
     if (amount <= 0) return;
 
-    // ── AID (نفس السلوك الأصلي: prefs أو 1606327) ──
-    final mainCastleArea = prefs.getInt('main_castle_area') ?? 1606327;
+    // ✅ احترم max per batch من مستوى الثكنات
+    final barracksLevel = _client!.getBarracksLevel(trainAreaId);
+    final maxB = _maxPerBatchFor(barracksLevel);
+    final safeAmount = amount.clamp(1, maxB);
 
-    // ── إرسال ──
-    TrafficLog.add(
-        'ST', '[AutoTrain] Send WID=$wodId AMT=$amount area=$mainCastleArea');
+    TrafficLog.add('ST',
+        '[AutoTrain] Send WID=$wodId AMT=$safeAmount (max=$maxB) area=$trainAreaId');
+
     final result = await _client!.trainUnits(
-      areaId: mainCastleArea,
+      areaId: trainAreaId,
       wodId: wodId,
-      amount: amount,
+      amount: safeAmount,
     );
 
     if (result.success) {
       await prefs.setString(
           'auto_last_train_time', DateTime.now().toIso8601String());
-      await prefs.setInt('auto_total_trained', totalTrained + amount);
+      await prefs.setInt('auto_total_trained', totalTrained + safeAmount);
       final nextIdx = (currentIndex + 1) % validWods.length;
       await prefs.setInt('auto_rotation_index', nextIdx);
       TrafficLog.add('ST',
-          '[AutoTrain] ✅ WID=$wodId AMT=$amount (total=${totalTrained + amount})');
+          '[AutoTrain] ✅ WID=$wodId AMT=$safeAmount (total=${totalTrained + safeAmount})');
     } else {
-      // نحدّث الوقت حتى لو فشل — عشان مايبعتش كل 10 ثواني
       await prefs.setString(
           'auto_last_train_time', DateTime.now().toIso8601String());
       TrafficLog.add('ER', '[AutoTrain] ❌ WID=$wodId: ${result.error}');
