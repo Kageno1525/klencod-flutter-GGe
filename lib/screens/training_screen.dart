@@ -1,53 +1,13 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gge/gge_client.dart';
 import 'package:gge/l10n/strings.dart';
 import 'package:gge/models.dart';
+import 'package:gge/services/training_service.dart';
 import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
-class SlotInfo {
-  final int rut;
-  final int units;
-  final int? wodId;
-  final DateTime fetchedAt;
-  final bool isTraining;
-
-  SlotInfo({
-    required this.rut,
-    required this.fetchedAt,
-    this.isTraining = false,
-    this.units = 0,
-    this.wodId,
-  });
-
-  bool get isLocked => rut == -1;
-  bool get isFree => rut == 0 && !isTraining;
-  bool get isBusy => rut > 0 || isTraining;
-
-  int get remainingSeconds {
-    if (!isBusy) return 0;
-    final elapsed = DateTime.now().difference(fetchedAt).inSeconds;
-    return (rut - elapsed).clamp(0, 999999);
-  }
-
-  String get timeLabel {
-    if (isLocked) return 'مقفول';
-    if (isFree) return 'متاحة';
-    final s = remainingSeconds;
-    if (s <= 0) return 'خلص';
-    final h = s ~/ 3600;
-    final m = (s % 3600) ~/ 60;
-    final sec = s % 60;
-    if (h > 0) return '${h}h ${m}m';
-    if (m > 0) return '${m}m ${sec}s';
-    return '${sec}s';
-  }
-}
 
 class TrainingScreen extends StatefulWidget {
   final GgeClient client;
@@ -58,11 +18,18 @@ class TrainingScreen extends StatefulWidget {
 }
 
 class _TrainingScreenState extends State<TrainingScreen> {
-  // ✅ Max barracks = 20 → max per batch = 80
   static const int _barracksMaxLevel = 20;
   static const int _absoluteMaxPerBatch = 80;
 
+  late final TrainingService _svc;
+  late AutoTrainSettings _autoSettings;
+
+  // ─── UI State ───────────────────────────────────────────────
   bool _isAutoMode = false;
+  bool _training = false;
+  bool _slotsLoading = false;
+  bool _isAutoSending = false;
+  bool _initialized = false;
 
   List<OwnedCastle> _castles = [];
   Map<int, UnitCatalogEntry> _catalog = {};
@@ -71,71 +38,59 @@ class _TrainingScreenState extends State<TrainingScreen> {
   List<UnitCatalogEntry> _trainable = [];
   UnitCatalogEntry? _selectedUnit;
   final _amountCtrl = TextEditingController(text: '10');
-  bool _training = false;
+  final _maxTotalCtrl = TextEditingController(text: '1000');
 
   List<SlotInfo>? _slots;
-  bool _slotsLoading = false;
+  int _totalTime = 0;
   DateTime? _lastSlotFetch;
+
+  final Map<int, TextEditingController> _autoAmountCtrls = {};
+  final TextEditingController _timeCtrl = TextEditingController(text: '5');
+
   Timer? _slotsTimer;
   Timer? _tickTimer;
   Timer? _autoTimer;
-  int _totalTime = 0;
-
-  // ═══ AUTO TRAIN VARIABLES ═══
-  bool _autoEnabled = false;
-  bool _triggerOnSlot = true;
-  bool _triggerOnTime = false;
-  int _timeInterval = 5;
-  String _timeUnit = 'minutes';
-  bool _useMaxTotal = false;
-  final _maxTotalCtrl = TextEditingController(text: '1000');
-
-  final Map<int, int> _autoSelectedAmounts = {};
-  final Map<int, TextEditingController> _autoAmountCtrls = {};
-  final Map<String, TextEditingController> _timeCtrl = {};
-
-  int _autoRotationIndex = 0;
-  int _autoTotalTrained = 0;
 
   DateTime _lastActionTime = DateTime.now();
-  bool _isAutoSending = false;
 
-  // ✅✅✅ NEW: max per batch ديناميكي من مستوى الثكنات
+  // ─── Getters ────────────────────────────────────────────────
   int get _maxPerBatch {
-    final lvl = _currentBarracksLevel;
-    if (lvl == null || lvl <= 0) {
-      return _absoluteMaxPerBatch;
-    }
-    // Lv 20 → 80 · Lv 10 → 40 · Lv 1 → 4 · بحد أدنى 10
-    final computed = (lvl * 4).clamp(10, _absoluteMaxPerBatch);
-    return computed;
+    if (_castle == null) return _absoluteMaxPerBatch;
+    return _svc.getMaxPerBatch(_castle!.areaId);
   }
 
-  // ✅✅✅ NEW: مستوى الثكنات للقلعة الحالية
   int? get _currentBarracksLevel {
     if (_castle == null) return null;
-    return widget.client.getBarracksLevel(_castle!.areaId);
+    return _svc.getBarracksLevel(_castle!.areaId);
   }
+
+  bool get _autoEnabled => _autoSettings.enabled;
+  bool get _triggerOnSlot => _autoSettings.triggerOnSlot;
+  bool get _triggerOnTime => _autoSettings.triggerOnTime;
+  bool get _useMaxTotal => _autoSettings.useMaxTotal;
+
+  // ═══════════════════════════════════════════════════════════
+  //  LIFECYCLE
+  // ═══════════════════════════════════════════════════════════
 
   @override
   void initState() {
     super.initState();
-    _loadAll();
-    _loadAutoSettings();
+    _svc = TrainingService(widget.client);
+    _autoSettings = AutoTrainSettings();
+    _bootstrap();
 
     _slotsTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      if (mounted) _loadSlots(silent: true);
+      if (mounted && _initialized) _loadSlots(silent: true);
     });
 
     _tickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) {
-        if (_slots != null && _slots!.any((s) => s.isBusy)) {
-          setState(() {});
-        }
-      }
+      if (!mounted) return;
+      final hasBusy = _slots?.any((s) => s.isBusy) ?? false;
+      if (hasBusy || _totalTime > 0) setState(() {});
     });
 
-    _startFrontendAutoTrainer();
+    _startAutoLoop();
   }
 
   @override
@@ -145,217 +100,52 @@ class _TrainingScreenState extends State<TrainingScreen> {
     _autoTimer?.cancel();
     _amountCtrl.dispose();
     _maxTotalCtrl.dispose();
+    _timeCtrl.dispose();
     for (var c in _autoAmountCtrls.values) {
-      c.dispose();
-    }
-    for (var c in _timeCtrl.values) {
       c.dispose();
     }
     super.dispose();
   }
 
-  Future<void> _throttle() async {
-    final now = DateTime.now();
-    final diff = now.difference(_lastActionTime).inMilliseconds;
-    if (diff < 5500) {
-      final wait = 5500 - diff + Random().nextInt(1500);
-      await Future.delayed(Duration(milliseconds: wait));
-    } else {
-      await Future.delayed(Duration(milliseconds: Random().nextInt(1000)));
-    }
-    _lastActionTime = DateTime.now();
-  }
+  // ═══════════════════════════════════════════════════════════
+  //  BOOTSTRAP
+  // ═══════════════════════════════════════════════════════════
 
-  void _startFrontendAutoTrainer() {
-    _autoTimer?.cancel();
-    _autoTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
-      if (!_isAutoMode || !_autoEnabled || _isAutoSending) return;
-      if (_castle == null || _autoSelectedAmounts.isEmpty) return;
-
-      if (!_triggerOnSlot && !_triggerOnTime) {
-        setState(() => _triggerOnSlot = true);
-      }
-
-      if (_useMaxTotal) {
-        final maxTotal = int.tryParse(_maxTotalCtrl.text) ?? 0;
-        if (_autoTotalTrained >= maxTotal) {
-          setState(() => _autoEnabled = false);
-          _saveAutoSettings();
-          _snack('تم الوصول للحد الأقصى للتدريب التلقائي',
-              color: AppTheme.orange);
-          return;
-        }
-      }
-
-      bool shouldTrain = false;
-
-      if (_triggerOnSlot && _slots != null) {
-        final hasFreeSlot = _slots!.any((s) => s.isFree);
-        if (hasFreeSlot) shouldTrain = true;
-      }
-
-      if (_triggerOnTime) {
-        final prefs = await SharedPreferences.getInstance();
-        final lastTrainStr = prefs.getString('auto_last_train_time');
-        if (lastTrainStr == null) {
-          shouldTrain = true;
-        } else {
-          final lastTrain = DateTime.parse(lastTrainStr);
-          int intervalSeconds = _timeInterval;
-          if (_timeUnit == 'minutes') intervalSeconds *= 60;
-          if (_timeUnit == 'hours') intervalSeconds *= 3600;
-
-          if (DateTime.now().difference(lastTrain).inSeconds >=
-              intervalSeconds) {
-            shouldTrain = true;
-          }
-        }
-      }
-
-      if (shouldTrain) {
-        _log('AutoTrain: Conditions met. Sending...');
-        await _executeFrontendAutoTrain();
-      }
-    });
-  }
-
-  void _log(String msg) {
-    TrafficLog.add('ST', '[AutoTrain] $msg');
-  }
-
-  Future<void> _executeFrontendAutoTrain() async {
-    _isAutoSending = true;
-    final unlocked = widget.client.getUnlockedForArea(_castle!.areaId);
-    final source = unlocked.isNotEmpty
-        ? unlocked
-        : widget.client.unlockedUnitIds;
-
-    final validUnits = _autoSelectedAmounts.keys
-        .where((id) => source.contains(id))
-        .toList();
-
-    if (validUnits.isEmpty) {
-      _isAutoSending = false;
-      _log('No valid units selected');
-      return;
-    }
-
-    if (_autoRotationIndex >= validUnits.length) _autoRotationIndex = 0;
-    final wodId = validUnits[_autoRotationIndex];
-    final amount = _autoSelectedAmounts[wodId] ?? 10;
-
-    // ✅ تأكد إن amount لا يتجاوز max batch
-    final safeAmount = amount.clamp(1, _maxPerBatch);
-
+  Future<void> _bootstrap() async {
     try {
-      await _throttle();
-
-      final res = await widget.client.trainUnits(
-        areaId: _castle!.areaId,
-        wodId: wodId,
-        amount: safeAmount,
-      );
-
-      if (res.success) {
-        setState(() {
-          _autoTotalTrained += safeAmount;
-          _autoRotationIndex =
-              (_autoRotationIndex + 1) % validUnits.length;
-        });
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(
-            'auto_last_train_time', DateTime.now().toIso8601String());
-        await prefs.setInt('auto_total_trained', _autoTotalTrained);
-        await prefs.setInt('auto_rotation_index', _autoRotationIndex);
-
-        _log('Success! WID=$wodId AMT=$safeAmount');
-        await _loadSlots(force: true);
-      } else {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(
-            'auto_last_train_time', DateTime.now().toIso8601String());
-        _log('Failed WID=$wodId: ${res.error}');
-      }
-    } catch (e) {
-      _log('Error: $e');
-    } finally {
-      await Future.delayed(const Duration(seconds: 3));
-      _isAutoSending = false;
-    }
-  }
-
-  Future<void> _loadAutoSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _autoEnabled = prefs.getBool('auto_enabled') ?? false;
-      _triggerOnSlot = prefs.getBool('auto_trigger_slot') ?? true;
-      _triggerOnTime = prefs.getBool('auto_trigger_time') ?? false;
-      _timeInterval = prefs.getInt('auto_time_interval') ?? 5;
-      _timeUnit = prefs.getString('auto_time_unit') ?? 'minutes';
-      _useMaxTotal = prefs.getBool('auto_use_max') ?? false;
-      _maxTotalCtrl.text = prefs.getString('auto_max_total') ?? '1000';
-      _autoTotalTrained = prefs.getInt('auto_total_trained') ?? 0;
-      _autoRotationIndex = prefs.getInt('auto_rotation_index') ?? 0;
-
-      final selectedJson = prefs.getString('auto_selected_units');
-      if (selectedJson != null) {
-        final Map<String, dynamic> decoded = jsonDecode(selectedJson);
-        decoded.forEach((key, val) {
-          final id = int.parse(key);
-          _autoSelectedAmounts[id] = val as int;
-          _autoAmountCtrls[id] = TextEditingController(text: val.toString());
-        });
-      }
-      _timeCtrl['interval'] =
-          TextEditingController(text: _timeInterval.toString());
-    });
-  }
-
-  Future<void> _saveAutoSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    prefs.setBool('auto_enabled', _autoEnabled);
-    prefs.setBool('auto_trigger_slot', _triggerOnSlot);
-    prefs.setBool('auto_trigger_time', _triggerOnTime);
-    prefs.setInt('auto_time_interval', _timeInterval);
-    prefs.setString('auto_time_unit', _timeUnit);
-    prefs.setBool('auto_use_max', _useMaxTotal);
-    prefs.setString('auto_max_total', _maxTotalCtrl.text);
-    prefs.setString('auto_selected_units', jsonEncode(_autoSelectedAmounts));
-  }
-
-  Future<void> _loadAll() async {
-    try {
+      final auto = await AutoTrainSettings.load();
       final castles = await widget.client.getCastles();
       final catalog = await widget.client.loadCatalog();
       if (!mounted) return;
 
       final trainableCastles = castles
           .where((c) =>
-              c.areaType == 1 ||
-              c.areaType == 4 ||
-              c.areaType == 12)
+              c.areaType == 1 || c.areaType == 4 || c.areaType == 12)
           .toList();
 
+      OwnedCastle? castle;
+      if (trainableCastles.isNotEmpty) {
+        castle = trainableCastles.firstWhere(
+          (c) => c.areaType == 1,
+          orElse: () => trainableCastles.first,
+        );
+      }
+
       setState(() {
+        _autoSettings = auto;
         _castles = trainableCastles;
         _catalog = catalog;
-        if (trainableCastles.isEmpty) {
-          _castle = null;
-        } else {
-          _castle = trainableCastles.firstWhere(
-            (c) => c.areaType == 1,
-            orElse: () => trainableCastles.first,
-          );
-        }
-        _trainable = catalog.values.where((e) => e.isTrainable).toList()
-          ..sort((a, b) => a.displayName.compareTo(b.displayName));
-
-        final filtered = _filteredTrainable;
-        _selectedUnit = filtered.isNotEmpty ? filtered.first : null;
+        _castle = castle;
+        _initialized = true;
+        _syncAutoControllers();
+        _refreshTrainable();
       });
 
-      if (_castle != null) {
-        await _fetchBarracksLevel();
+      if (castle != null) {
+        await _autoSettings.setTrainArea(castle.areaId);
+        await _svc.fetchBarracksLevel(castle);
+        if (!mounted) return;
+        setState(() {});
         await _loadSlots(force: true);
       }
     } catch (e) {
@@ -363,40 +153,42 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
-  Future<void> _fetchBarracksLevel() async {
-    if (_castle == null) return;
-    try {
-      await widget.client.sendXtAndWait(
-        'jca',
-        jsonEncode({'CID': -1, 'KID': _castle!.kingdomId}),
-        responseCmd: 'jaa',
-        timeoutMs: 8000,
-        isAction: false,
-      );
-      if (mounted) setState(() {});
-    } catch (e) {
-      TrafficLog.add('ER', 'jca fetch error: $e');
+  void _syncAutoControllers() {
+    _maxTotalCtrl.text = _autoSettings.maxTotal;
+    _timeCtrl.text = _autoSettings.timeInterval.toString();
+    for (final e in _autoSettings.selectedAmounts.entries) {
+      _autoAmountCtrls[e.key]?.dispose();
+      _autoAmountCtrls[e.key] =
+          TextEditingController(text: e.value.toString());
+    }
+    // امسح controllers لوحدات مش مختارة
+    final ids = _autoSettings.selectedAmounts.keys.toSet();
+    for (final id in _autoAmountCtrls.keys.toList()) {
+      if (!ids.contains(id)) {
+        _autoAmountCtrls[id]?.dispose();
+        _autoAmountCtrls.remove(id);
+      }
     }
   }
 
-  Future<void> _onCastleChanged(OwnedCastle v) async {
-    setState(() {
-      _castle = v;
-      _slots = null;
+  // ═══════════════════════════════════════════════════════════
+  //  DATA LOADING
+  // ═══════════════════════════════════════════════════════════
+
+  void _refreshTrainable() {
+    if (_castle == null) {
+      _trainable = [];
       _selectedUnit = null;
-      _autoRotationIndex = 0;
-    });
-
-    await _fetchBarracksLevel();
-    await _loadSlots(force: true);
-
-    if (!mounted) return;
-    setState(() {
-      _selectedUnit =
-          _filteredTrainable.isNotEmpty ? _filteredTrainable.first : null;
-      final amt = int.tryParse(_amountCtrl.text) ?? 10;
-      if (amt > _maxPerBatch) _amountCtrl.text = _maxPerBatch.toString();
-    });
+      return;
+    }
+    _trainable =
+        _svc.getTrainableUnits(castle: _castle!, catalog: _catalog);
+    if (_selectedUnit != null &&
+        !_trainable.any((u) => u.wodId == _selectedUnit!.wodId)) {
+      _selectedUnit = _trainable.isNotEmpty ? _trainable.first : null;
+    } else if (_selectedUnit == null && _trainable.isNotEmpty) {
+      _selectedUnit = _trainable.first;
+    }
   }
 
   Future<void> _loadSlots({bool silent = false, bool force = false}) async {
@@ -408,95 +200,45 @@ class _TrainingScreenState extends State<TrainingScreen> {
     _lastSlotFetch = DateTime.now();
     if (!silent && mounted) setState(() => _slotsLoading = true);
 
-    try {
-      final resp = await widget.client.sendXtAndWait(
-        'spl',
-        jsonEncode({'LID': 0}),
-        responseCmd: 'spl',
-        timeoutMs: 8000,
-        isAction: false,
-      );
-      if (!mounted) return;
-      if (resp.payload == null || resp.payload!.isEmpty) {
-        if (mounted) setState(() => _slotsLoading = false);
-        return;
-      }
+    final resp = await _svc.loadSlots();
+    if (!mounted) return;
 
-      final data = jsonDecode(resp.payload!) as Map<String, dynamic>;
-      final spl = data['spl'] ?? data;
-      final ps = spl['PS'] as Map?;
-      final qs = spl['QS'] as List?;
-      final tct = spl['TCT'] as num? ?? 0;
-
-      final now = DateTime.now();
-      final parsedSlots = <SlotInfo>[];
-
-      // ✅ QS هي القائمة الأساسية للخانات (دايماً 5)
-      if (qs != null) {
-        for (final q in qs) {
-          if (q is! Map) continue;
-          final si = q['SI'];
-          final rut = (si is Map ? si['RUT'] : null) ?? q['RUT'];
-          if (rut is! num) continue;
-
-          parsedSlots.add(SlotInfo(
-            rut: rut.toInt(),
-            fetchedAt: now,
-            wodId: (q['WID'] as num?)?.toInt(),
-            units: (q['TUA'] as num?)?.toInt() ?? 0,
-          ));
-        }
-      }
-
-      // ✅ PS = تفاصيل التدريب النشط — بنحسّن slot موجود (مش بنضيف جديد)
-      if (ps != null && ps.isNotEmpty && parsedSlots.isNotEmpty) {
-        final psWid = (ps['WID'] as num?)?.toInt();
-        final psTua = (ps['TUA'] as num?)?.toInt() ?? 0;
-
-        int trainingIdx = -1;
-        for (int i = 0; i < parsedSlots.length; i++) {
-          if (parsedSlots[i].rut > 0) {
-            trainingIdx = i;
-            break;
-          }
-        }
-
-        if (trainingIdx >= 0) {
-          final old = parsedSlots[trainingIdx];
-          parsedSlots[trainingIdx] = SlotInfo(
-            rut: old.rut,
-            fetchedAt: now,
-            isTraining: true,
-            wodId: psWid ?? old.wodId,
-            units: psTua > 0 ? psTua : old.units,
-          );
-        }
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _slots = parsedSlots;
-        _totalTime = tct.toInt();
-        _slotsLoading = false;
-      });
-    } catch (e) {
-      TrafficLog.add('ER', '[Slots] spl error: $e');
-      if (mounted) setState(() => _slotsLoading = false);
+    if (resp == null) {
+      setState(() => _slotsLoading = false);
+      return;
     }
+
+    setState(() {
+      _slots = resp.slots;
+      _totalTime = resp.totalTime;
+      _slotsLoading = false;
+    });
   }
 
-  // ✅✅✅ فلتر الوحدات حسب القلعة الحالية (per-area)
-  List<UnitCatalogEntry> get _filteredTrainable {
-    if (_castle == null) return [];
+  Future<void> _onCastleChanged(OwnedCastle v) async {
+    setState(() {
+      _castle = v;
+      _slots = null;
+      _selectedUnit = null;
+      _autoSettings.rotationIndex = 0;
+    });
 
-    final perArea = widget.client.getUnlockedForArea(_castle!.areaId);
-    final source = perArea.isNotEmpty
-        ? perArea
-        : widget.client.unlockedUnitIds;
+    await _autoSettings.setTrainArea(v.areaId);
+    await _svc.fetchBarracksLevel(v);
+    if (!mounted) return;
 
-    if (source.isEmpty) return [];
-    return _trainable.where((u) => source.contains(u.wodId)).toList();
+    setState(() => _refreshTrainable());
+
+    // لو الـ amount اليدوي أكبر من max الجديد → اصلحه
+    final amt = int.tryParse(_amountCtrl.text) ?? 10;
+    if (amt > _maxPerBatch) _amountCtrl.text = _maxPerBatch.toString();
+
+    await _loadSlots(force: true);
   }
+
+  // ═══════════════════════════════════════════════════════════
+  //  MANUAL TRAIN
+  // ═══════════════════════════════════════════════════════════
 
   Future<void> _trainManual() async {
     if (_castle == null || _selectedUnit == null) return;
@@ -516,7 +258,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
     setState(() => _training = true);
     await _throttle();
-    final result = await widget.client.trainUnits(
+    final result = await _svc.train(
       areaId: _castle!.areaId,
       wodId: _selectedUnit!.wodId,
       amount: amt,
@@ -535,16 +277,103 @@ class _TrainingScreenState extends State<TrainingScreen> {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════
+  //  AUTO TRAIN (UI loop)
+  // ═══════════════════════════════════════════════════════════
+
+  void _startAutoLoop() {
+    _autoTimer?.cancel();
+    _autoTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      if (!mounted || !_isAutoMode || !_autoEnabled || _isAutoSending) return;
+      if (_castle == null || _autoSettings.selectedAmounts.isEmpty) return;
+
+      // check total
+      if (_useMaxTotal) {
+        final max = int.tryParse(_autoSettings.maxTotal) ?? 0;
+        if (_autoSettings.totalTrained >= max) {
+          setState(() => _autoSettings.enabled = false);
+          await _autoSettings.save();
+          _snack('تم الوصول للحد الأقصى', color: AppTheme.orange);
+          return;
+        }
+      }
+
+      // check triggers
+      bool shouldTrain = false;
+      if (_triggerOnSlot && (_slots?.any((s) => s.isFree) ?? false)) {
+        shouldTrain = true;
+      }
+      if (!shouldTrain && await _autoSettings.isTimeTriggered()) {
+        shouldTrain = true;
+      }
+      if (!shouldTrain) return;
+
+      await _executeAuto();
+    });
+  }
+
+  Future<void> _executeAuto() async {
+    _isAutoSending = true;
+    try {
+      await _throttle();
+      final result = await _svc.executeAutoTrain(
+        castle: _castle!,
+        settings: _autoSettings,
+        catalog: _catalog,
+      );
+
+      if (result.success) {
+        await _autoSettings.saveRotation(
+          result.nextIndex!,
+          _autoSettings.totalTrained + result.amount!,
+        );
+        await _autoSettings.markTrainTime();
+        if (mounted) setState(() {});
+        TrafficLog.add('ST',
+            '[AutoTrain] ✅ WID=${result.wodId} AMT=${result.amount}');
+        await _loadSlots(force: true);
+      } else if (result.skipped) {
+        TrafficLog.add('ST', '[AutoTrain] ⏭ ${result.error}');
+      } else {
+        TrafficLog.add('ER', '[AutoTrain] ❌ ${result.error}');
+        await _autoSettings.markTrainTime();
+      }
+    } finally {
+      await Future.delayed(const Duration(seconds: 3));
+      _isAutoSending = false;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  HELPERS
+  // ═══════════════════════════════════════════════════════════
+
+  Future<void> _throttle() async {
+    final now = DateTime.now();
+    final diff = now.difference(_lastActionTime).inMilliseconds;
+    if (diff < 5500) {
+      final wait = 5500 - diff + Random().nextInt(1500);
+      await Future.delayed(Duration(milliseconds: wait));
+    } else {
+      await Future.delayed(Duration(milliseconds: Random().nextInt(1000)));
+    }
+    _lastActionTime = DateTime.now();
+  }
+
   void _snack(String msg, {Color? color}) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content:
-            Text(msg, style: const TextStyle(decoration: TextDecoration.none)),
+        content: Text(msg,
+            style: const TextStyle(decoration: TextDecoration.none)),
         backgroundColor: color,
         behavior: SnackBarBehavior.floating,
       ));
   }
+
+  // ═══════════════════════════════════════════════════════════
+  //  BUILD
+  // ═══════════════════════════════════════════════════════════
 
   @override
   Widget build(BuildContext context) {
@@ -557,108 +386,53 @@ class _TrainingScreenState extends State<TrainingScreen> {
               children: [
                 _header(context),
                 Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-                    children: [
-                      FadeSlideIn(
-                          delay: const Duration(milliseconds: 100),
-                          child: _castlePicker(context)),
-                      const SizedBox(height: 14),
-                      FadeSlideIn(
-                          delay: const Duration(milliseconds: 160),
-                          child: _slotsCard(context)),
-                      const SizedBox(height: 14),
-                      FadeSlideIn(
-                        delay: const Duration(milliseconds: 200),
-                        child: Row(
+                  child: !_initialized
+                      ? const Center(
+                          child: CircularProgressIndicator(
+                              color: AppTheme.purple))
+                      : ListView(
+                          padding:
+                              const EdgeInsets.fromLTRB(16, 8, 16, 100),
                           children: [
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: () =>
-                                    setState(() => _isAutoMode = false),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 10),
-                                  decoration: BoxDecoration(
-                                    color: !_isAutoMode
-                                        ? AppTheme.teal.withOpacity(0.2)
-                                        : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                        color: !_isAutoMode
-                                            ? AppTheme.teal
-                                            : Colors.grey.withOpacity(0.3)),
-                                  ),
-                                  child: Center(
-                                      child: Text('تدريب يدوي',
-                                          style: TextStyle(
-                                              color: !_isAutoMode
-                                                  ? AppTheme.teal
-                                                  : AppTheme.subTextColor(
-                                                      context),
-                                              fontWeight:
-                                                  FontWeight.bold))),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: GestureDetector(
-                                onTap: () =>
-                                    setState(() => _isAutoMode = true),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 10),
-                                  decoration: BoxDecoration(
-                                    color: _isAutoMode
-                                        ? AppTheme.purple.withOpacity(0.2)
-                                        : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(10),
-                                    border: Border.all(
-                                        color: _isAutoMode
-                                            ? AppTheme.purple
-                                            : Colors.grey.withOpacity(0.3)),
-                                  ),
-                                  child: Center(
-                                      child: Text('تدريب تلقائي',
-                                          style: TextStyle(
-                                              color: _isAutoMode
-                                                  ? AppTheme.purple
-                                                  : AppTheme.subTextColor(
-                                                      context),
-                                              fontWeight:
-                                                  FontWeight.bold))),
-                                ),
-                              ),
-                            ),
+                            FadeSlideIn(
+                                delay:
+                                    const Duration(milliseconds: 100),
+                                child: _castlePicker(context)),
+                            const SizedBox(height: 14),
+                            FadeSlideIn(
+                                delay:
+                                    const Duration(milliseconds: 160),
+                                child: _slotsCard(context)),
+                            const SizedBox(height: 14),
+                            FadeSlideIn(
+                                delay:
+                                    const Duration(milliseconds: 200),
+                                child: _modeToggle(context)),
+                            const SizedBox(height: 14),
+                            if (!_isAutoMode) ...[
+                              FadeSlideIn(
+                                  delay: const Duration(milliseconds: 280),
+                                  child: _unitPickerManual(context)),
+                              const SizedBox(height: 14),
+                              FadeSlideIn(
+                                  delay: const Duration(milliseconds: 340),
+                                  child: _amountInputManual(context)),
+                              const SizedBox(height: 14),
+                              FadeSlideIn(
+                                  delay: const Duration(milliseconds: 400),
+                                  child: _unitPreviewManual(context)),
+                            ] else ...[
+                              FadeSlideIn(
+                                  delay: const Duration(milliseconds: 280),
+                                  child: _autoTrainPanel(context)),
+                            ],
                           ],
                         ),
-                      ),
-                      const SizedBox(height: 14),
-                      if (!_isAutoMode) ...[
-                        FadeSlideIn(
-                            delay: const Duration(milliseconds: 280),
-                            child: _unitPickerManual(context)),
-                        const SizedBox(height: 14),
-                        FadeSlideIn(
-                            delay: const Duration(milliseconds: 340),
-                            child: _amountInputManual(context)),
-                        const SizedBox(height: 14),
-                        FadeSlideIn(
-                            delay: const Duration(milliseconds: 400),
-                            child: _unitPreviewManual(context)),
-                      ] else ...[
-                        FadeSlideIn(
-                            delay: const Duration(milliseconds: 280),
-                            child: _autoTrainPanel(context)),
-                      ],
-                    ],
-                  ),
                 ),
               ],
             ),
           ),
-          if (!_isAutoMode)
+          if (!_isAutoMode && _initialized)
             Positioned(
               left: 16,
               right: 16,
@@ -671,7 +445,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   icon: Icons.play_arrow_rounded,
                   gradient: AppTheme.successGradient,
                   loading: _training,
-                  onPressed: _selectedUnit != null ? _trainManual : null,
+                  onPressed:
+                      _selectedUnit != null ? _trainManual : null,
                 ),
               ),
             ),
@@ -731,7 +506,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
 
   Widget _castlePicker(BuildContext context) {
     final lvl = _currentBarracksLevel;
-    final unlockedCount = _filteredTrainable.length;
+    final unlockedCount = _trainable.length;
 
     return AppTheme.glassCard(
       context: context,
@@ -747,8 +522,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   decoration: BoxDecoration(
                       color: AppTheme.blue.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(12),
-                      border:
-                          Border.all(color: AppTheme.blue.withOpacity(0.3))),
+                      border: Border.all(
+                          color: AppTheme.blue.withOpacity(0.3))),
                   child: const Icon(Icons.castle_rounded,
                       color: AppTheme.blue, size: 20)),
               const SizedBox(width: 12),
@@ -784,16 +559,15 @@ class _TrainingScreenState extends State<TrainingScreen> {
                               fontWeight: FontWeight.w600,
                               color: AppTheme.textColor(context)),
                           items: _castles.map((c) {
-                            final cLvl =
-                                widget.client.getBarracksLevel(c.areaId);
-                            final lvlLabel =
-                                cLvl != null ? ' · Lv $cLvl' : '';
+                            final l = _svc.getBarracksLevel(c.areaId);
+                            final lbl = l != null ? ' · Lv $l' : '';
                             return DropdownMenuItem(
                                 value: c,
-                                child: Text('${c.fullLabel}$lvlLabel',
+                                child: Text('${c.fullLabel}$lbl',
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
-                                        color: AppTheme.textColor(context),
+                                        color:
+                                            AppTheme.textColor(context),
                                         fontSize: 13)));
                           }).toList(),
                           onChanged: (v) {
@@ -812,28 +586,31 @@ class _TrainingScreenState extends State<TrainingScreen> {
             spacing: 8,
             runSpacing: 6,
             children: [
-              _infoChip(
+              _chip(
                 context,
                 icon: Icons.military_tech_rounded,
-                label: lvl != null
-                    ? 'الثكنات: Lv $lvl/$_barracksMaxLevel'
-                    : 'الثكنات: ?',
+                label:
+                    lvl != null ? 'الثكنات: Lv $lvl/$_barracksMaxLevel' : 'الثكنات: ?',
                 color: lvl != null && lvl >= _barracksMaxLevel
                     ? AppTheme.orange
                     : (lvl != null
                         ? AppTheme.teal
                         : AppTheme.subTextColor(context)),
               ),
-              _infoChip(
+              _chip(
                 context,
                 icon: Icons.groups_rounded,
-                label: 'وحدات متاحة: $unlockedCount',
-                color: AppTheme.purple,
+                label: unlockedCount > 0
+                    ? 'وحدات: $unlockedCount'
+                    : 'وحدات: غير معروفة',
+                color: unlockedCount > 0
+                    ? AppTheme.purple
+                    : AppTheme.orange,
               ),
-              _infoChip(
+              _chip(
                 context,
                 icon: Icons.format_list_numbered_rounded,
-                label: 'Max/batch: $_maxPerBatch',
+                label: 'Max: $_maxPerBatch',
                 color: AppTheme.blue,
               ),
             ],
@@ -843,56 +620,30 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  Widget _infoChip(BuildContext context,
-      {required IconData icon,
-      required String label,
-      required Color color}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.35)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 4),
-        Text(label,
-            style: TextStyle(
-                color: color,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                decoration: TextDecoration.none)),
-      ]),
-    );
-  }
-
   Widget _slotsCard(BuildContext context) {
     final slots = _slots;
     final loading = _slotsLoading;
 
     SlotInfo? mainSlot;
-    List<SlotInfo> queueSlots = [];
-
+    List<SlotInfo> queue = [];
     if (slots != null && slots.isNotEmpty) {
-      final trainingIdx = slots.indexWhere((s) => s.isTraining);
-      if (trainingIdx >= 0) {
-        mainSlot = slots[trainingIdx];
-        queueSlots = slots.where((s) => !s.isTraining).toList();
+      final tIdx = slots.indexWhere((s) => s.isTraining);
+      if (tIdx >= 0) {
+        mainSlot = slots[tIdx];
+        queue = slots.where((s) => !s.isTraining).toList();
       } else {
-        final freeIdx = slots.indexWhere((s) => s.isFree);
-        final mainIdx = freeIdx >= 0 ? freeIdx : 0;
-        mainSlot = slots[mainIdx];
-        queueSlots = <SlotInfo>[];
+        final fIdx = slots.indexWhere((s) => s.isFree);
+        final mIdx = fIdx >= 0 ? fIdx : 0;
+        mainSlot = slots[mIdx];
         for (int i = 0; i < slots.length; i++) {
-          if (i != mainIdx) queueSlots.add(slots[i]);
+          if (i != mIdx) queue.add(slots[i]);
         }
       }
     }
 
-    final freeCount = slots?.where((s) => s.isFree).length ?? 0;
-    final busyCount = slots?.where((s) => s.isBusy).length ?? 0;
-    final lockedCount = slots?.where((s) => s.isLocked).length ?? 0;
+    final free = slots?.where((s) => s.isFree).length ?? 0;
+    final busy = slots?.where((s) => s.isBusy).length ?? 0;
+    final locked = slots?.where((s) => s.isLocked).length ?? 0;
 
     final elapsed = _lastSlotFetch == null
         ? 0
@@ -917,7 +668,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       color: AppTheme.purple, size: 18)),
               const SizedBox(width: 10),
               Expanded(
-                  child: Text(S.isAr ? 'خانات التدريب' : 'Training slots',
+                  child: Text(
+                      S.isAr ? 'خانات التدريب' : 'Training slots',
                       style: TextStyle(
                           color: AppTheme.textColor(context),
                           fontWeight: FontWeight.bold,
@@ -948,36 +700,22 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 ),
             ],
           ),
-
-          // ✅ إحصائيات سريعة
           if (slots != null && slots.isNotEmpty) ...[
             const SizedBox(height: 10),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                _statChip(
+            Wrap(spacing: 6, runSpacing: 6, children: [
+              _chip(context,
                   icon: Icons.check_circle_outline_rounded,
-                  label: S.isAr ? '$freeCount متاحة' : '$freeCount free',
-                  color: AppTheme.green,
-                ),
-                _statChip(
+                  label: S.isAr ? '$free متاحة' : '$free free',
+                  color: AppTheme.green),
+              _chip(context,
                   icon: Icons.hourglass_top_rounded,
-                  label: S.isAr ? '$busyCount مشغولة' : '$busyCount busy',
-                  color: AppTheme.orange,
-                ),
-                _statChip(
+                  label: S.isAr ? '$busy مشغولة' : '$busy busy',
+                  color: AppTheme.orange),
+              _chip(context,
                   icon: Icons.lock_rounded,
-                  label: S.isAr
-                      ? '$lockedCount مقفولة'
-                      : '$lockedCount locked',
-                  color: AppTheme.subTextColor(context),
-                ),
-              ],
-            ),
-          ],
-
-          if (slots != null && slots.isNotEmpty) ...[
+                  label: S.isAr ? '$locked مقفولة' : '$locked locked',
+                  color: AppTheme.subTextColor(context)),
+            ]),
             const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -992,7 +730,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                   child: Wrap(
                     spacing: 6,
                     runSpacing: 6,
-                    children: queueSlots
+                    children: queue
                         .map((s) => SizedBox(
                               width: (MediaQuery.of(context).size.width -
                                       100) /
@@ -1021,7 +759,7 @@ class _TrainingScreenState extends State<TrainingScreen> {
                       size: 16, color: AppTheme.blue),
                   const SizedBox(width: 6),
                   Text(
-                    'الوقت الإجمالي: ${_formatTotalTime(liveTotal)}',
+                    'الوقت الإجمالي: ${_fmt(liveTotal)}',
                     style: const TextStyle(
                         color: AppTheme.blue,
                         fontSize: 12,
@@ -1044,31 +782,6 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  Widget _statChip({
-    required IconData icon,
-    required String label,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.35)),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 4),
-        Text(label,
-            style: TextStyle(
-                color: color,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                decoration: TextDecoration.none)),
-      ]),
-    );
-  }
-
   Widget _slotBox(BuildContext context, SlotInfo s, {bool isMain = false}) {
     Color c;
     IconData icon;
@@ -1082,86 +795,69 @@ class _TrainingScreenState extends State<TrainingScreen> {
       c = AppTheme.orange;
       icon = Icons.hourglass_top_rounded;
       label = 'مشغولة';
-    } else if (s.isFree) {
+    } else {
       c = AppTheme.green;
       icon = Icons.check_circle_rounded;
       label = 'متاحة';
-    } else {
-      c = AppTheme.subTextColor(context);
-      icon = Icons.help_outline_rounded;
-      label = '?';
     }
 
     String unitName = '';
     if (s.isBusy && s.wodId != null) {
-      final entry = _catalog[s.wodId];
-      if (entry != null) unitName = S.unitName(entry.displayName);
+      final e = _catalog[s.wodId];
+      if (e != null) unitName = S.unitName(e.displayName);
     }
 
     return Container(
-      padding: EdgeInsets.symmetric(vertical: isMain ? 10 : 6, horizontal: 4),
+      padding:
+          EdgeInsets.symmetric(vertical: isMain ? 10 : 6, horizontal: 4),
       decoration: BoxDecoration(
         color: c.withOpacity(0.1),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: c.withOpacity(0.55),
-          width: isMain ? 2 : 1.5,
-        ),
+            color: c.withOpacity(0.55), width: isMain ? 2 : 1.5),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, color: c, size: isMain ? 26 : 20),
           SizedBox(height: isMain ? 6 : 4),
-          Text(
-            label,
-            style: TextStyle(
-              color: c,
-              fontSize: isMain ? 12 : 10,
-              fontWeight: FontWeight.bold,
-              decoration: TextDecoration.none,
-            ),
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          if (s.isBusy) ...[
-            const SizedBox(height: 2),
-            Text(
-              s.timeLabel,
+          Text(label,
               style: TextStyle(
-                color: c,
-                fontSize: isMain ? 11 : 9,
-                fontWeight: FontWeight.w600,
-                decoration: TextDecoration.none,
-              ),
+                  color: c,
+                  fontSize: isMain ? 12 : 10,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none),
               textAlign: TextAlign.center,
               maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            if (isMain && unitName.isNotEmpty) ...[
-              const SizedBox(height: 3),
-              Text(
-                unitName,
+              overflow: TextOverflow.ellipsis),
+          if (s.isBusy) ...[
+            const SizedBox(height: 2),
+            Text(s.timeLabel,
                 style: TextStyle(
-                  color: c.withOpacity(0.9),
-                  fontSize: 10,
-                  decoration: TextDecoration.none,
-                ),
+                    color: c,
+                    fontSize: isMain ? 11 : 9,
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.none),
                 textAlign: TextAlign.center,
                 maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              Text(
-                '${s.units} جندي',
-                style: TextStyle(
-                  color: c,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.none,
-                ),
-                textAlign: TextAlign.center,
-              ),
+                overflow: TextOverflow.ellipsis),
+            if (isMain && unitName.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(unitName,
+                  style: TextStyle(
+                      color: c.withOpacity(0.9),
+                      fontSize: 10,
+                      decoration: TextDecoration.none),
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis),
+              Text('${s.units} جندي',
+                  style: TextStyle(
+                      color: c,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.none),
+                  textAlign: TextAlign.center),
             ],
           ],
         ],
@@ -1169,52 +865,83 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  String _formatTotalTime(int totalSeconds) {
-    if (totalSeconds <= 0) return '0s';
-    final d = totalSeconds ~/ 86400;
-    final h = (totalSeconds % 86400) ~/ 3600;
-    final m = (totalSeconds % 3600) ~/ 60;
-    final s = totalSeconds % 60;
-    if (d > 0) return '${d}d ${h}h';
-    if (h > 0) return '${h}h ${m}m';
-    if (m > 0) return '${m}m ${s}s';
-    return '${s}s';
+  Widget _modeToggle(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            onTap: () => setState(() => _isAutoMode = false),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: !_isAutoMode
+                    ? AppTheme.teal.withOpacity(0.2)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: !_isAutoMode
+                        ? AppTheme.teal
+                        : Colors.grey.withOpacity(0.3)),
+              ),
+              child: Center(
+                  child: Text('تدريب يدوي',
+                      style: TextStyle(
+                          color: !_isAutoMode
+                              ? AppTheme.teal
+                              : AppTheme.subTextColor(context),
+                          fontWeight: FontWeight.bold))),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: GestureDetector(
+            onTap: () => setState(() => _isAutoMode = true),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: _isAutoMode
+                    ? AppTheme.purple.withOpacity(0.2)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: _isAutoMode
+                        ? AppTheme.purple
+                        : Colors.grey.withOpacity(0.3)),
+              ),
+              child: Center(
+                  child: Text('تدريب تلقائي',
+                      style: TextStyle(
+                          color: _isAutoMode
+                              ? AppTheme.purple
+                              : AppTheme.subTextColor(context),
+                          fontWeight: FontWeight.bold))),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _unitPickerManual(BuildContext context) {
-    final filtered = _filteredTrainable;
-    if (filtered.isEmpty) {
+    if (_trainable.isEmpty) {
       return AppTheme.glassCard(
         context: context,
         padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            const Icon(Icons.info_outline_rounded,
-                color: AppTheme.orange, size: 32),
-            const SizedBox(height: 10),
-            Text(
+        child: Column(children: [
+          const Icon(Icons.info_outline_rounded,
+              color: AppTheme.orange, size: 32),
+          const SizedBox(height: 10),
+          Text(
               S.isAr
                   ? 'لا توجد وحدات متاحة في هذه القلعة'
-                  : 'No units available in this castle',
+                  : 'No units in this castle',
               textAlign: TextAlign.center,
               style: TextStyle(
                   color: AppTheme.textColor(context),
                   fontSize: 13,
-                  decoration: TextDecoration.none),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              S.isAr
-                  ? 'جرّب قلعة تانية أو تأكد من مستوى الثكنات'
-                  : 'Try another castle or check barracks level',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  color: AppTheme.subTextColor(context),
-                  fontSize: 11,
-                  decoration: TextDecoration.none),
-            ),
-          ],
-        ),
+                  decoration: TextDecoration.none)),
+        ]),
       );
     }
 
@@ -1229,8 +956,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
               decoration: BoxDecoration(
                   color: AppTheme.teal.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(12),
-                  border:
-                      Border.all(color: AppTheme.teal.withOpacity(0.3))),
+                  border: Border.all(
+                      color: AppTheme.teal.withOpacity(0.3))),
               child: const Icon(Icons.gavel_rounded,
                   color: AppTheme.teal, size: 20)),
           const SizedBox(width: 12),
@@ -1248,43 +975,39 @@ class _TrainingScreenState extends State<TrainingScreen> {
                 const SizedBox(height: 2),
                 DropdownButtonHideUnderline(
                   child: DropdownButton<UnitCatalogEntry>(
-                    value: filtered.contains(_selectedUnit)
+                    value: _trainable.contains(_selectedUnit)
                         ? _selectedUnit
-                        : filtered.first,
+                        : _trainable.first,
                     isExpanded: true,
                     isDense: true,
-                    dropdownColor: Theme.of(context).colorScheme.surface,
+                    dropdownColor:
+                        Theme.of(context).colorScheme.surface,
                     borderRadius: BorderRadius.circular(14),
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textColor(context)),
-                    items: filtered.map((u) {
+                    items: _trainable.map((u) {
                       return DropdownMenuItem(
                         value: u,
-                        child: Row(
-                          children: [
-                            Icon(
-                                u.role == 'ranged'
-                                    ? Icons.gps_fixed_rounded
-                                    : Icons.gavel_rounded,
-                                size: 14,
-                                color: u.role == 'ranged'
-                                    ? AppTheme.teal
-                                    : AppTheme.red),
-                            const SizedBox(width: 6),
-                            Expanded(
-                                child: Text(S.unitName(u.displayName),
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                        fontSize: 13,
-                                        color:
-                                            AppTheme.textColor(context)))),
-                          ],
-                        ),
+                        child: Row(children: [
+                          Icon(
+                              u.role == 'ranged'
+                                  ? Icons.gps_fixed_rounded
+                                  : Icons.gavel_rounded,
+                              size: 14,
+                              color: u.role == 'ranged'
+                                  ? AppTheme.teal
+                                  : AppTheme.red),
+                          const SizedBox(width: 6),
+                          Expanded(
+                              child: Text(S.unitName(u.displayName),
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      color: AppTheme.textColor(
+                                          context)))),
+                        ]),
                       );
                     }).toList(),
-                    onChanged: (v) => setState(() => _selectedUnit = v),
+                    onChanged: (v) =>
+                        setState(() => _selectedUnit = v),
                   ),
                 ),
               ],
@@ -1308,8 +1031,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
               decoration: BoxDecoration(
                   color: AppTheme.orange.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(12),
-                  border:
-                      Border.all(color: AppTheme.orange.withOpacity(0.3))),
+                  border: Border.all(
+                      color: AppTheme.orange.withOpacity(0.3))),
               child: const Icon(Icons.numbers_rounded,
                   color: AppTheme.orange, size: 20)),
           const SizedBox(width: 12),
@@ -1317,71 +1040,67 @@ class _TrainingScreenState extends State<TrainingScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text(S.amount,
-                        style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.subTextColor(context),
-                            letterSpacing: 0.8,
-                            decoration: TextDecoration.none)),
-                    const SizedBox(width: 6),
-                    Text('(حد أقصى $maxB)',
-                        style: TextStyle(
-                            fontSize: 9,
-                            color: AppTheme.subTextColor(context)
-                                .withOpacity(0.7),
-                            decoration: TextDecoration.none)),
-                  ],
-                ),
+                Row(children: [
+                  Text(S.amount,
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.subTextColor(context),
+                          letterSpacing: 0.8,
+                          decoration: TextDecoration.none)),
+                  const SizedBox(width: 6),
+                  Text('(حد أقصى $maxB)',
+                      style: TextStyle(
+                          fontSize: 9,
+                          color: AppTheme.subTextColor(context)
+                              .withOpacity(0.7),
+                          decoration: TextDecoration.none)),
+                ]),
                 const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _amountCtrl,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly
-                        ],
-                        style: TextStyle(
-                            color: AppTheme.textColor(context),
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            decoration: TextDecoration.none),
-                        decoration: const InputDecoration(
-                            isDense: true,
-                            contentPadding:
-                                EdgeInsets.symmetric(vertical: 6),
-                            border: InputBorder.none,
-                            enabledBorder: InputBorder.none,
-                            focusedBorder: InputBorder.none),
-                        onChanged: (_) => setState(() {}),
-                      ),
+                Row(children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _amountCtrl,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly
+                      ],
+                      style: TextStyle(
+                          color: AppTheme.textColor(context),
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          decoration: TextDecoration.none),
+                      decoration: const InputDecoration(
+                          isDense: true,
+                          contentPadding:
+                              EdgeInsets.symmetric(vertical: 6),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none),
+                      onChanged: (_) => setState(() {}),
                     ),
-                    const SizedBox(width: 8),
-                    _stepBtn(
-                        icon: Icons.keyboard_double_arrow_up_rounded,
-                        color: AppTheme.green,
-                        tooltip: '$maxB',
-                        onTap: () {
-                          HapticFeedback.lightImpact();
-                          _amountCtrl.text = maxB.toString();
-                          setState(() {});
-                        }),
-                    const SizedBox(width: 6),
-                    _stepBtn(
-                        icon: Icons.keyboard_double_arrow_down_rounded,
-                        color: AppTheme.red,
-                        tooltip: '1',
-                        onTap: () {
-                          HapticFeedback.lightImpact();
-                          _amountCtrl.text = '1';
-                          setState(() {});
-                        }),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 8),
+                  _stepBtn(
+                      icon: Icons.keyboard_double_arrow_up_rounded,
+                      color: AppTheme.green,
+                      tooltip: '$maxB',
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        _amountCtrl.text = maxB.toString();
+                        setState(() {});
+                      }),
+                  const SizedBox(width: 6),
+                  _stepBtn(
+                      icon: Icons.keyboard_double_arrow_down_rounded,
+                      color: AppTheme.red,
+                      tooltip: '1',
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        _amountCtrl.text = '1';
+                        setState(() {});
+                      }),
+                ]),
               ],
             ),
           ),
@@ -1400,12 +1119,8 @@ class _TrainingScreenState extends State<TrainingScreen> {
       decoration: BoxDecoration(
         gradient: isRanged
             ? const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
                 colors: [Color(0xFF00B894), Color(0xFF00D68F)])
             : const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
                 colors: [Color(0xFFEC4899), Color(0xFFFF8E53)]),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
@@ -1416,58 +1131,421 @@ class _TrainingScreenState extends State<TrainingScreen> {
               offset: const Offset(0, 10))
         ],
       ),
-      child: Row(
-        children: [
-          Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.22),
-                  borderRadius: BorderRadius.circular(16),
-                  border:
-                      Border.all(color: Colors.white.withOpacity(0.2))),
-              child: Icon(
-                  isRanged
-                      ? Icons.gps_fixed_rounded
-                      : Icons.gavel_rounded,
-                  color: Colors.white,
-                  size: 32)),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(S.unitName(u.displayName),
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        decoration: TextDecoration.none)),
-                const SizedBox(height: 4),
-                Text(isRanged ? 'Ranged · Offense' : 'Melee · Offense',
-                    style: TextStyle(
-                        color: Colors.white.withOpacity(0.85),
-                        fontSize: 11.5,
-                        decoration: TextDecoration.none)),
-              ],
-            ),
-          ),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      child: Row(children: [
+        Container(
+            width: 64,
+            height: 64,
             decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.22),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white.withOpacity(0.2))),
-            child: Text('x${_amountCtrl.text}',
-                style: const TextStyle(
-                    color: Colors.white,
+                borderRadius: BorderRadius.circular(16)),
+            child: Icon(
+                isRanged
+                    ? Icons.gps_fixed_rounded
+                    : Icons.gavel_rounded,
+                color: Colors.white,
+                size: 32)),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(S.unitName(u.displayName),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      decoration: TextDecoration.none)),
+              const SizedBox(height: 4),
+              Text(isRanged ? 'Ranged · Offense' : 'Melee · Offense',
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.85),
+                      fontSize: 11.5,
+                      decoration: TextDecoration.none)),
+            ],
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.22),
+              borderRadius: BorderRadius.circular(10)),
+          child: Text('x${_amountCtrl.text}',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  decoration: TextDecoration.none)),
+        ),
+      ]),
+    );
+  }
+
+  Widget _autoTrainPanel(BuildContext context) {
+    final maxB = _maxPerBatch;
+
+    return AppTheme.glassCard(
+      context: context,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.autorenew_rounded,
+                color: AppTheme.purple, size: 20),
+            const SizedBox(width: 8),
+            Text('التدريب التلقائي',
+                style: TextStyle(
+                    color: AppTheme.textColor(context),
                     fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    decoration: TextDecoration.none)),
+            const Spacer(),
+            Switch(
+              value: _autoEnabled,
+              onChanged: (v) async {
+                setState(() {
+                  _autoSettings.enabled = v;
+                  if (v && !_triggerOnSlot && !_triggerOnTime) {
+                    _autoSettings.triggerOnSlot = true;
+                  }
+                });
+                if (v && _castle != null) {
+                  await _autoSettings.setTrainArea(_castle!.areaId);
+                }
+                await _autoSettings.save();
+              },
+              activeColor: AppTheme.purple,
+            ),
+          ]),
+          const Divider(),
+          Text('شروط التشغيل:',
+              style: TextStyle(
+                  color: AppTheme.subTextColor(context),
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none)),
+          CheckboxListTile(
+            title: Text('عند توفر خانة فارغة',
+                style: TextStyle(
+                    color: AppTheme.textColor(context),
                     fontSize: 13,
                     decoration: TextDecoration.none)),
+            value: _triggerOnSlot,
+            activeColor: AppTheme.purple,
+            onChanged: (v) async {
+              setState(() => _autoSettings.triggerOnSlot = v ?? true);
+              await _autoSettings.save();
+            },
+            contentPadding: EdgeInsets.zero,
+            dense: true,
           ),
+          CheckboxListTile(
+            title: Text('حسب الوقت',
+                style: TextStyle(
+                    color: AppTheme.textColor(context),
+                    fontSize: 13,
+                    decoration: TextDecoration.none)),
+            value: _triggerOnTime,
+            activeColor: AppTheme.purple,
+            onChanged: (v) async {
+              setState(() => _autoSettings.triggerOnTime = v ?? false);
+              await _autoSettings.save();
+            },
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+          if (_triggerOnTime)
+            Padding(
+              padding: const EdgeInsets.only(right: 32, bottom: 10),
+              child: Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: _timeCtrl,
+                    keyboardType: TextInputType.number,
+                    style:
+                        TextStyle(color: AppTheme.textColor(context)),
+                    decoration: const InputDecoration(
+                        isDense: true, hintText: 'الوقت'),
+                    onChanged: (v) async {
+                      _autoSettings.timeInterval =
+                          int.tryParse(v) ?? 5;
+                      await _autoSettings.save();
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                DropdownButton<String>(
+                  value: _autoSettings.timeUnit,
+                  dropdownColor:
+                      Theme.of(context).colorScheme.surface,
+                  items: const [
+                    DropdownMenuItem(value: 'seconds', child: Text('ثواني')),
+                    DropdownMenuItem(value: 'minutes', child: Text('دقائق')),
+                    DropdownMenuItem(value: 'hours', child: Text('ساعات')),
+                  ],
+                  onChanged: (v) async {
+                    setState(() =>
+                        _autoSettings.timeUnit = v ?? 'minutes');
+                    await _autoSettings.save();
+                  },
+                ),
+              ]),
+            ),
+          const Divider(),
+          CheckboxListTile(
+            title: Text('تحديد أقصى عدد للتدريب',
+                style: TextStyle(
+                    color: AppTheme.textColor(context),
+                    fontSize: 13,
+                    decoration: TextDecoration.none)),
+            value: _useMaxTotal,
+            activeColor: AppTheme.purple,
+            onChanged: (v) async {
+              setState(() => _autoSettings.useMaxTotal = v ?? false);
+              await _autoSettings.save();
+            },
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+          ),
+          if (_useMaxTotal) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(children: [
+                Expanded(
+                  child: TextField(
+                    controller: _maxTotalCtrl,
+                    keyboardType: TextInputType.number,
+                    style:
+                        TextStyle(color: AppTheme.textColor(context)),
+                    decoration: const InputDecoration(
+                        isDense: true, hintText: 'أقصى عدد'),
+                    onChanged: (v) async {
+                      _autoSettings.maxTotal = v;
+                      await _autoSettings.save();
+                    },
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Text('تم تدريب: ${_autoSettings.totalTrained}',
+                    style: TextStyle(
+                        color: AppTheme.subTextColor(context),
+                        fontSize: 12,
+                        decoration: TextDecoration.none)),
+              ]),
+            ),
+            const SizedBox(height: 10),
+          ],
+          const Divider(),
+          Text('الوحدات المطلوبة:',
+              style: TextStyle(
+                  color: AppTheme.subTextColor(context),
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.none)),
+          const SizedBox(height: 8),
+          if (_trainable.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Center(
+                child: Text(
+                  S.isAr
+                      ? 'لا توجد وحدات متاحة في هذه القلعة'
+                      : 'No units available here',
+                  style: TextStyle(
+                      color: AppTheme.orange,
+                      fontSize: 12,
+                      decoration: TextDecoration.none),
+                ),
+              ),
+            )
+          else
+            ..._trainable.map((u) {
+              final isSelected =
+                  _autoSettings.selectedAmounts.containsKey(u.wodId);
+              if (!_autoAmountCtrls.containsKey(u.wodId)) {
+                _autoAmountCtrls[u.wodId] =
+                    TextEditingController(text: '10');
+              }
+              return Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? AppTheme.purple.withOpacity(0.1)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: isSelected
+                          ? AppTheme.purple.withOpacity(0.5)
+                          : Colors.grey.withOpacity(0.2)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Checkbox(
+                        value: isSelected,
+                        activeColor: AppTheme.purple,
+                        onChanged: (v) async {
+                          setState(() {
+                            if (v == true) {
+                              _autoSettings.selectedAmounts[u.wodId] =
+                                  int.tryParse(
+                                          _autoAmountCtrls[u.wodId]!
+                                              .text) ??
+                                      10;
+                            } else {
+                              _autoSettings.selectedAmounts
+                                  .remove(u.wodId);
+                            }
+                          });
+                          await _autoSettings.saveSelection();
+                        },
+                      ),
+                      Expanded(
+                        child: Text(S.unitName(u.displayName),
+                            style: TextStyle(
+                                color: AppTheme.textColor(context),
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                decoration: TextDecoration.none)),
+                      ),
+                    ]),
+                    if (isSelected)
+                      Padding(
+                        padding:
+                            const EdgeInsets.only(top: 8, right: 40),
+                        child: Row(children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 40,
+                              child: TextField(
+                                controller: _autoAmountCtrls[u.wodId],
+                                keyboardType: TextInputType.number,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly
+                                ],
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: AppTheme.textColor(context),
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold),
+                                decoration: InputDecoration(
+                                  isDense: true,
+                                  contentPadding:
+                                      const EdgeInsets.symmetric(
+                                          vertical: 8),
+                                  filled: true,
+                                  fillColor: AppTheme.isDark(context)
+                                      ? Colors.black26
+                                      : Colors.grey.shade200,
+                                  border: OutlineInputBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(8),
+                                      borderSide: BorderSide.none),
+                                ),
+                                onChanged: (v) async {
+                                  _autoSettings.selectedAmounts[u.wodId] =
+                                      int.tryParse(v) ?? 10;
+                                  await _autoSettings.saveSelection();
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          InkWell(
+                            onTap: () async {
+                              _autoAmountCtrls[u.wodId]!.text =
+                                  maxB.toString();
+                              _autoSettings.selectedAmounts[u.wodId] =
+                                  maxB;
+                              await _autoSettings.saveSelection();
+                              setState(() {});
+                            },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                  color:
+                                      AppTheme.green.withOpacity(0.2),
+                                  borderRadius:
+                                      BorderRadius.circular(8),
+                                  border: Border.all(
+                                      color: AppTheme.green
+                                          .withOpacity(0.4))),
+                              child: Text('$maxB',
+                                  style: const TextStyle(
+                                      color: AppTheme.green,
+                                      fontWeight: FontWeight.bold)),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          InkWell(
+                            onTap: () async {
+                              _autoAmountCtrls[u.wodId]!.text = '0';
+                              _autoSettings.selectedAmounts[u.wodId] = 0;
+                              await _autoSettings.saveSelection();
+                              setState(() {});
+                            },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                  color:
+                                      AppTheme.red.withOpacity(0.2),
+                                  borderRadius:
+                                      BorderRadius.circular(8),
+                                  border: Border.all(
+                                      color: AppTheme.red
+                                          .withOpacity(0.4))),
+                              child: const Icon(Icons.refresh_rounded,
+                                  color: AppTheme.red, size: 18),
+                            ),
+                          ),
+                        ]),
+                      ),
+                  ],
+                ),
+              );
+            }),
+          if (_autoEnabled && _autoSettings.selectedAmounts.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                  'اختر وحدة واحدة على الأقل للتدريب التلقائي.',
+                  style: TextStyle(
+                      color: AppTheme.red,
+                      fontSize: 12,
+                      decoration: TextDecoration.none)),
+            ),
         ],
       ),
+    );
+  }
+
+  Widget _chip(BuildContext context,
+      {required IconData icon,
+      required String label,
+      required Color color}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 4),
+        Text(label,
+            style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                decoration: TextDecoration.none)),
+      ]),
     );
   }
 
@@ -1496,340 +1574,15 @@ class _TrainingScreenState extends State<TrainingScreen> {
     );
   }
 
-  Widget _autoTrainPanel(BuildContext context) {
-    final filtered = _filteredTrainable;
-    final maxB = _maxPerBatch;
-
-    return AppTheme.glassCard(
-      context: context,
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.autorenew_rounded,
-                  color: AppTheme.purple, size: 20),
-              const SizedBox(width: 8),
-              Text('التدريب التلقائي',
-                  style: TextStyle(
-                      color: AppTheme.textColor(context),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                      decoration: TextDecoration.none)),
-              const Spacer(),
-              Switch(
-                value: _autoEnabled,
-                onChanged: (v) {
-                  setState(() {
-                    _autoEnabled = v;
-                    if (v && !_triggerOnSlot && !_triggerOnTime) {
-                      _triggerOnSlot = true;
-                    }
-                  });
-                  _saveAutoSettings();
-                },
-                activeColor: AppTheme.purple,
-              ),
-            ],
-          ),
-          const Divider(),
-          Text('شروط التشغيل:',
-              style: TextStyle(
-                  color: AppTheme.subTextColor(context),
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.none)),
-          CheckboxListTile(
-            title: Text('عند توفر خانة فارغة',
-                style: TextStyle(
-                    color: AppTheme.textColor(context),
-                    fontSize: 13,
-                    decoration: TextDecoration.none)),
-            value: _triggerOnSlot,
-            activeColor: AppTheme.purple,
-            onChanged: (v) {
-              setState(() => _triggerOnSlot = v ?? true);
-              _saveAutoSettings();
-            },
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-          ),
-          CheckboxListTile(
-            title: Text('حسب الوقت',
-                style: TextStyle(
-                    color: AppTheme.textColor(context),
-                    fontSize: 13,
-                    decoration: TextDecoration.none)),
-            value: _triggerOnTime,
-            activeColor: AppTheme.purple,
-            onChanged: (v) {
-              setState(() => _triggerOnTime = v ?? false);
-              _saveAutoSettings();
-            },
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-          ),
-          if (_triggerOnTime)
-            Padding(
-              padding: const EdgeInsets.only(right: 32, bottom: 10),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _timeCtrl['interval'],
-                      keyboardType: TextInputType.number,
-                      style: TextStyle(color: AppTheme.textColor(context)),
-                      decoration: const InputDecoration(
-                          isDense: true, hintText: 'الوقت'),
-                      onChanged: (v) {
-                        _timeInterval = int.tryParse(v) ?? 5;
-                        _saveAutoSettings();
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  DropdownButton<String>(
-                    value: _timeUnit,
-                    dropdownColor: Theme.of(context).colorScheme.surface,
-                    items: const [
-                      DropdownMenuItem(value: 'seconds', child: Text('ثواني')),
-                      DropdownMenuItem(value: 'minutes', child: Text('دقائق')),
-                      DropdownMenuItem(value: 'hours', child: Text('ساعات')),
-                    ],
-                    onChanged: (v) {
-                      setState(() => _timeUnit = v ?? 'minutes');
-                      _saveAutoSettings();
-                    },
-                  ),
-                ],
-              ),
-            ),
-          const Divider(),
-          CheckboxListTile(
-            title: Text('تحديد أقصى عدد للتدريب',
-                style: TextStyle(
-                    color: AppTheme.textColor(context),
-                    fontSize: 13,
-                    decoration: TextDecoration.none)),
-            value: _useMaxTotal,
-            activeColor: AppTheme.purple,
-            onChanged: (v) {
-              setState(() => _useMaxTotal = v ?? false);
-              _saveAutoSettings();
-            },
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-          ),
-          if (_useMaxTotal) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _maxTotalCtrl,
-                      keyboardType: TextInputType.number,
-                      style: TextStyle(color: AppTheme.textColor(context)),
-                      decoration: const InputDecoration(
-                          isDense: true, hintText: 'أقصى عدد'),
-                      onChanged: (_) => _saveAutoSettings(),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text('تم تدريب: $_autoTotalTrained',
-                      style: TextStyle(
-                          color: AppTheme.subTextColor(context),
-                          fontSize: 12,
-                          decoration: TextDecoration.none)),
-                ],
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
-          const Divider(),
-          Text('الوحدات المطلوبة:',
-              style: TextStyle(
-                  color: AppTheme.subTextColor(context),
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  decoration: TextDecoration.none)),
-          const SizedBox(height: 8),
-          if (filtered.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                child: Text(
-                  S.isAr
-                      ? 'لا توجد وحدات متاحة في هذه القلعة'
-                      : 'No units available in this castle',
-                  style: TextStyle(
-                      color: AppTheme.orange,
-                      fontSize: 12,
-                      decoration: TextDecoration.none),
-                ),
-              ),
-            )
-          else
-            ...filtered.map((u) {
-              final isSelected = _autoSelectedAmounts.containsKey(u.wodId);
-              if (!_autoAmountCtrls.containsKey(u.wodId)) {
-                _autoAmountCtrls[u.wodId] =
-                    TextEditingController(text: '10');
-              }
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? AppTheme.purple.withOpacity(0.1)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                      color: isSelected
-                          ? AppTheme.purple.withOpacity(0.5)
-                          : Colors.grey.withOpacity(0.2)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Checkbox(
-                          value: isSelected,
-                          activeColor: AppTheme.purple,
-                          onChanged: (v) {
-                            setState(() {
-                              if (v == true) {
-                                _autoSelectedAmounts[u.wodId] = int.tryParse(
-                                        _autoAmountCtrls[u.wodId]!.text) ??
-                                    10;
-                              } else {
-                                _autoSelectedAmounts.remove(u.wodId);
-                              }
-                            });
-                            _saveAutoSettings();
-                          },
-                        ),
-                        Expanded(
-                          child: Text(S.unitName(u.displayName),
-                              style: TextStyle(
-                                  color: AppTheme.textColor(context),
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.bold,
-                                  decoration: TextDecoration.none)),
-                        ),
-                      ],
-                    ),
-                    if (isSelected)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8, right: 40),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: SizedBox(
-                                height: 40,
-                                child: TextField(
-                                  controller: _autoAmountCtrls[u.wodId],
-                                  keyboardType: TextInputType.number,
-                                  inputFormatters: [
-                                    FilteringTextInputFormatter.digitsOnly
-                                  ],
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                      color: AppTheme.textColor(context),
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold),
-                                  decoration: InputDecoration(
-                                    isDense: true,
-                                    contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            vertical: 8),
-                                    filled: true,
-                                    fillColor: AppTheme.isDark(context)
-                                        ? Colors.black26
-                                        : Colors.grey.shade200,
-                                    border: OutlineInputBorder(
-                                        borderRadius:
-                                            BorderRadius.circular(8),
-                                        borderSide: BorderSide.none),
-                                  ),
-                                  onChanged: (v) {
-                                    _autoSelectedAmounts[u.wodId] =
-                                        int.tryParse(v) ?? 10;
-                                    _saveAutoSettings();
-                                  },
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            InkWell(
-                              onTap: () {
-                                _autoAmountCtrls[u.wodId]!.text =
-                                    maxB.toString();
-                                _autoSelectedAmounts[u.wodId] = maxB;
-                                _saveAutoSettings();
-                                setState(() {});
-                              },
-                              borderRadius: BorderRadius.circular(8),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 10),
-                                decoration: BoxDecoration(
-                                    color: AppTheme.green.withOpacity(0.2),
-                                    borderRadius:
-                                        BorderRadius.circular(8),
-                                    border: Border.all(
-                                        color:
-                                            AppTheme.green.withOpacity(0.4))),
-                                child: Text('$maxB',
-                                    style: const TextStyle(
-                                        color: AppTheme.green,
-                                        fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            InkWell(
-                              onTap: () {
-                                _autoAmountCtrls[u.wodId]!.text = '0';
-                                _autoSelectedAmounts[u.wodId] = 0;
-                                _saveAutoSettings();
-                                setState(() {});
-                              },
-                              borderRadius: BorderRadius.circular(8),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 10),
-                                decoration: BoxDecoration(
-                                    color: AppTheme.red.withOpacity(0.2),
-                                    borderRadius:
-                                        BorderRadius.circular(8),
-                                    border: Border.all(
-                                        color:
-                                            AppTheme.red.withOpacity(0.4))),
-                                child: const Icon(Icons.refresh_rounded,
-                                    color: AppTheme.red, size: 18),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            }),
-          if (_autoEnabled && _autoSelectedAmounts.isEmpty)
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Text(
-                  'يرجى اختيار وحدة واحدة على الأقل للتدريب التلقائي.',
-                  style: TextStyle(
-                      color: AppTheme.red,
-                      fontSize: 12,
-                      decoration: TextDecoration.none)),
-            ),
-        ],
-      ),
-    );
+  String _fmt(int totalSeconds) {
+    if (totalSeconds <= 0) return '0s';
+    final d = totalSeconds ~/ 86400;
+    final h = (totalSeconds % 86400) ~/ 3600;
+    final m = (totalSeconds % 3600) ~/ 60;
+    final s = totalSeconds % 60;
+    if (d > 0) return '${d}d ${h}h';
+    if (h > 0) return '${h}h ${m}m';
+    if (m > 0) return '${m}m ${s}s';
+    return '${s}s';
   }
 }
