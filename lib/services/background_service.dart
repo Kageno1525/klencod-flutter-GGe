@@ -51,11 +51,11 @@ class _GgeTaskHandler extends TaskHandler {
       return;
     }
 
-    // ✅ UI شغال → BG يستنى (status واضح PAUSED_UI مش WAITING_FOR_UI)
+    // ✅ UI شغال → BG يستنى بس يكتب ONLINE
     final isFg = prefs.getBool('is_app_foreground') ?? false;
     if (isFg) {
-      _log('App is in foreground — BG paused');
-      await _saveStatus('PAUSED_UI');
+      _log('App is in foreground — BG ready');
+      await _saveStatus('ONLINE');
       _watchPresence();
       return;
     }
@@ -192,7 +192,7 @@ class _GgeTaskHandler extends TaskHandler {
     _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
       _saveStatus(
-        DesertAutoService.instance.isRunning ? 'RUNNING' : 'IDLE',
+        DesertAutoService.instance.isRunning ? 'RUNNING' : 'ONLINE',
         extra: 'atk=${DesertAutoService.instance.attacksThisSession} · '
             'towers=${DesertAutoService.instance.towersScanned} · '
             'train=${AutoTrainService.instance.isRunning ? "ON" : "OFF"} · '
@@ -261,7 +261,7 @@ class _GgeTaskHandler extends TaskHandler {
     } catch (_) {}
     _client = null;
 
-    await _saveStatus('PAUSED_UI');
+    await _saveStatus('ONLINE');
   }
 
   void _setupDesertCallbacks() {
