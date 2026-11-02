@@ -18,7 +18,8 @@ import 'package:gge/services/background_service.dart';
 import 'package:gge/screens/auto_defense_screen.dart';
 import 'package:gge/screens/attack_screen.dart';
 import 'package:gge/screens/desert_attack_screen.dart';
-import 'package:gge/screens/samurai_screen.dart'; // ✅ NEW
+import 'package:gge/screens/samurai_screen.dart';
+import 'package:gge/screens/bedouin_screen.dart';
 import 'package:gge/screens/logs_screen.dart';
 import 'package:gge/screens/inventory_screen.dart';
 
@@ -430,12 +431,12 @@ class _MainScreenState extends State<MainScreen> {
             ),
           ),
         ),
-        // ✅ NEW: Samurai Camps
+        // ⚔️ Samurai
         FadeSlideIn(
-          delay: const Duration(milliseconds: 600),
+          delay: const Duration(milliseconds: 580),
           child: EnterTile(
-            icon: Icons.sports_martial_arts_rounded,
-            title: 'معسكرات الساموراي',
+            icon: Icons.shield_rounded,
+            title: 'معسكر الساموراي',
             gradient: const LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -445,6 +446,24 @@ class _MainScreenState extends State<MainScreen> {
               context,
               MaterialPageRoute(
                   builder: (_) => SamuraiScreen(client: widget.client)),
+            ),
+          ),
+        ),
+        // 🏰 Bedouin (NEW)
+        FadeSlideIn(
+          delay: const Duration(milliseconds: 620),
+          child: EnterTile(
+            icon: Icons.castle_rounded,
+            title: 'معسكرات البدو',
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFFD4AF37), Color(0xFF1E3A8A)],
+            ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => BedouinScreen(client: widget.client)),
             ),
           ),
         ),
