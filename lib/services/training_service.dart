@@ -8,7 +8,6 @@ import '../models.dart';
 //  MODELS
 // ═══════════════════════════════════════════════════════════
 
-/// حالة خانة تدريب واحدة.
 class SlotInfo {
   final int rut;
   final int units;
@@ -48,14 +47,12 @@ class SlotInfo {
   }
 }
 
-/// نتيجة parse رد `spl`.
 class SlotsResponse {
   final List<SlotInfo> slots;
   final int totalTime;
   SlotsResponse({required this.slots, required this.totalTime});
 }
 
-/// إعدادات التدريب التلقائي (نفس prefs keys المستخدمة في BG).
 class AutoTrainSettings {
   bool enabled;
   bool triggerOnSlot;
@@ -170,7 +167,6 @@ class AutoTrainSettings {
     return p.getInt('main_castle_area');
   }
 
-  /// يفحص لو الوقت انتهى للتدريب التالي (بس لو triggerOnTime).
   Future<bool> isTimeTriggered() async {
     if (!triggerOnTime) return false;
     final p = await SharedPreferences.getInstance();
@@ -188,7 +184,6 @@ class AutoTrainSettings {
   }
 }
 
-/// نتيجة تنفيذ محاولة تدريب واحدة.
 class AutoTrainResult {
   final bool success;
   final bool skipped;
@@ -236,7 +231,7 @@ class TrainingService {
   static const int kBarracksMaxLevel = 20;
   static const int kAbsoluteMaxPerBatch = 80;
 
-  // ─── Train (الأمر الأساسي) ──────────────────────────────────
+  // ─── Train ──────────────────────────────────────────────────
   Future<TransferResult> train({
     required int areaId,
     required int wodId,
@@ -269,7 +264,7 @@ class TrainingService {
     }
   }
 
-  // ─── Load Slots (parse spl response) ────────────────────────
+  // ─── Load Slots ─────────────────────────────────────────────
   Future<SlotsResponse?> loadSlots() async {
     try {
       final resp = await conn.sendXtAndWait(
@@ -293,7 +288,6 @@ class TrainingService {
       final now = DateTime.now();
       final slots = <SlotInfo>[];
 
-      // PS = slot التدريب النشط (منفصل)
       if (ps != null && ps.isNotEmpty) {
         final rct = (ps['RCT'] as num?)?.toInt() ?? tct;
         final tua = (ps['TUA'] as num?)?.toInt() ?? 0;
@@ -309,7 +303,6 @@ class TrainingService {
             'ST', '[Slots] PS active: RCT=${rct}s WID=$wid TUA=$tua');
       }
 
-      // QS = الـ 5 خانات (queue/locked/free)
       if (qs != null) {
         for (final q in qs) {
           if (q is! Map) continue;
@@ -325,7 +318,6 @@ class TrainingService {
         }
       }
 
-      // Fallback: PS فاضي لكن TCT > 0 → علّم أول خانة متاحة كتدريب نشط
       if ((ps == null || ps.isEmpty) && tct > 0) {
         final freeIdx = slots.indexWhere((s) => s.rut == 0);
         if (freeIdx >= 0) {
@@ -349,12 +341,15 @@ class TrainingService {
     }
   }
 
-  // ─── Fetch Barracks Level (jca) ─────────────────────────────
+  // ─── Fetch Barracks Level ──────────────────────────────────
   Future<void> fetchBarracksLevel(OwnedCastle castle) async {
     try {
+      // ✅ نستخدم CID: castle.areaId عشان نروح للقلعة المختارة بالظبط
+      TrafficLog.add('ST',
+          '[Barracks] Switching to CID=${castle.areaId} KID=${castle.kingdomId}');
       await conn.sendXtAndWait(
         'jca',
-        jsonEncode({'CID': -1, 'KID': castle.kingdomId}),
+        jsonEncode({'CID': castle.areaId, 'KID': castle.kingdomId}),
         responseCmd: 'jaa',
         timeoutMs: 8000,
         isAction: false,
@@ -366,14 +361,13 @@ class TrainingService {
 
   int? getBarracksLevel(int areaId) => conn.getBarracksLevel(areaId);
 
-  // ─── Max per batch (from barracks) ──────────────────────────
   int getMaxPerBatch(int areaId) {
     final lvl = conn.getBarracksLevel(areaId);
     if (lvl == null || lvl <= 0) return kAbsoluteMaxPerBatch;
     return (lvl * 4).clamp(10, kAbsoluteMaxPerBatch);
   }
 
-  // ─── Trainable Units (per castle) ───────────────────────────
+  // ─── Trainable Units ────────────────────────────────────────
   List<UnitCatalogEntry> getTrainableUnits({
     required OwnedCastle castle,
     required Map<int, UnitCatalogEntry> catalog,
@@ -390,7 +384,7 @@ class TrainingService {
       ..sort((a, b) => a.displayName.compareTo(b.displayName));
   }
 
-  // ─── Auto Train — Single Attempt ────────────────────────────
+  // ─── Auto Train Single Attempt ──────────────────────────────
   Future<AutoTrainResult> executeAutoTrain({
     required OwnedCastle castle,
     required AutoTrainSettings settings,

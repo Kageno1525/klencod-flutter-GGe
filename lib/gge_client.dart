@@ -25,7 +25,7 @@ class TransferResult {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  LOG SYSTEM (with categories)
+//  LOG SYSTEM
 // ═══════════════════════════════════════════════════════════
 enum LogCategory {
   all, login, smuggle, attack, desert, defense, spy, gam, general, errors;
@@ -319,20 +319,10 @@ class GgeClient {
               final aid = _asInt(area['AID']);
               final areaSet = <int>{};
 
+              // ✅ U فقط (Unlocked) — استبعدنا L (Locked)
               final unlockedU = u['U'] as List?;
               if (unlockedU != null) {
                 for (final id in unlockedU) {
-                  final wod = _asIntOrNull(id);
-                  if (wod != null && wod > 0) {
-                    _unlockedUnitIds.add(wod);
-                    areaSet.add(wod);
-                  }
-                }
-              }
-
-              final unlockedL = u['L'] as List?;
-              if (unlockedL != null) {
-                for (final id in unlockedL) {
                   final wod = _asIntOrNull(id);
                   if (wod != null && wod > 0) {
                     _unlockedUnitIds.add(wod);
@@ -912,7 +902,6 @@ class GgeClient {
     return completer.future;
   }
 
-  // ✅✅✅ _sendXtAndWait مع predicate اختياري
   Future<XtMessage> _sendXtAndWait(
     String cmd,
     String payload, {
@@ -927,7 +916,6 @@ class GgeClient {
 
     sub = _xtCtrl.stream.listen((m) {
       if (m.command != responseCmd) return;
-      // ✅✅✅ فلترة إضافية للردود
       if (predicate != null && !predicate(m)) return;
       if (completer.isCompleted) return;
       timer?.cancel();
@@ -987,7 +975,6 @@ class GgeClient {
     }
   }
 
-  // ✅✅✅ NEW: يفرّق بين transient close و session conflict حقيقي
   void _scheduleReconnect() {
     if (_disposed) return;
     if (!_appForeground && !allowBackgroundReconnect) return;
@@ -1000,7 +987,6 @@ class GgeClient {
       if (!_appForeground && !allowBackgroundReconnect) return;
       if (!isLoggedIn) return;
 
-      // 1) لو مفيش نت → استنى لحد ما يرجع
       final hasNet = await _hasInternet();
       if (!hasNet) {
         _status('⚠️ Network lost. Waiting for internet to return...');
@@ -1009,13 +995,10 @@ class GgeClient {
         return;
       }
 
-      // 2) في نت لكن WS مقفول → احتمال transient أو conflict
-      //    استنى 5s إضافية يمكن الـ WS نفسه يرجع
       _status('🔄 Connection lost — checking...');
       await Future.delayed(const Duration(seconds: 5));
       if (_disposed || _connected) return;
 
-      // 3) جرّب reconnect — لو 409 (token expired) → conflict حقيقي
       _status('🔄 Attempting auto-reconnect...');
       final ok = await autoReconnect();
       if (ok) {
@@ -1023,7 +1006,6 @@ class GgeClient {
         return;
       }
 
-      // 4) reconnect فشل مع وجود نت → ده conflict حقيقي
       _status(
           '🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
       _status('👉 Tap "Login" to reconnect manually when done.');
