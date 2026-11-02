@@ -319,7 +319,7 @@ class GgeClient {
               final aid = _asInt(area['AID']);
               final areaSet = <int>{};
 
-              // ✅ U فقط (Unlocked) — استبعدنا L (Locked)
+              // U فقط (Unlocked) — استبعدنا L (Locked)
               final unlockedU = u['U'] as List?;
               if (unlockedU != null) {
                 for (final id in unlockedU) {
@@ -355,16 +355,32 @@ class GgeClient {
           final a = gca['A'] as List?;
           if (a != null && a.length >= 4) {
             final areaId = _asInt(a[3]);
-            final bg = gca['BG'] as List?;
-            if (bg != null) {
-              for (final b in bg) {
-                if (b is List && b.length >= 2) {
-                  if (_asInt(b[0]) == 200) {
-                    final level = _asInt(b[1]);
-                    _barracksLevelByCastle[areaId] = level;
-                    TrafficLog.add('ST',
-                        '✅ Barracks Level: $level (Area: $areaId)');
-                    break;
+
+            // ✅ Fix: Use BDB from gpa (Barracks Level = BDB / 25)
+            final gpa = data['gpa'];
+            if (gpa is Map) {
+              final bdb = _asIntOrNull(gpa['BDB']);
+              if (bdb != null && bdb > 0) {
+                final level = (bdb / 25).round();
+                _barracksLevelByCastle[areaId] = level;
+                TrafficLog.add('ST',
+                    '✅ Barracks Level (BDB): $level (Area: $areaId)');
+              }
+            }
+
+            // Fallback to BG if BDB is missing
+            if (!_barracksLevelByCastle.containsKey(areaId)) {
+              final bg = gca['BG'] as List?;
+              if (bg != null) {
+                for (final b in bg) {
+                  if (b is List && b.length >= 2) {
+                    if (_asInt(b[0]) == 200) {
+                      final level = _asInt(b[1]);
+                      _barracksLevelByCastle[areaId] = level;
+                      TrafficLog.add('ST',
+                          '✅ Barracks Level (BG): $level (Area: $areaId)');
+                      break;
+                    }
                   }
                 }
               }

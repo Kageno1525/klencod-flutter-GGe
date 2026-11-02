@@ -288,21 +288,7 @@ class TrainingService {
       final now = DateTime.now();
       final slots = <SlotInfo>[];
 
-      if (ps != null && ps.isNotEmpty) {
-        final rct = (ps['RCT'] as num?)?.toInt() ?? tct;
-        final tua = (ps['TUA'] as num?)?.toInt() ?? 0;
-        final wid = (ps['WID'] as num?)?.toInt();
-        slots.add(SlotInfo(
-          rut: rct,
-          fetchedAt: now,
-          isTraining: true,
-          wodId: wid,
-          units: tua,
-        ));
-        TrafficLog.add(
-            'ST', '[Slots] PS active: RCT=${rct}s WID=$wid TUA=$tua');
-      }
-
+      // 1. Parse QS (this contains the actual slots)
       if (qs != null) {
         for (final q in qs) {
           if (q is! Map) continue;
@@ -318,6 +304,39 @@ class TrainingService {
         }
       }
 
+      // 2. Apply PS (active training) to the appropriate slot
+      if (ps != null && ps.isNotEmpty) {
+        final rct = (ps['RCT'] as num?)?.toInt() ?? tct;
+        final tua = (ps['TUA'] as num?)?.toInt() ?? 0;
+        final wid = (ps['WID'] as num?)?.toInt();
+
+        int targetIdx = slots.indexWhere((s) => s.rut > 0);
+        if (targetIdx < 0) {
+          targetIdx = slots.indexWhere((s) => s.rut == 0);
+        }
+
+        if (targetIdx >= 0) {
+          slots[targetIdx] = SlotInfo(
+            rut: rct,
+            fetchedAt: now,
+            isTraining: true,
+            wodId: wid,
+            units: tua,
+          );
+          TrafficLog.add('ST',
+              '[Slots] PS active applied to slot $targetIdx: RCT=${rct}s WID=$wid TUA=$tua');
+        } else {
+          slots.add(SlotInfo(
+            rut: rct,
+            fetchedAt: now,
+            isTraining: true,
+            wodId: wid,
+            units: tua,
+          ));
+        }
+      }
+
+      // Fallback: PS empty but TCT > 0 → mark first available slot as training
       if ((ps == null || ps.isEmpty) && tct > 0) {
         final freeIdx = slots.indexWhere((s) => s.rut == 0);
         if (freeIdx >= 0) {
@@ -344,7 +363,6 @@ class TrainingService {
   // ─── Fetch Barracks Level ──────────────────────────────────
   Future<void> fetchBarracksLevel(OwnedCastle castle) async {
     try {
-      // ✅ نستخدم CID: castle.areaId عشان نروح للقلعة المختارة بالظبط
       TrafficLog.add('ST',
           '[Barracks] Switching to CID=${castle.areaId} KID=${castle.kingdomId}');
       await conn.sendXtAndWait(
@@ -367,7 +385,7 @@ class TrainingService {
     return (lvl * 4).clamp(10, kAbsoluteMaxPerBatch);
   }
 
-  // ─── Trainable Units ────────────────────────────────────────
+  // ─── Trainable Units (filtered by Barracks Level) ──────────
   List<UnitCatalogEntry> getTrainableUnits({
     required OwnedCastle castle,
     required Map<int, UnitCatalogEntry> catalog,
@@ -378,10 +396,38 @@ class TrainingService {
           '[Train] No unlocked units for area=${castle.areaId} — gpc missing?');
       return [];
     }
-    return catalog.values
-        .where((u) => u.isTrainable && perArea.contains(u.wodId))
+
+    final barracksLevel = getBarracksLevel(castle.areaId) ?? 1;
+
+    final filtered = catalog.values
+        .where((u) {
+          if (!u.isTrainable) return false;
+          if (!perArea.contains(u.wodId)) return false;
+          // Filter by Barracks level
+          return _getRequiredBarracksLevel(u.wodId) <= barracksLevel;
+        })
         .toList()
       ..sort((a, b) => a.displayName.compareTo(b.displayName));
+
+    TrafficLog.add('ST',
+        '[Train] Barracks Lv$barracksLevel → ${filtered.length} units available');
+    return filtered;
+  }
+
+  /// Returns the required Barracks level for a given WOD ID.
+  /// GGE groups units in tens:
+  ///   601-610 → Lv1, 611-620 → Lv2, 621-630 → Lv3, ...
+  int _getRequiredBarracksLevel(int wodId) {
+    if (wodId >= 601 && wodId <= 610) return 1;
+    if (wodId >= 611 && wodId <= 620) return 2;
+    if (wodId >= 621 && wodId <= 630) return 3;
+    if (wodId >= 631 && wodId <= 640) return 4;
+    if (wodId >= 641 && wodId <= 650) return 5;
+    if (wodId >= 651 && wodId <= 660) return 6;
+    if (wodId >= 661 && wodId <= 670) return 7;
+    if (wodId >= 671 && wodId <= 680) return 8;
+    if (wodId >= 681 && wodId <= 690) return 9;
+    return 1;
   }
 
   // ─── Auto Train Single Attempt ──────────────────────────────
