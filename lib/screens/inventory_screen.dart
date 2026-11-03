@@ -6,8 +6,6 @@ import 'package:gge/theme.dart';
 import 'package:gge/widgets/animated_widgets.dart';
 
 // ═══════════════════════════════════════════
-// عنصر واحد من المخزن
-// ═══════════════════════════════════════════
 class InvItem {
   final int eid;
   final int type;
@@ -17,7 +15,7 @@ class InvItem {
   final List<dynamic> stats;
   final int slot;
   final int level;
-  final bool isGovernor; // ✅ NEW: عنصر حكام؟
+  final bool isGovernor;
 
   InvItem({
     required this.eid,
@@ -31,7 +29,6 @@ class InvItem {
     this.isGovernor = false,
   });
 
-  /// 1=درع 2=سلاح 3=خوذة 4=قطعة أثرية 5=أخرى 6=قائد
   String get typeName {
     switch (type) {
       case 1: return 'درع';
@@ -76,8 +73,6 @@ class InvItem {
   }
 
   bool get isCommander => type == 6;
-
-  /// slot >= 0 = مجهز — slot = -1 = في المخزون
   bool get isEquipped => slot >= 0;
 }
 
@@ -105,10 +100,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   final Map<int, int> _soldByType = {};
   final List<String> _log = [];
 
-  // ✅ NEW: افتراضي = نادر بس
   final Set<int> _selectedRarities = {2};
-
-  // افتراضي: كل الأنواع
   final Set<int> _selectedTypes = {1, 2, 3, 4, 5};
 
   List<InvItem> get _commons =>
@@ -122,7 +114,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
   List<InvItem> get _governorItems =>
       _items.where((i) => i.isGovernor).toList();
 
-  /// ✅ العناصر المستهدفة للبيع (قواد + حكام مع بعض)
   List<InvItem> get _targets => _items
       .where((i) =>
           !i.isCommander &&
@@ -149,8 +140,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   // ═══════════════════════════════════════════
-  // 1. تحميل المخزن (gei + ggm)
-  // ═══════════════════════════════════════════
   Future<void> _loadInventory() async {
     setState(() {
       _loading = true;
@@ -166,7 +155,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
     });
 
     try {
-      // 1. Fetch governor inventory (ggm)
       String? ggmPayload;
       _logLine('📤 ggm (حكام)');
       try {
@@ -182,7 +170,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
         _logLine('⚠️ ggm timeout (متجاهل)');
       }
 
-      // 2. Fetch main inventory (gei)
       _logLine('📤 gei (قواد)');
       final gei = await widget.client.sendXtAndWait('gei', '{}',
           responseCmd: 'gei', timeoutMs: 25000);
@@ -191,7 +178,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
         throw Exception('gei failed rc=${gei.resultCode}');
       }
 
-      // 3. Parse both
       _parseGei(gei.payload!);
       if (ggmPayload != null) {
         _parseGgm(ggmPayload);
@@ -200,7 +186,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (!mounted) return;
       setState(() => _loading = false);
 
-      // Log summary
       _logLine('✅ تم تحميل ${_items.length} عنصر');
       _logLine('  • عادي: ${_commons.length}');
       _logLine('  • نادر: ${_rares.length}');
@@ -218,9 +203,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // Parse gei (main inventory)
-  // ═══════════════════════════════════════════
   void _parseGei(String payload) {
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
@@ -268,16 +250,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // Parse ggm (governor inventory)
-  // RGEM format: [eid, rawType, rawRarity, value, stats, equipFlag]
-  // rawRarity: 5=rare, 6=epic, 7+=legendary
-  // ═══════════════════════════════════════════
   void _parseGgm(String payload) {
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
-
-      // RGEM = Rare Governor Equipment (حكام)
       final rgem = data['RGEM'] as List? ?? [];
       int govCount = 0;
 
@@ -295,23 +270,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final equipFlag =
               raw.length > 5 ? ((raw[5] as num?)?.toInt() ?? 0) : 0;
 
-          // Map governor rarity (5/6/7+) to our scale (1-4)
           int rarity;
           if (rawRarity >= 7) {
-            rarity = 4; // legendary
+            rarity = 4;
           } else if (rawRarity == 6) {
-            rarity = 3; // epic
+            rarity = 3;
           } else if (rawRarity == 5) {
-            rarity = 2; // rare
+            rarity = 2;
           } else if (rawRarity >= 1 && rawRarity <= 4) {
             rarity = rawRarity;
           } else {
-            rarity = 2; // fallback
+            rarity = 2;
           }
 
           final type = _guessGovType(stats, rawType);
-
-          // 0 = not equipped, >0 = equipped
           final slot = equipFlag == 0 ? -1 : 1;
 
           _items.add(InvItem(
@@ -337,7 +309,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
-  /// Try to guess governor item type from stat IDs
   int _guessGovType(List stats, int rawType) {
     bool hasArtifact = false;
     bool hasCombatStat = false;
@@ -350,13 +321,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
 
     if (hasArtifact) return 4;
-    if (hasCombatStat) return 2; // weapon (most likely)
+    if (hasCombatStat) return 2;
     if (rawType >= 1 && rawType <= 6) return rawType;
     return 5;
   }
 
   // ═══════════════════════════════════════════
-  // 2. البيع
+  // البيع
   // ═══════════════════════════════════════════
   Future<void> _confirmAndSell() async {
     final targets = _targets;
@@ -414,7 +385,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'العناصر المجهزة (${_equipped.length}) مش هتتباع — هتفضل زي ما هي',
+                        'العناصر المجهزة (${_equipped.length}) مش هتتباع',
                         style: const TextStyle(
                             color: AppTheme.teal,
                             fontSize: 11,
@@ -426,8 +397,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               ),
               const SizedBox(height: 12),
               const Text(
-                '⏱️ سيتم إرسال طلب كل 3 ثواني لتجنب الحظر.\n'
-                '⚠️ لا يمكن التراجع بعد البدء.',
+                '⏱️ سيتم إرسال طلب كل 3 ثواني لتجنب الحظر.',
                 style: TextStyle(
                     color: Colors.orange,
                     fontSize: 11,
@@ -481,7 +451,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
 
       if (i < targets.length - 1) {
-        _logLine('⏱️ انتظار 3s قبل العنصر التالي...');
+        _logLine('⏱️ انتظار 3s...');
         await Future.delayed(const Duration(seconds: 3));
       }
       if (mounted) setState(() {});
@@ -501,7 +471,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
     }
     if (_totalGold > 0) {
-      _logLine('  • 💰 الذهب المكتسب: $_totalGold');
+      _logLine('  • 💰 الذهب: $_totalGold');
     }
     _logLine('━━━━━━━━━━━━━━━━');
 
@@ -509,39 +479,55 @@ class _InventoryScreenState extends State<InventoryScreen> {
         'تم بيع $_soldCount عنصر${_failedCount > 0 ? " (فشل $_failedCount)" : ""}');
   }
 
+  // ✅ NEW: try multiple commands for governor items + full logging
   Future<bool> _sellOne(InvItem item) async {
-    try {
-      final resp = await widget.client.sendXtAndWait(
-        'seq',
-        jsonEncode({
-          'EID': item.eid,
-          'LID': -1,
-          'EX': 0,
-          'LFID': -1,
-        }),
-        responseCmd: 'seq',
-        timeoutMs: 15000,
-        isAction: false,
-      );
+    // ✅ Governor items need a different command
+    final commands = item.isGovernor
+        ? const ['sgm', 'sgv', 'seq']
+        : const ['seq'];
 
-      if (_disposed) return false;
+    for (final cmd in commands) {
+      try {
+        final resp = await widget.client.sendXtAndWait(
+          cmd,
+          jsonEncode({
+            'EID': item.eid,
+            'LID': -1,
+            'EX': 0,
+            'LFID': -1,
+          }),
+          responseCmd: cmd,
+          timeoutMs: 15000,
+          isAction: false,
+        );
 
-      if (resp.resultCode == 0) {
+        if (_disposed) return false;
+
         final tag = item.isGovernor ? '🏛️' : '✅';
-        _logLine('$tag #${item.eid} (${item.typeName}/${item.rarityName})');
-        if (resp.payload != null && resp.payload!.isNotEmpty) {
-          _lastSeqResponse = resp.payload;
-          _tryExtractGold(resp.payload!);
+        if (resp.resultCode == 0) {
+          _logLine(
+              '$tag #${item.eid} (${item.typeName}/${item.rarityName}) → $cmd OK');
+          if (resp.payload != null && resp.payload!.isNotEmpty) {
+            _lastSeqResponse = resp.payload;
+            _tryExtractGold(resp.payload!);
+          }
+          return true;
+        } else {
+          _logLine(
+              '❌ $cmd #${item.eid} rc=${resp.resultCode} payload=${resp.payload ?? "null"}');
+          // Try next command only for "generic" errors (1, 5, or unknown command)
+          // Item-level errors (91, 100, etc.) are terminal
+          if (resp.resultCode != 1 && resp.resultCode != 5) {
+            if (cmd != commands.last) continue;
+            return false;
+          }
         }
-        return true;
-      } else {
-        _logLine('❌ #${item.eid} rc=${resp.resultCode}');
-        return false;
+      } catch (e) {
+        _logLine('⚠️ $cmd timeout/error #${item.eid}: $e');
+        if (cmd == commands.last) return false;
       }
-    } catch (e) {
-      _logLine('⚠️ timeout #${item.eid}');
-      return false;
     }
+    return false;
   }
 
   void _tryExtractGold(String payload) {
@@ -590,7 +576,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   // ═══════════════════════════════════════════
-  // 3. الواجهة
+  // الواجهة
   // ═══════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
@@ -863,7 +849,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 onPressed: (_selling)
                     ? null
                     : () => setState(() {
-                          // ✅ افتراضي: نادر بس
                           _selectedRarities.clear();
                           _selectedRarities.add(2);
                           _selectedTypes.clear();
@@ -1137,7 +1122,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
         !item.isCommander &&
         !equipped;
 
-    // Border color
     Color borderColor = item.rarityColor.withOpacity(0.4);
     double borderWidth = 1;
     if (equipped) {

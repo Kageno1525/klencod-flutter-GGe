@@ -32,6 +32,17 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _loadSaved() async {
+    // ✅ If user is logged out but BG is still running → stop it
+    try {
+      final loggedIn = await AppStorage.getLoggedIn();
+      if (!loggedIn) {
+        TrafficLog.add('ST', '[Login] User logged out → ensuring BG stopped');
+        await BackgroundService.stop();
+      }
+    } catch (e) {
+      debugPrint('[Login] BG cleanup: $e');
+    }
+
     final u = await AppStorage.getUsername();
     final p = await AppStorage.getPassword();
 
@@ -43,7 +54,6 @@ class _LoginScreenState extends State<LoginScreen> {
       _checkedPermissions = true;
       await _ensureNotificationPermission();
     }
-    // ✅ شيلنا شرط الـ Auto-Login اللي كان بيدوس على الزرار
   }
 
   Future<void> _ensureNotificationPermission() async {

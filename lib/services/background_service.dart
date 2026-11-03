@@ -470,10 +470,13 @@ class BackgroundService {
     }
   }
 
+  // ✅ MODIFIED: Always verify with FlutterForegroundTask.isRunningService
   static Future<void> stop() async {
-    if (!_running) return;
     try {
-      await FlutterForegroundTask.stopService();
+      final isRunning = await FlutterForegroundTask.isRunningService;
+      if (isRunning) {
+        await FlutterForegroundTask.stopService();
+      }
     } catch (_) {}
     _running = false;
     GgeClient.allowBackgroundReconnect = false;

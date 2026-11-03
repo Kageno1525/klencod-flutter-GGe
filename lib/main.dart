@@ -27,9 +27,24 @@ void main() async {
 
   runApp(GgeApp(initialDark: dark));
 
-  unawaited(BackgroundService.init().catchError((e) {
+  // ✅ Init + stop BG if user is logged out
+  unawaited(BackgroundService.init().then((_) async {
+    try {
+      final loggedIn = await AppStorage.getLoggedIn();
+      if (!loggedIn) {
+        final isRunning = await FlutterForegroundTask.isRunningService;
+        if (isRunning) {
+          debugPrint('[Init] Logged out but BG running → stopping service');
+          await BackgroundService.stop();
+        }
+      }
+    } catch (e) {
+      debugPrint('[Init] BG cleanup: $e');
+    }
+  }).catchError((e) {
     debugPrint('[Init] BackgroundService: $e');
   }));
+
   unawaited(NotificationsService.init().catchError((e) {
     debugPrint('[Init] NotificationsService: $e');
   }));
@@ -85,7 +100,6 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
 
     unawaited(_updateForegroundState(state == AppLifecycleState.resumed));
 
-    // ✅ NEW: بلغ الـ BG فوراً عشان يتصرف
     try {
       if (state == AppLifecycleState.resumed) {
         FlutterForegroundTask.sendDataToTask('UI_RESUMED');
