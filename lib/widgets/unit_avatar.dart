@@ -71,7 +71,7 @@ class _UnitAvatarState extends State<UnitAvatar> {
       return;
     }
 
-    // الكود ده بيشتغل بس لو الصورة ليها "طابع زمني" (Sprite Sheet)
+    // لو الصورة من نوع Sprite Sheet (فيها تاريخ زمني --123456)
     if (url.contains('--') && (url.endsWith('.webp') || url.endsWith('.png'))) {
       if (_spriteCache.containsKey(url)) {
         _spriteData = _spriteCache[url];
@@ -114,13 +114,11 @@ class _UnitAvatarState extends State<UnitAvatar> {
       final client = HttpClient();
       client.connectionTimeout = const Duration(seconds: 5);
 
-      // تحميل JSON
       final reqJson = await client.getUrl(Uri.parse(jsonUrl));
       final resJson = await reqJson.close();
       if (resJson.statusCode != 200) return null;
       final bodyJson = await resJson.transform(utf8.decoder).join();
 
-      // تحميل JS
       final reqJs = await client.getUrl(Uri.parse(jsUrl));
       final resJs = await reqJs.close();
       if (resJs.statusCode != 200) return null;
@@ -129,42 +127,101 @@ class _UnitAvatarState extends State<UnitAvatar> {
       client.close();
 
       final json = jsonDecode(bodyJson) as Map<String, dynamic>;
-      final framesJson = json['frames'] as List;
-      if (framesJson.length != 4) return null; // مش من النوع ده
+      final framesList = json['frames'] as List?;
+      final animations = json['animations'] as Map<String, dynamic>?;
+      if (framesList == null || animations == null) return null;
 
-      // استخراج الإحداثيات من الـ JS
-      final reg = RegExp(
-          r'this\.bitmap_1\.x=([-\d.]+),this\.bitmap_1\.y=([-\d.]+),.*?this\.c2\.x=([-\d.]+),this\.c2\.y=([-\d.]+),this\.c2\.scaleX=([-\d.]+),this\.c2\.scaleY=([-\d.]+),.*?this\.c1\.x=([-\d.]+),this\.c1\.y=([-\d.]+),this\.c1\.scaleX=([-\d.]+),this\.c1\.scaleY=([-\d.]+),.*?this\.bitmap_2\.x=([-\d.]+),this\.bitmap_2\.y=([-\d.]+)');
-      final match = reg.firstMatch(bodyJs);
-      if (match == null) return null;
+      final bmpToFrame = <String, List>{};
+      for (final e in animations.entries) {
+        final fList = (e.value as Map)['frames'] as List;
+        if (fList.isNotEmpty) {
+          bmpToFrame[e.key] = framesList[fList[0] as int] as List;
+        }
+      }
 
-      final x1 = double.parse(match.group(1)!);
-      final y1 = double.parse(match.group(2)!);
-      final x2 = double.parse(match.group(3)!);
-      final y2 = double.parse(match.group(4)!);
-      final sx2 = double.parse(match.group(5)!);
-      final sy2 = double.parse(match.group(6)!);
-      final x3 = double.parse(match.group(7)!);
-      final y3 = double.parse(match.group(8)!);
-      final sx3 = double.parse(match.group(9)!);
-      final sy3 = double.parse(match.group(10)!);
-      final x4 = double.parse(match.group(11)!);
-      final y4 = double.parse(match.group(12)!);
+      // 1. استخراج إحداثيات كل قطعة من ملف JS
+      final offsets = <String, Map<String, double>>{};
+      final offsetMatches = RegExp(r'this\.([a-zA-Z0-9_]+)\.x=([-\d.]+),this\.\1\.y=([-\d.]+)(?:,this\.\1\.scaleX=([-\d.]+),this\.\1\.scaleY=([-\d.]+))?').allMatches(bodyJs);
+      for (final m in offsetMatches) {
+        offsets[m.group(1)!] = {
+          'x': double.parse(m.group(2)!),
+          'y': double.parse(m.group(3)!),
+          'scaleX': double.tryParse(m.group(4) ?? '1') ?? 1.0,
+          'scaleY': double.tryParse(m.group(5) ?? '1') ?? 1.0,
+        };
+      }
 
-      final f0 = framesJson[0] as List;
-      final f1 = framesJson[1] as List;
-      final f2 = framesJson[2] as List;
-      final f3 = framesJson[3] as List;
+      // 2. استخراج ترتيب الرسم (مين فوق مين)
+      final addChildRegex = RegExp(r'this\.addChild\(([^)]+)\)');
+      final addChildMatch = addChildRegex.firstMatch(bodyJs);
+      final drawOrder = <String>[];
+      if (addChildMatch != null) {
+        final args = addChildMatch.group(1)!.split(',');
+        for (final arg in args) {
+          final name = arg.trim().split('.').last;
+          drawOrder.add(name);
+        }
+      } else {
+        drawOrder.addAll(['bitmap_1', 'c2', 'c1', 'bitmap_2']); // ترتيب افتراضي
+      }
 
-      return SpriteData(
-        imageUrl: webpUrl,
-        frames: [
-          SpriteFrame(srcX: f2[0].toDouble(), srcY: f2[1].toDouble(), w: f2[2].toDouble(), h: f2[3].toDouble(), x: x1, y: y1, scaleX: 1, scaleY: 1),
-          SpriteFrame(srcX: f1[0].toDouble(), srcY: f1[1].toDouble(), w: f1[2].toDouble(), h: f1[3].toDouble(), x: x2, y: y2, scaleX: sx2, scaleY: sy2),
-          SpriteFrame(srcX: f0[0].toDouble(), srcY: f0[1].toDouble(), w: f0[2].toDouble(), h: f0[3].toDouble(), x: x3, y: y3, scaleX: sx3, scaleY: sy3),
-          SpriteFrame(srcX: f3[0].toDouble(), srcY: f3[1].toDouble(), w: f3[2].toDouble(), h: f3[3].toDouble(), x: x4, y: y4, scaleX: 1, scaleY: 1),
-        ],
-      );
+      // 3. دالة ذكية لمعرفة كل قطعة بتشاور على أنهي صورة في الـ JSON
+      String? findBmpForClass(String className, String js) {
+        final aliasRegex = RegExp('var\\s+$className\\s*=\\s*([a-zA-Z0-9_]+)');
+        final aliasMatch = aliasRegex.firstMatch(js);
+        if (aliasMatch != null) className = aliasMatch.group(1)!;
+
+        final funcRegex = RegExp('function\\s+$className\\s*\\(\\)\\s*\\{[^}]*?getAnimation\\("(BMP_\\d)"\\)');
+        final funcMatch = funcRegex.firstMatch(js);
+        if (funcMatch != null) return funcMatch.group(1);
+
+        final innerRegex = RegExp('function\\s+$className\\s*\\(\\)\\s*\\{[^}]*?this\\.\\w+\\s*=\\s*new\\s+([a-zA-Z0-9_]+)');
+        final innerMatch = innerRegex.firstMatch(js);
+        if (innerMatch != null) return findBmpForClass(innerMatch.group(1)!, js);
+
+        return null;
+      }
+
+      String? findBmpForElement(String element, String js) {
+        final instRegex = RegExp('this\\.$element\\s*=\\s*new\\s+([a-zA-Z0-9_]+)');
+        final instMatch = instRegex.firstMatch(js);
+        if (instMatch != null) {
+          return findBmpForClass(instMatch.group(1)!, js);
+        }
+        return null;
+      }
+
+      final list = <SpriteFrame>[];
+      for (final element in drawOrder) {
+        var bmp = findBmpForElement(element, bodyJs);
+        // خطة بديلة لو الدالة الذكية فشلت في التعرف
+        if (bmp == null) {
+          if (element == 'bitmap_1') bmp = 'BMP_0';
+          else if (element == 'c1') bmp = 'BMP_2';
+          else if (element == 'c2') bmp = 'BMP_3';
+          else if (element == 'bitmap_2') bmp = 'BMP_1';
+        }
+
+        if (bmp != null && bmpToFrame.containsKey(bmp)) {
+          final frame = bmpToFrame[bmp]!;
+          final offset = offsets[element] ?? {'x': 0.0, 'y': 0.0, 'scaleX': 1.0, 'scaleY': 1.0};
+          list.add(SpriteFrame(
+            srcX: (frame[0] as num).toDouble(),
+            srcY: (frame[1] as num).toDouble(),
+            w: (frame[2] as num).toDouble(),
+            h: (frame[3] as num).toDouble(),
+            x: offset['x']!,
+            y: offset['y']!,
+            scaleX: offset['scaleX']!,
+            scaleY: offset['scaleY']!,
+          ));
+        }
+      }
+
+      if (list.isNotEmpty) {
+        return SpriteData(imageUrl: webpUrl, frames: list);
+      }
+      return null;
     } catch (_) {
       return null;
     }
@@ -281,7 +338,7 @@ class SpritePainter extends CustomPainter {
 
     final paint = Paint()..filterQuality = FilterQuality.high;
 
-    // رسم القطع فوق بعض
+    // رسم القطع فوق بعض بالترتيب الصح
     for (final f in frames) {
       canvas.save();
       canvas.translate(f.x, f.y);
