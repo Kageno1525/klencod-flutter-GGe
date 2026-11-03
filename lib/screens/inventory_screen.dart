@@ -98,6 +98,9 @@ class InvItem {
   }
 
   bool get isCommander => type == 6;
+
+  /// ✅ slot >= 0 = مجهز (في قلعة) — slot = -1 = في المخزون
+  bool get isEquipped => slot >= 0;
 }
 
 // ═══════════════════════════════════════════
@@ -124,7 +127,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
   final Map<int, int> _soldByType = {};
   final List<String> _log = [];
 
-  // ─── فلاتر البيع ─────────────────────────────
   // ندرة: 1=عادي 2=نادر 3=ملحمي 4=أسطوري
   // افتراضي: عادي + نادر
   final Set<int> _selectedRarities = {1, 2};
@@ -133,18 +135,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
   // افتراضي: كل الأنواع (ماعدا القواد)
   final Set<int> _selectedTypes = {1, 2, 3, 4};
 
-  List<InvItem> get _commons => _items
-      .where((i) => i.rarity == 1 && !i.isCommander)
-      .toList();
-  List<InvItem> get _rares => _items
-      .where((i) => i.rarity == 2 && !i.isCommander)
-      .toList();
-  List<InvItem> get _commanders => _items.where((i) => i.isCommander).toList();
+  List<InvItem> get _commons =>
+      _items.where((i) => i.rarity == 1 && !i.isCommander).toList();
+  List<InvItem> get _rares =>
+      _items.where((i) => i.rarity == 2 && !i.isCommander).toList();
+  List<InvItem> get _commanders =>
+      _items.where((i) => i.isCommander).toList();
+  List<InvItem> get _equipped =>
+      _items.where((i) => i.isEquipped && !i.isCommander).toList();
 
-  /// العناصر المطابقة للفلاتر الحالية (المستهدفة بالبيع)
+  /// ✅ العناصر المطابقة للفلاتر (المستهدفة بالبيع)
+  /// - بدون قواد
+  /// - بدون عناصر مجهزة (slot >= 0)
+  /// - مطابقة للفلاتر
   List<InvItem> get _targets => _items
       .where((i) =>
-          !i.isCommander && // القواد دايماً مستثنيين من البيع
+          !i.isCommander &&
+          !i.isEquipped && // ✅ استبعاد العناصر المجهزة
           _selectedRarities.contains(i.rarity) &&
           _selectedTypes.contains(i.type))
       .toList();
@@ -228,14 +235,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
       _logLine('  • عادي: ${_commons.length}');
       _logLine('  • نادر: ${_rares.length}');
       _logLine('  • قائد: ${_commanders.length}');
-      _logLine('🎯 المطابق للفلاتر: ${_targets.length}');
+      _logLine('  • مجهز: ${_equipped.length}');
+      _logLine('🎯 المطابق للفلاتر (قابل للبيع): ${_targets.length}');
 
-      // ⚡ Popup تأكيد بعد التحميل مباشرة
-      if (_targets.isNotEmpty) {
-        await Future.delayed(const Duration(milliseconds: 500));
-        if (!mounted || _disposed) return;
-        await _confirmAndSell();
-      }
+      // ✅ تم إزالة الحوار التلقائي — لن يظهر إلا عندما يضغط المستخدم زر البيع
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -324,13 +327,53 @@ class _InventoryScreenState extends State<InventoryScreen> {
         title: const Text('تأكيد البيع',
             style: TextStyle(decoration: TextDecoration.none)),
         content: SingleChildScrollView(
-          child: Text(
-            'إجمالي: ${targets.length} عنصر\n\n'
-            '📦 بالنوع:\n$typeSummary\n\n'
-            '⭐ بالندرة:\n$raritySummary\n\n'
-            '⚠️ سيتم إرسال seq لكل عنصر ولا يمكن التراجع.',
-            style: const TextStyle(
-                decoration: TextDecoration.none, height: 1.5),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'إجمالي: ${targets.length} عنصر\n\n'
+                '📦 بالنوع:\n$typeSummary\n\n'
+                '⭐ بالندرة:\n$raritySummary',
+                style: const TextStyle(
+                    decoration: TextDecoration.none, height: 1.5),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppTheme.teal.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppTheme.teal.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_rounded,
+                        color: AppTheme.teal, size: 16),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'العناصر المجهزة (${_equipped.length}) مش هتتباع — هتفضل زي ما هي',
+                        style: const TextStyle(
+                            color: AppTheme.teal,
+                            fontSize: 11,
+                            decoration: TextDecoration.none),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '⏱️ سيتم إرسال طلب كل 3 ثواني لتجنب الحظر.\n'
+                '⚠️ لا يمكن التراجع بعد البدء.',
+                style: TextStyle(
+                    color: Colors.orange,
+                    fontSize: 11,
+                    height: 1.5,
+                    decoration: TextDecoration.none),
+              ),
+            ],
           ),
         ),
         actions: [
@@ -377,7 +420,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
 
       if (i < targets.length - 1) {
-        await Future.delayed(const Duration(milliseconds: 700));
+        // ✅ 3 ثواني بين كل عنصر (لتجنب الحظر)
+        _logLine('⏱️ انتظار 3s قبل العنصر التالي...');
+        await Future.delayed(const Duration(seconds: 3));
       }
       if (mounted) setState(() {});
     }
@@ -573,7 +618,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       ? 'جاري البيع... $_soldCount/${_targets.length}'
                       : (_loading
                           ? 'جاري التحميل...'
-                          : 'الكل: ${_items.length} · مستهدف: ${_targets.length}'),
+                          : 'الكل: ${_items.length} · مستهدف: ${_targets.length} · مجهز: ${_equipped.length}'),
                   style: TextStyle(
                     fontSize: 11,
                     color: AppTheme.subTextColor(context),
@@ -655,6 +700,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
           _section('🟢 عناصر عادية (${_commons.length})', _commons),
         if (_rares.isNotEmpty)
           _section('🔵 عناصر نادرة (${_rares.length})', _rares),
+        if (_equipped.isNotEmpty)
+          _section('🔒 عناصر مجهزة (${_equipped.length})', _equipped),
         if (_commanders.isNotEmpty)
           _section('🟣 قواد (${_commanders.length})', _commanders),
         if (_items.isEmpty)
@@ -681,6 +728,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       ('عادي', _commons.length, const Color(0xFF9E9E9E)),
       ('نادر', _rares.length, const Color(0xFF2196F3)),
       ('قائد', _commanders.length, const Color(0xFF9C27B0)),
+      ('مجهز', _equipped.length, AppTheme.orange),
     ];
     return AppTheme.glassCard(
       context: context,
@@ -692,7 +740,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       Text(
                         '${s.$2}',
                         style: TextStyle(
-                          fontSize: 26,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                           color: s.$3,
                           decoration: TextDecoration.none,
@@ -701,7 +749,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       Text(
                         s.$1,
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 10,
                           color: AppTheme.subTextColor(context),
                           decoration: TextDecoration.none,
                         ),
@@ -714,9 +762,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
-  // ═══════════════════════════════════════════
-  // كارت الفلاتر
-  // ═══════════════════════════════════════════
   Widget _filtersCard() {
     return AppTheme.glassCard(
       context: context,
@@ -739,8 +784,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
             ],
           ),
           const SizedBox(height: 12),
-
-          // ─── الندرة ───
           _filterLabel('⭐ الندرة'),
           const SizedBox(height: 6),
           Wrap(
@@ -753,10 +796,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               _rarityChip(4, 'أسطوري', const Color(0xFFFF9800)),
             ],
           ),
-
           const SizedBox(height: 14),
-
-          // ─── النوع ───
           _filterLabel('📦 النوع'),
           const SizedBox(height: 6),
           Wrap(
@@ -769,10 +809,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               _typeChip(4, 'قطعة أثرية', Icons.diamond_rounded),
             ],
           ),
-
           const SizedBox(height: 10),
-
-          // أزرار سريعة
           Row(
             children: [
               TextButton.icon(
@@ -910,7 +947,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
-  // ═══════════════════════════════════════════
   Widget _actionCard() {
     final count = _targets.length;
     final canSell = count > 0 && !_selling;
@@ -986,6 +1022,32 @@ class _InventoryScreenState extends State<InventoryScreen> {
               ),
             ),
           ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.teal.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.teal.withOpacity(0.2)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline_rounded,
+                    color: AppTheme.teal, size: 14),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '⏱️ 3 ثواني بين كل عنصر · 🔒 العناصر المجهزة لن تُباع',
+                    style: TextStyle(
+                      color: AppTheme.teal,
+                      fontSize: 10,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1021,9 +1083,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Widget _itemTile(InvItem item) {
     final sold = _soldEids.contains(item.eid);
+    final equipped = item.isEquipped;
     final selectedForSell = _selectedRarities.contains(item.rarity) &&
         _selectedTypes.contains(item.type) &&
-        !item.isCommander;
+        !item.isCommander &&
+        !equipped; // ✅ العناصر المجهزة مش بتتحسب
+
+    // لون الإطار
+    Color borderColor = item.rarityColor.withOpacity(0.4);
+    double borderWidth = 1;
+    if (equipped) {
+      borderColor = AppTheme.orange;
+      borderWidth = 2;
+    } else if (selectedForSell) {
+      borderColor = item.rarityColor;
+      borderWidth = 2;
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -1036,10 +1111,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
               color: item.rarityColor.withOpacity(0.15),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: selectedForSell
-                    ? item.rarityColor
-                    : item.rarityColor.withOpacity(0.4),
-                width: selectedForSell ? 2 : 1,
+                color: borderColor,
+                width: borderWidth,
               ),
             ),
             child: Icon(item.icon, size: 18, color: item.rarityColor),
@@ -1086,7 +1159,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     decoration: TextDecoration.none,
                   )),
             )
-          else if (selectedForSell)
+          else if (equipped)
             Container(
               padding:
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1096,11 +1169,37 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 border:
                     Border.all(color: AppTheme.orange.withOpacity(0.5)),
               ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.lock_rounded,
+                      size: 10, color: AppTheme.orange),
+                  const SizedBox(width: 3),
+                  const Text('مجهز',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.orange,
+                        decoration: TextDecoration.none,
+                      )),
+                ],
+              ),
+            )
+          else if (selectedForSell)
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppTheme.green.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+                border:
+                    Border.all(color: AppTheme.green.withOpacity(0.5)),
+              ),
               child: const Text('مستهدف',
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
-                    color: AppTheme.orange,
+                    color: AppTheme.green,
                     decoration: TextDecoration.none,
                   )),
             ),

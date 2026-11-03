@@ -60,6 +60,7 @@ class _GgeTaskHandler extends TaskHandler {
     _watchPresence();
   }
 
+  // ✅ MODIFIED: _watchPresence with longer grace period
   void _watchPresence() {
     _presenceTimer?.cancel();
     _presenceTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
@@ -83,6 +84,13 @@ class _GgeTaskHandler extends TaskHandler {
                 .getBool('is_app_foreground') ??
             false;
         if (fg2) return;
+
+        // ✅ استنى شوية كمان عشان نضمن إن الـ UI فصل
+        await Future.delayed(const Duration(seconds: 3));
+        final fg3 = (await SharedPreferences.getInstance())
+                .getBool('is_app_foreground') ??
+            false;
+        if (fg3) return;
 
         _log('Presence: UI closed → starting');
         _presenceTimer?.cancel();
@@ -129,7 +137,21 @@ class _GgeTaskHandler extends TaskHandler {
     _log('Online');
     await _saveStatus('ONLINE');
 
+    // ✅ MODIFIED: onSessionConflict — ignore if UI is foreground
     _client!.onSessionConflict = () async {
+      // تجاهل لو الـ UI في المقدمة (ده handover مش conflict)
+      final fg = (await SharedPreferences.getInstance())
+              .getBool('is_app_foreground') ??
+          false;
+      if (fg) {
+        _log('Session conflict ignored (UI foreground — handover)');
+        return;
+      }
+      if (!_running) {
+        _log('Session conflict ignored (already paused)');
+        return;
+      }
+
       _log('Session conflict — stopping');
       try {
         await prefs.setBool('bg_session_conflict', true);
@@ -138,8 +160,21 @@ class _GgeTaskHandler extends TaskHandler {
       await _pauseAll();
     };
 
-    // ✅ NEW: suspicious clean close handler
+    // ✅ MODIFIED: onSuspiciousClose — ignore if UI is foreground
     _client!.onSuspiciousClose = (DateTime when) async {
+      // تجاهل لو الـ UI في المقدمة (ده handover مش conflict)
+      final fg = (await SharedPreferences.getInstance())
+              .getBool('is_app_foreground') ??
+          false;
+      if (fg) {
+        _log('Suspicious close ignored (UI foreground — handover)');
+        return;
+      }
+      if (!_running) {
+        _log('Suspicious close ignored (already paused)');
+        return;
+      }
+
       _log('Suspicious close at ${when.toIso8601String()}');
       try {
         await prefs.setString(

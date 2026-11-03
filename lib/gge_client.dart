@@ -202,7 +202,6 @@ class GgeClient {
   DateTime? _lastRxTime;
   bool _networkWaitActive = false;
 
-  // ✅ NEW: suspicious close detection
   bool _lastCloseWasClean = false;
   bool _closingIntentionally = false;
 
@@ -224,9 +223,6 @@ class GgeClient {
   set cachedStatsByArea(Map<int, CastleStats>? v) => _cachedStatsByArea = v;
 
   void Function()? onSessionConflict;
-
-  /// ✅ NEW: fires when WS closes cleanly (server-initiated) with internet OK
-  /// This almost always means someone logged in elsewhere
   void Function(DateTime when)? onSuspiciousClose;
 
   final List<String> debugLog = [];
@@ -821,7 +817,6 @@ class GgeClient {
       onDone: () {
         _connected = false;
         if (!_closingIntentionally && !_disposed) {
-          // ✅ Clean close from server - suspect session conflict
           _lastCloseWasClean = true;
           _status('⚠️ WS closed by server (clean close)');
         } else {
@@ -1015,6 +1010,7 @@ class GgeClient {
     }
   }
 
+  // ✅ MODIFIED: _scheduleReconnect with extra checks
   void _scheduleReconnect() {
     if (_disposed) return;
     if (!_appForeground && !allowBackgroundReconnect) return;
@@ -1028,6 +1024,8 @@ class GgeClient {
       if (!isLoggedIn) return;
 
       final hasNet = await _hasInternet();
+      if (_disposed || _connected) return;
+
       if (!hasNet) {
         _status('⚠️ Network lost. Waiting for internet to return...');
         _networkWaitActive = true;
@@ -1035,21 +1033,25 @@ class GgeClient {
         return;
       }
 
-      // ✅ CLEAN CLOSE + INTERNET OK = SUSPICIOUS (likely session conflict)
-      if (_lastCloseWasClean) {
+      // ✅ تحقق إضافي قبل ما نستخدم _lastCloseWasClean
+      if (_lastCloseWasClean && _appForeground) {
         _lastCloseWasClean = false;
+        if (_disposed) return;
         _status('🔴 Server closed connection — possible session conflict');
         onSuspiciousClose?.call(DateTime.now());
-        return; // Don't auto-reconnect - wait for user decision
+        return;
       }
 
-      // Network error path — normal auto-reconnect
+      _lastCloseWasClean = false;
+
       _status('🔄 Connection lost — checking...');
       await Future.delayed(const Duration(seconds: 5));
       if (_disposed || _connected) return;
 
       _status('🔄 Attempting auto-reconnect...');
       final ok = await autoReconnect();
+      if (_disposed) return;
+
       if (ok) {
         _status('✅ Auto-reconnected after transient close');
         return;
@@ -1058,6 +1060,7 @@ class GgeClient {
       _status(
           '🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
       _status('👉 Tap "Login" to reconnect manually when done.');
+      if (_disposed) return;
       onSessionConflict?.call();
     });
   }
@@ -1085,16 +1088,28 @@ class GgeClient {
     _networkWaitActive = false;
   }
 
+  // ✅ MODIFIED: onAppLifecycleChanged — disconnect when going to background
   void onAppLifecycleChanged(AppLifecycleState state) {
+    final wasForeground = _appForeground;
     _appForeground = state == AppLifecycleState.resumed;
+
     if (state == AppLifecycleState.resumed) {
+      // ✅ UI رجع للمقدمة
       if (!isLoggedIn) return;
       if (!_connected && !_networkWaitActive) {
-        _status('App resumed — checking connection...');
+        _status('App resumed — reconnecting...');
         _scheduleReconnect();
       }
-    } else {
-      _status('App paused');
+    } else if (wasForeground && !_appForeground) {
+      // ✅ UI راح للخلفية → افصل عشان الـ BG ياخد مكانه
+      _status('App paused — disconnecting for BG handover');
+      _lastCloseWasClean = false;
+      Future.delayed(const Duration(milliseconds: 800), () async {
+        if (_disposed || _appForeground) return;
+        if (!_connected) return;
+        _status('Closing connection (BG will take over)');
+        await _closeWebSocket();
+      });
     }
   }
 
@@ -1402,10 +1417,13 @@ class GgeClient {
   Future<List<AllyMember>> getAllianceMembers() =>
       allianceService.getMembers();
 
-  Future<int?> getMyAllianceId() => allianceService.getMyAllianceId();
+  Future<int?> getMyAllianceId() => allianceService.getAllianceId();
 
+  // ✅ MODIFIED: dispose — reset flags
   Future<void> dispose() async {
     _disposed = true;
+    _closingIntentionally = true;
+    _lastCloseWasClean = false;
     _pollingTimer?.cancel();
     _backgroundPollingActive = false;
     _networkWaitActive = false;
