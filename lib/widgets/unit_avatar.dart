@@ -6,11 +6,11 @@ import '../models.dart';
 import '../theme.dart';
 
 // ═══════════════════════════════════════════════════════════
-//  SPRITE DATA CLASSES & MAP (الـ 39 جندي)
+//  SPRITE DATA CLASSES & MAP (كل الجنود)
 // ═══════════════════════════════════════════════════════════
 class SpritePart {
   final double srcX, srcY, srcW, srcH;
-  final double x, y, scaleX, scaleY;
+  final double x, y, scaleX, scaleY, rotation;
   const SpritePart({
     required this.srcX,
     required this.srcY,
@@ -20,10 +20,12 @@ class SpritePart {
     required this.y,
     this.scaleX = 1,
     this.scaleY = 1,
+    this.rotation = 0,
   });
 }
 
 const Map<String, List<SpritePart>> unitSpriteData = {
+  // ═══ Barracks ═══
   'Barracks_Unit_Archer': [
     SpritePart(srcX: 1, srcY: 175, srcW: 92, srcH: 132, x: -94, y: -132),
     SpritePart(srcX: 1, srcY: 1, srcW: 43, srcH: 42, x: -46.9, y: -0.25, scaleX: 1.46, scaleY: 1.46),
@@ -98,8 +100,8 @@ const Map<String, List<SpritePart>> unitSpriteData = {
   ],
   'Barracks_Unit_Heavycrossbowman': [
     SpritePart(srcX: 73, srcY: 1, srcW: 48, srcH: 124, x: -84, y: -119),
-    SpritePart(srcX: 73, srcY: 127, srcW: 41, srcH: 95, x: -41.85, y: 0, scaleX: 1.29, scaleY: 1.29),
-    SpritePart(srcX: 1, srcY: 135, srcW: 42, srcH: 90, x: -41.85, y: 0, scaleX: 1.29, scaleY: 1.29),
+    SpritePart(srcX: 73, srcY: 127, srcW: 41, srcH: 95, x: -41.85, y: -94.75, scaleX: 1.29, scaleY: 1.29),
+    SpritePart(srcX: 1, srcY: 135, srcW: 42, srcH: 90, x: -41.85, y: -94.75, scaleX: 1.29, scaleY: 1.29),
     SpritePart(srcX: 1, srcY: 1, srcW: 70, srcH: 132, x: -70, y: -122),
   ],
   'Barracks_Unit_Kingsbowman': [
@@ -132,128 +134,168 @@ const Map<String, List<SpritePart>> unitSpriteData = {
     SpritePart(srcX: 1, srcY: 1, srcW: 40, srcH: 90, x: -37.7, y: -0.1, scaleX: 1.34, scaleY: 1.34),
     SpritePart(srcX: 1, srcY: 98, srcW: 64, srcH: 127, x: -64, y: -127),
   ],
-  'Eventunit_Unit_BerimondRewardRange': [
-    SpritePart(srcX: 88, srcY: 1, srcW: 96, srcH: 125, x: -100, y: -125),
-    SpritePart(srcX: 226, srcY: 1, srcW: 40, srcH: 92, x: -72.8, y: -122.84, scaleX: 1.34, scaleY: 1.34),
-    SpritePart(srcX: 186, srcY: 1, srcW: 38, srcH: 95, x: -72.01, y: -126.18, scaleX: 1.34, scaleY: 1.34),
-    SpritePart(srcX: 1, srcY: 1, srcW: 85, srcH: 126, x: -92, y: -126),
-  ],
-  'Eventunit_Unit_EliteBerimondRewardMelee': [
-    SpritePart(srcX: 1, srcY: 1, srcW: 85, srcH: 130, x: -83, y: -119),
-    SpritePart(srcX: 195, srcY: 41, srcW: 30, srcH: 38, x: -38.146, y: -45.2625, scaleX: 1.23, scaleY: 1.23),
-    SpritePart(srcX: 195, srcY: 1, srcW: 31, srcH: 38, x: -38.469, y: -45.324, scaleX: 1.23, scaleY: 1.23),
-    SpritePart(srcX: 88, srcY: 1, srcW: 105, srcH: 129, x: -103, y: -118),
-  ],
-  'Eventunit_Unit_EliteBerimondRewardRange': [
-    SpritePart(srcX: 1, srcY: 1, srcW: 101, srcH: 126, x: -103, y: -126),
-    SpritePart(srcX: 1, srcY: 258, srcW: 53, srcH: 92, x: -73.13, y: -123.49, scaleX: 1.34, scaleY: 1.34),
-    SpritePart(srcX: 56, srcY: 258, srcW: 38, srcH: 95, x: -71.91, y: -126.43, scaleX: 1.34, scaleY: 1.34),
-    SpritePart(srcX: 1, srcY: 129, srcW: 89, srcH: 127, x: -92, y: -127),
-  ],
-  'Eventunit_Unit_Eventcrossbowman': [
-    SpritePart(srcX: 1, srcY: 1, srcW: 86, srcH: 132, x: -88, y: -122),
-    SpritePart(srcX: 89, srcY: 1, srcW: 50, srcH: 111, x: -58.05, y: -111.75),
-    SpritePart(srcX: 1, srcY: 135, srcW: 59, srcH: 118, x: -59.45, y: -118.3),
-    SpritePart(srcX: 62, srcY: 135, srcW: 59, srcH: 117, x: -59, y: -118),
-  ],
-  'Eventunit_Unit_Eventknight': [
-    SpritePart(srcX: 49, srcY: 1, srcW: 84, srcH: 129, x: -84, y: -129),
-    SpritePart(srcX: 192, srcY: 1, srcW: 55, srcH: 126, x: -55.1, y: -125.7),
-    SpritePart(srcX: 1, srcY: 1, srcW: 46, srcH: 132, x: -46, y: -131.65),
-    SpritePart(srcX: 135, srcY: 1, srcW: 55, srcH: 131, x: -55, y: -131),
-  ],
-  'Eventunit_Unit_Renegadepikeman': [
-    SpritePart(srcX: 1, srcY: 1, srcW: 25, srcH: 18, x: -47.065, y: -103.682, scaleX: 1.14, scaleY: 1.14),
-    SpritePart(srcX: 28, srcY: 1, srcW: 43, srcH: 34, x: -47.489, y: -29.709, scaleX: 1.14, scaleY: 1.14),
-    SpritePart(srcX: 1, srcY: 37, srcW: 98, srcH: 132, x: -97, y: -123),
-  ],
-  'Eventunit_Unit_Renegadespearthrower': [
-    SpritePart(srcX: 87, srcY: 1, srcW: 29, srcH: 63, x: -36.73, y: -76.39, scaleX: 1.27, scaleY: 1.27),
-    SpritePart(srcX: 87, srcY: 66, srcW: 17, srcH: 24, x: -34.2585, y: -26.29, scaleX: 1.27, scaleY: 1.27),
-    SpritePart(srcX: 1, srcY: 1, srcW: 84, srcH: 132, x: -84, y: -123),
-  ],
-  'Eventunit_Unit_Saberslasher': [
-    SpritePart(srcX: 1, srcY: 353, srcW: 99, srcH: 78, x: -103.75, y: -78.6),
-    SpritePart(srcX: 1, srcY: 1, srcW: 162, srcH: 233, x: -163, y: -233),
-    SpritePart(srcX: 1, srcY: 236, srcW: 102, srcH: 115, x: -106.85, y: -155.7),
-    SpritePart(srcX: 105, srcY: 236, srcW: 83, srcH: 161, x: -102, y: -163),
-  ],
-  'Eventunit_Unit_SamuraiAttackerMelee': [
-    SpritePart(srcX: 1, srcY: 337, srcW: 96, srcH: 128, x: -95.6, y: -126.7),
-    SpritePart(srcX: 1, srcY: 212, srcW: 101, srcH: 123, x: -100.2, y: -121.05),
-    SpritePart(srcX: 1, srcY: 135, srcW: 105, srcH: 75, x: -104.35, y: -73.05),
-    SpritePart(srcX: 1, srcY: 1, srcW: 117, srcH: 132, x: -117, y: -130),
-  ],
-  'Eventunit_Unit_SamuraiDefenderRange': [
-    SpritePart(srcX: 1, srcY: 382, srcW: 70, srcH: 74, x: -70.05, y: -74.3),
-    SpritePart(srcX: 1, srcY: 130, srcW: 108, srcH: 132, x: -108, y: -132),
-    SpritePart(srcX: 1, srcY: 264, srcW: 97, srcH: 116, x: -96.55, y: -115.75),
-    SpritePart(srcX: 1, srcY: 1, srcW: 110, srcH: 127, x: -110, y: -127),
-  ],
-  'Eventunit_Unit_Slingshotmarksman': [
-    SpritePart(srcX: 1, srcY: 134, srcW: 62, srcH: 85, x: -122.99, y: -129.48, scaleX: 1.49, scaleY: 1.49),
-    SpritePart(srcX: 65, srcY: 134, srcW: 84, srcH: 62, x: -117.229, y: -90.489, scaleX: 1.49, scaleY: 1.49),
-    SpritePart(srcX: 1, srcY: 1, srcW: 131, srcH: 131, x: -123, y: -129),
-  ],
-  'Eventunit_Unit_VeteranSaberslasher': [
-    SpritePart(srcX: 1, srcY: 1, srcW: 444, srcH: 600, x: -450, y: -600),
-    SpritePart(srcX: 306, srcY: 603, srcW: 242, srcH: 211, x: -242.5, y: -218.35),
-    SpritePart(srcX: 306, srcY: 816, srcW: 245, srcH: 187, x: -303.55, y: -356.75),
-    SpritePart(srcX: 1, srcY: 603, srcW: 303, srcH: 351, x: -303, y: -357),
-  ],
-  'Eventunit_Unit_VeteranSlingshotmarksman': [
-    SpritePart(srcX: 1, srcY: 1, srcW: 460, srcH: 490, x: -460, y: -486),
-    SpritePart(srcX: 1, srcY: 493, srcW: 411, srcH: 117, x: -463.2, y: -113.8),
-    SpritePart(srcX: 463, srcY: 463, srcW: 143, srcH: 118, x: -267.45, y: -458.2),
-    SpritePart(srcX: 463, srcY: 1, srcW: 407, srcH: 460, x: -458, y: -456),
-  ],
   'Barracks_Unit_Mace': [
     SpritePart(srcX: 1, srcY: 1, srcW: 87, srcH: 132, x: -87, y: -118),
-    SpritePart(srcX: 41, srcY: 175, srcW: 27, srcH: 35, x: -38.222, y: -41.88, scaleX: 1.34, scaleY: 1.34),
-    SpritePart(srcX: 41, srcY: 135, srcW: 27, srcH: 38, x: -38.021, y: -45.833, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 41, srcY: 175, srcW: 27, srcH: 35, x: -43.85, y: -52.6, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 41, srcY: 135, srcW: 27, srcH: 38, x: -43.85, y: -52.6, scaleX: 1.34, scaleY: 1.34),
     SpritePart(srcX: 1, srcY: 135, srcW: 38, srcH: 67, x: -38, y: -53),
   ],
   'Barracks_Unit_Speerman': [
     SpritePart(srcX: 1, srcY: 1, srcW: 80, srcH: 132, x: -80, y: -123),
-    SpritePart(srcX: 59, srcY: 193, srcW: 55, srcH: 44, x: -57.95, y: -61.1),
-    SpritePart(srcX: 59, srcY: 135, srcW: 54, srcH: 56, x: -58.85, y: -55.7),
+    SpritePart(srcX: 59, srcY: 193, srcW: 55, srcH: 44, x: -51.05, y: -55.65),
+    SpritePart(srcX: 59, srcY: 135, srcW: 54, srcH: 56, x: -52.05, y: -48.75),
     SpritePart(srcX: 1, srcY: 135, srcW: 56, srcH: 61, x: -59, y: -61),
   ],
   'Barracks_Unit_Swordman': [
     SpritePart(srcX: 1, srcY: 1, srcW: 86, srcH: 132, x: -86, y: -115),
-    SpritePart(srcX: 47, srcY: 198, srcW: 51, srcH: 44, x: -54.25, y: -37.4),
-    SpritePart(srcX: 1, srcY: 198, srcW: 44, srcH: 51, x: -50.5, y: -40.45),
+    SpritePart(srcX: 47, srcY: 198, srcW: 51, srcH: 44, x: -48, y: -31.85),
+    SpritePart(srcX: 1, srcY: 198, srcW: 44, srcH: 51, x: -45.1, y: -34.1),
     SpritePart(srcX: 1, srcY: 135, srcW: 58, srcH: 61, x: -58, y: -43),
   ],
   'Barracks_Unit_Twohandedsword': [
     SpritePart(srcX: 160, srcY: 1, srcW: 82, srcH: 132, x: -82, y: -121),
-    SpritePart(srcX: 52, srcY: 1, srcW: 52, srcH: 113, x: -55.7, y: -112.2),
-    SpritePart(srcX: 1, srcY: 1, srcW: 49, srcH: 106, x: -52.4, y: -118.8),
+    SpritePart(srcX: 52, srcY: 1, srcW: 52, srcH: 113, x: -49.6, y: -99),
+    SpritePart(srcX: 1, srcY: 1, srcW: 49, srcH: 106, x: -46.65, y: -106.3),
     SpritePart(srcX: 106, srcY: 1, srcW: 52, srcH: 119, x: -56, y: -118),
   ],
+  'Barracks_Unit_Elitelongbowman': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 85, srcH: 132, x: -85, y: -132),
+    SpritePart(srcX: 41, srcY: 135, srcW: 38, srcH: 95, x: -66.15, y: -127.45, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 81, srcY: 135, srcW: 40, srcH: 92, x: -67.15, y: -123.45, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 123, srcY: 120, srcW: 39, srcH: 68, x: -31.7, y: -48.75, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 1, srcY: 135, srcW: 38, srcH: 95, x: -65.4, y: -127.2, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 123, srcY: 190, srcW: 12, srcH: 36, x: -67.15, y: -126.1, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 88, srcY: 1, srcW: 63, srcH: 117, x: -64.8, y: -116.7),
+  ],
+  'Barracks_Unit_Eliteheavycrossbowman': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 72, srcH: 124, x: -85, y: -119),
+    SpritePart(srcX: 266, srcY: 1, srcW: 42, srcH: 90, x: -57.627, y: -115.95, scaleX: 1.29, scaleY: 1.29),
+    SpritePart(srcX: 182, srcY: 1, srcW: 41, srcH: 95, x: -56.2725, y: -122.0775, scaleX: 1.29, scaleY: 1.29),
+    SpritePart(srcX: 125, srcY: 1, srcW: 55, srcH: 122, x: -58, y: -122),
+    SpritePart(srcX: 225, srcY: 1, srcW: 39, srcH: 94, x: -32.5, y: -40.25, scaleX: 1.29, scaleY: 1.29),
+    SpritePart(srcX: 266, srcY: 93, srcW: 23, srcH: 31, x: -53.6, y: -121.9, scaleX: 1.29, scaleY: 1.29),
+    SpritePart(srcX: 1, srcY: 1, srcW: 72, srcH: 124, x: -57.55, y: -120.9),
+    SpritePart(srcX: 75, srcY: 1, srcW: 48, srcH: 124, x: -72, y: -114),
+  ],
+
+  // ═══ Eventunit ═══
+  'Eventunit_Unit_BerimondRewardRange': [
+    SpritePart(srcX: 88, srcY: 1, srcW: 96, srcH: 125, x: -100, y: -125),
+    SpritePart(srcX: 226, srcY: 1, srcW: 40, srcH: 92, x: -46, y: -61.2, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 186, srcY: 1, srcW: 38, srcH: 95, x: -46.55, y: -63.2, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 1, srcY: 1, srcW: 85, srcH: 126, x: -92, y: -126),
+  ],
+  'Eventunit_Unit_EliteBerimondRewardMelee': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 85, srcH: 130, x: -83, y: -119),
+    SpritePart(srcX: 195, srcY: 41, srcW: 30, srcH: 38, x: -19.45, y: -22.2, scaleX: 1.23, scaleY: 1.23),
+    SpritePart(srcX: 195, srcY: 1, srcW: 31, srcH: 38, x: -19.65, y: -22.2, scaleX: 1.23, scaleY: 1.23),
+    SpritePart(srcX: 88, srcY: 1, srcW: 105, srcH: 129, x: -103, y: -118),
+  ],
+  'Eventunit_Unit_EliteBerimondRewardRange': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 101, srcH: 126, x: -103, y: -126),
+    SpritePart(srcX: 1, srcY: 258, srcW: 53, srcH: 92, x: -36.95, y: -61.85, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 56, srcY: 258, srcW: 38, srcH: 95, x: -46.45, y: -63.45, scaleX: 1.34, scaleY: 1.34),
+    SpritePart(srcX: 1, srcY: 129, srcW: 89, srcH: 127, x: -92, y: -127),
+  ],
+  'Eventunit_Unit_Eventcrossbowman': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 86, srcH: 132, x: -88, y: -122),
+    SpritePart(srcX: 89, srcY: 1, srcW: 50, srcH: 111, x: -51.95, y: -98.1),
+    SpritePart(srcX: 1, srcY: 135, srcW: 59, srcH: 118, x: -52.2, y: -103.8),
+    SpritePart(srcX: 62, srcY: 135, srcW: 59, srcH: 117, x: -59, y: -118),
+  ],
+  'Eventunit_Unit_Eventknight': [
+    SpritePart(srcX: 49, srcY: 1, srcW: 84, srcH: 129, x: -84, y: -129),
+    SpritePart(srcX: 192, srcY: 1, srcW: 55, srcH: 126, x: -27.55, y: -62.8),
+    SpritePart(srcX: 1, srcY: 1, srcW: 46, srcH: 132, x: -23, y: -65.75),
+    SpritePart(srcX: 135, srcY: 1, srcW: 55, srcH: 131, x: -55, y: -131),
+  ],
+  'Eventunit_Unit_Khanguard': [
+    SpritePart(srcX: 1, srcY: 233, srcW: 78, srcH: 95, x: -54, y: -66, scaleX: 1.39, scaleY: 1.39),
+    SpritePart(srcX: 1, srcY: 135, srcW: 92, srcH: 96, x: -46.1, y: -47.9),
+    SpritePart(srcX: 1, srcY: 1, srcW: 114, srcH: 132, x: -114, y: -132),
+  ],
+  'Eventunit_Unit_Renegadepikeman': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 25, srcH: 18, x: -33.1, y: -93.65, scaleX: 1.14, scaleY: 1.14),
+    SpritePart(srcX: 28, srcY: 1, srcW: 43, srcH: 34, x: -23.15, y: -10.5, scaleX: 1.14, scaleY: 1.14),
+    SpritePart(srcX: 1, srcY: 37, srcW: 98, srcH: 132, x: -97, y: -123),
+  ],
+  'Eventunit_Unit_Renegadepiraterange': [
+    SpritePart(srcX: 1, srcY: 190, srcW: 95, srcH: 109, x: -103.55, y: -109),
+    SpritePart(srcX: 1, srcY: 1, srcW: 5, srcH: 26, x: -31.65, y: -67.4, scaleX: 1.17, scaleY: 1.17, rotation: 156.52),
+    SpritePart(srcX: 1, srcY: 1, srcW: 5, srcH: 26, x: -27.65, y: -70.6, scaleX: 1.17, scaleY: 1.17, rotation: 160.25),
+    SpritePart(srcX: 1, srcY: 1, srcW: 5, srcH: 26, x: -36.15, y: -63.95, scaleX: 1.17, scaleY: 1.17, rotation: 152.38),
+    SpritePart(srcX: 1, srcY: 1, srcW: 5, srcH: 26, x: -40.95, y: -60.1, scaleX: 1.17, scaleY: 1.17, rotation: 152.38),
+    SpritePart(srcX: 1, srcY: 1, srcW: 5, srcH: 26, x: -45.1, y: -55.25, scaleX: 1.17, scaleY: 1.17, rotation: 152.38),
+    SpritePart(srcX: 1, srcY: 1, srcW: 5, srcH: 26, x: -49.45, y: -50.5, scaleX: 1.17, scaleY: 1.17, rotation: 148.45),
+    SpritePart(srcX: 1, srcY: 79, srcW: 97, srcH: 119, x: -96.55, y: -132),
+    SpritePart(srcX: 8, srcY: 1, srcW: 8, srcH: 46, x: -76.65, y: -97.05, rotation: -9.02),
+    SpritePart(srcX: 18, srcY: 1, srcW: 72, srcH: 76, x: -72.55, y: -76),
+  ],
+  'Eventunit_Unit_Renegadespearthrower': [
+    SpritePart(srcX: 87, srcY: 66, srcW: 17, srcH: 24, x: -23.4, y: -11.05, scaleX: 1.27, scaleY: 1.27),
+    SpritePart(srcX: 87, srcY: 1, srcW: 29, srcH: 63, x: -18.95, y: -35.75, scaleX: 1.27, scaleY: 1.27),
+    SpritePart(srcX: 1, srcY: 1, srcW: 84, srcH: 132, x: -84, y: -123),
+  ],
+  'Eventunit_Unit_Saberslasher': [
+    SpritePart(srcX: 1, srcY: 236, srcW: 102, srcH: 115, x: -55.85, y: -98.25),
+    SpritePart(srcX: 1, srcY: 1, srcW: 162, srcH: 233, x: -163, y: -233),
+    SpritePart(srcX: 1, srcY: 353, srcW: 99, srcH: 78, x: -54.3, y: -39.5),
+    SpritePart(srcX: 105, srcY: 236, srcW: 83, srcH: 161, x: -102, y: -163),
+  ],
+  'Eventunit_Unit_SamuraiAttackerMelee': [
+    SpritePart(srcX: 1, srcY: 337, srcW: 96, srcH: 128, x: -95.6, y: -126.7),
+    SpritePart(srcX: 1, srcY: 212, srcW: 101, srcH: 123, x: -49.9, y: -59.7),
+    SpritePart(srcX: 1, srcY: 135, srcW: 105, srcH: 75, x: -51.95, y: -35.75),
+    SpritePart(srcX: 1, srcY: 1, srcW: 117, srcH: 132, x: -117, y: -130),
+  ],
+  'Eventunit_Unit_SamuraiDefenderRange': [
+    SpritePart(srcX: 1, srcY: 130, srcW: 108, srcH: 132, x: -108, y: -132),
+    SpritePart(srcX: 1, srcY: 264, srcW: 97, srcH: 116, x: -48.2, y: -57.85),
+    SpritePart(srcX: 1, srcY: 382, srcW: 70, srcH: 74, x: -35, y: -37.1),
+    SpritePart(srcX: 1, srcY: 1, srcW: 110, srcH: 127, x: -110, y: -127),
+  ],
+  'Eventunit_Unit_Slingshotmarksman': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 131, srcH: 131, x: -123, y: -129),
+    SpritePart(srcX: 1, srcY: 134, srcW: 62, srcH: 85, x: -76.8, y: -66.9, scaleX: 1.49, scaleY: 1.49),
+    SpritePart(srcX: 65, srcY: 134, srcW: 84, srcH: 62, x: -54.5, y: -44.15, scaleX: 1.49, scaleY: 1.49),
+  ],
+  'Eventunit_Unit_VeteranSaberslasher': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 444, srcH: 600, x: -450, y: -600),
+    SpritePart(srcX: 306, srcY: 816, srcW: 245, srcH: 187, x: -181.25, y: -263.35),
+    SpritePart(srcX: 306, srcY: 603, srcW: 242, srcH: 211, x: -121.35, y: -112.7),
+    SpritePart(srcX: 1, srcY: 603, srcW: 303, srcH: 351, x: -303, y: -357),
+  ],
+  'Eventunit_Unit_VeteranSlingshotmarksman': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 460, srcH: 490, x: -460, y: -486),
+    SpritePart(srcX: 1, srcY: 493, srcW: 411, srcH: 117, x: -257.5, y: -55.2),
+    SpritePart(srcX: 463, srcY: 463, srcW: 143, srcH: 118, x: -195.75, y: -399.4),
+    SpritePart(srcX: 463, srcY: 1, srcW: 407, srcH: 460, x: -458, y: -456),
+  ],
+  'Eventunit_Unit_BerimondRewardMelee': [
+    SpritePart(srcX: 1, srcY: 1, srcW: 103, srcH: 131, x: -103, y: -113),
+    SpritePart(srcX: 77, srcY: 174, srcW: 30, srcH: 38, x: -21.9, y: -15.3, scaleX: 1.25, scaleY: 1.25),
+    SpritePart(srcX: 77, srcY: 134, srcW: 31, srcH: 38, x: -22.1, y: -15.3, scaleX: 1.25, scaleY: 1.25),
+    SpritePart(srcX: 1, srcY: 134, srcW: 74, srcH: 132, x: -74, y: -114),
+  ],
+
+  // ═══ Dworkshop ═══
   'Dworkshop_Unit_Dollmelee': [
     SpritePart(srcX: 1, srcY: 1, srcW: 117, srcH: 132, x: -58, y: -66),
-    SpritePart(srcX: 62, srcY: 135, srcW: 59, srcH: 70, x: -16.1, y: -26.45),
-    SpritePart(srcX: 62, srcY: 207, srcW: 59, srcH: 66, x: -16.1, y: -28.4),
+    SpritePart(srcX: 62, srcY: 135, srcW: 59, srcH: 70, x: -27.05, y: -34.2),
+    SpritePart(srcX: 62, srcY: 207, srcW: 59, srcH: 66, x: -27.05, y: -34),
     SpritePart(srcX: 1, srcY: 135, srcW: 59, srcH: 97, x: -16, y: -55),
   ],
   'Dworkshop_Unit_Dollrange': [
     SpritePart(srcX: 1, srcY: 1, srcW: 132, srcH: 117, x: -64.25, y: -56.8),
-    SpritePart(srcX: 123, srcY: 120, srcW: 59, srcH: 71, x: -7.4, y: -33.65),
-    SpritePart(srcX: 135, srcY: 1, srcW: 59, srcH: 67, x: -7.4, y: -31.35),
+    SpritePart(srcX: 123, srcY: 120, srcW: 59, srcH: 71, x: 5.8, y: -17.85),
+    SpritePart(srcX: 135, srcY: 1, srcW: 59, srcH: 67, x: 5.8, y: -16.4),
     SpritePart(srcX: 1, srcY: 120, srcW: 120, srcH: 98, x: -68, y: -60.55),
   ],
   'Dworkshop_Unit_Premiumdollrange': [
     SpritePart(srcX: 1, srcY: 1, srcW: 132, srcH: 130, x: -66, y: -65),
-    SpritePart(srcX: 1, srcY: 265, srcW: 59, srcH: 71, x: -29.6, y: -35.45),
-    SpritePart(srcX: 62, srcY: 265, srcW: 59, srcH: 67, x: -29.6, y: -33.45),
+    SpritePart(srcX: 1, srcY: 265, srcW: 59, srcH: 71, x: -50.25, y: -41.6),
+    SpritePart(srcX: 62, srcY: 265, srcW: 59, srcH: 67, x: -50.25, y: -41.85),
     SpritePart(srcX: 1, srcY: 133, srcW: 131, srcH: 130, x: -65, y: -65),
-  ],
-  'Eventunit_Unit_BerimondRewardMelee': [
-    SpritePart(srcX: 1, srcY: 1, srcW: 103, srcH: 131, x: -103, y: -113),
-    SpritePart(srcX: 77, srcY: 174, srcW: 30, srcH: 38, x: -40.9, y: -38.7375, scaleX: 1.25, scaleY: 1.25),
-    SpritePart(srcX: 77, srcY: 134, srcW: 31, srcH: 38, x: -41.225, y: -38.8, scaleX: 1.25, scaleY: 1.25),
-    SpritePart(srcX: 1, srcY: 134, srcW: 74, srcH: 132, x: -74, y: -114),
   ],
 };
 
@@ -304,7 +346,6 @@ class _UnitAvatarState extends State<UnitAvatar> {
       return;
     }
 
-    // استخراج اسم الفولدر من الرابط
     final match = RegExp(r'/([^/]+)/[^/]+--\d+\.(webp|png)$').firstMatch(url);
     final folderName = match?.group(1);
 
@@ -343,7 +384,6 @@ class _UnitAvatarState extends State<UnitAvatar> {
         ),
       );
     } else if (_image != null && _parts != null) {
-      // الصورة اتجمعت بنجاح
       child = CustomPaint(
         painter: SpritePainter(_image!, _parts!),
         size: Size(widget.size, widget.size),
@@ -351,7 +391,6 @@ class _UnitAvatarState extends State<UnitAvatar> {
     } else if (url == null || url.isEmpty) {
       child = _iconFallback(color);
     } else {
-      // صورة عادية
       child = Padding(
         padding: EdgeInsets.all(widget.size * 0.06),
         child: Image.network(
@@ -434,17 +473,18 @@ class SpritePainter extends CustomPainter {
     final scale = math.min(size.width / totalW, size.height / totalH);
 
     canvas.save();
-    // توسيط الصورة في المربع
     canvas.translate(size.width / 2, size.height / 2);
     canvas.scale(scale);
     canvas.translate(-(minX + maxX) / 2, -(minY + maxY) / 2);
 
     final paint = Paint()..filterQuality = FilterQuality.high;
 
-    // رسم القطع فوق بعض
     for (final p in parts) {
       canvas.save();
       canvas.translate(p.x, p.y);
+      if (p.rotation != 0) {
+        canvas.rotate(p.rotation * math.pi / 180.0);
+      }
       canvas.scale(p.scaleX, p.scaleY);
       final srcRect = Rect.fromLTWH(p.srcX, p.srcY, p.srcW, p.srcH);
       final dstRect = Rect.fromLTWH(0, 0, p.srcW, p.srcH);
