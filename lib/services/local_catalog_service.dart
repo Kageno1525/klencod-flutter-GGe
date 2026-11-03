@@ -5,7 +5,6 @@ import '../gge_client.dart';
 
 class LocalCatalogService {
   static Map<int, UnitCatalogEntry>? _cache;
-
   static Map<int, UnitCatalogEntry>? get cache => _cache;
 
   static Future<Map<int, UnitCatalogEntry>> load({bool force = false}) async {
@@ -20,25 +19,25 @@ class LocalCatalogService {
       final id = _i(item['ID']);
       if (id <= 0) continue;
 
-      final ra = _i(item['Ranged Attack (هجوم عن بعد)']);
-      final ma = _i(item['Melee Attack (هجوم قريب)']);
-      final rd = _i(item['Ranged Defence (دفاع عن بعد)']);
-      final md = _i(item['Melee Defence (دفاع قريب)']);
-      final spd = _i(item['Speed (السرعة)']);
-      final loot = _i(item['Loot (الغنيمة)']);
-      final might = _i(item['Might (البأس)']);
-      final food = _i(item['Food Consumption (استهلاك الطعام)']);
+      // ✅ يدعم الشكلين (مفاتيح بسيطة أو مع لاحقة عربية)
+      final ra = _readStat(item, 'Ranged Attack', 'Ranged Attack (هجوم عن بعد)');
+      final ma = _readStat(item, 'Melee Attack', 'Melee Attack (هجوم قريب)');
+      final rd = _readStat(item, 'Ranged Defence', 'Ranged Defence (دفاع عن بعد)');
+      final md = _readStat(item, 'Melee Defence', 'Melee Defence (دفاع قريب)');
+      final spd = _readStat(item, 'Speed', 'Speed (السرعة)');
+      final loot = _readStat(item, 'Loot', 'Loot (الغنيمة)');
+      final might = _readStat(item, 'Might', 'Might (البأس)');
+      final food = _readStat(item, 'Food', 'Food Consumption (استهلاك الطعام)');
 
       final url = (item['Image URL'] ?? '').toString();
       final type = _typeFromUrl(url);
       final role = _roleFromStats(ra, ma);
       final fightType = _deriveFightType(ra, ma, rd, md);
 
-      // ✅ استخراج الـ level من الاسم لو موجود، أو من الـ Level field
-      final rawName = (item['Name (الاسم)'] ?? '').toString().trim();
+      // ✅ يدعم مفتاح الاسم بالعربي أو الإنجليزي
+      final rawName =
+          (item['Name (الاسم)'] ?? item['Name'] ?? '').toString().trim();
       final level = _extractLevel(rawName, item['Level']);
-
-      // ✅ شيل "(Lvl.X)" من الاسم
       final cleanName = rawName
           .replaceAll(RegExp(r'\s*\(Lvl\.\d+\)\s*$'), '')
           .trim();
@@ -65,6 +64,16 @@ class LocalCatalogService {
     _cache = out;
     TrafficLog.add('ST',
         '[LocalCatalog] Loaded ${out.length} units from assets');
+
+    // ✅ سطر تشخيصي: بيطبع أول جندي مع الإحصائيات
+    if (out.isNotEmpty) {
+      final first = out.values.first;
+      TrafficLog.add('ST',
+          '[LocalCatalog] Sample: ${first.displayName} Lv${first.level} '
+          'RA=${first.rangedAttack} MA=${first.meleeAttack} '
+          'RD=${first.rangedDefence} MD=${first.meleeDefence}');
+    }
+
     return out;
   }
 
@@ -77,7 +86,13 @@ class LocalCatalogService {
     return 0;
   }
 
-  /// ✅ استخراج الـ level من الاسم (الأولوية) أو من Level field
+  /// ✅ يقرأ قيمة stat بمفتاح إنجليزي بسيط أو عربي
+  static int _readStat(Map item, String keyEn, [String? keyAr]) {
+    if (item.containsKey(keyEn)) return _i(item[keyEn]);
+    if (keyAr != null && item.containsKey(keyAr)) return _i(item[keyAr]);
+    return 0;
+  }
+
   static int _extractLevel(String rawName, dynamic levelField) {
     final m = RegExp(r'\(Lvl\.(\d+)\)\s*$').firstMatch(rawName);
     if (m != null) return int.tryParse(m.group(1)!) ?? 0;
