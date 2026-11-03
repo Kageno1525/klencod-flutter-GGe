@@ -15,6 +15,28 @@ void openUnitCatalog(BuildContext context, UnitCatalogEntry? info) {
   );
 }
 
+/// Wraps a list of `UnitCatalogEntry` that share the same display name
+/// (i.e. same unit at different levels).
+class _UnitGroup {
+  final String displayName;
+  final List<UnitCatalogEntry> entries;
+
+  _UnitGroup({required this.displayName, required this.entries});
+
+  UnitCatalogEntry get baseEntry => entries.first;
+  int get count => entries.length;
+  bool get hasMultipleLevels => entries.length > 1;
+
+  int get minLevel => entries.map((e) => e.level).reduce((a, b) => a < b ? a : b);
+  int get maxLevel => entries.map((e) => e.level).reduce((a, b) => a > b ? a : b);
+
+  String get levelRangeLabel {
+    if (count == 1) return 'Lvl ${baseEntry.level}';
+    if (minLevel == maxLevel) return 'Lvl $minLevel';
+    return 'Lvl $minLevel-$maxLevel';
+  }
+}
+
 class UnitCatalogScreen extends StatefulWidget {
   final int? focusedWodId;
   const UnitCatalogScreen({super.key, this.focusedWodId});
@@ -24,8 +46,8 @@ class UnitCatalogScreen extends StatefulWidget {
 }
 
 class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
-  List<UnitCatalogEntry> _all = [];
-  List<UnitCatalogEntry> _filtered = [];
+  List<_UnitGroup> _groups = [];
+  List<_UnitGroup> _filtered = [];
   bool _loading = true;
   String _query = '';
   String _roleFilter = 'all';
@@ -49,26 +71,50 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
 
   Future<void> _load() async {
     final map = await LocalCatalogService.load();
-    final list = map.values.toList()
-      ..sort((a, b) => a.wodId.compareTo(b.wodId));
+
+    // Group by display name
+    final rawGroups = <String, List<UnitCatalogEntry>>{};
+    for (final u in map.values) {
+      rawGroups.putIfAbsent(u.displayName, () => []).add(u);
+    }
+
+    final groups = rawGroups.values.map((entries) {
+      entries.sort((a, b) {
+        final byLevel = a.level.compareTo(b.level);
+        if (byLevel != 0) return byLevel;
+        return a.wodId.compareTo(b.wodId);
+      });
+      return _UnitGroup(
+        displayName: entries.first.displayName,
+        entries: entries,
+      );
+    }).toList()
+      ..sort((a, b) => a.displayName.compareTo(b.displayName));
+
     if (!mounted) return;
     setState(() {
-      _all = list;
+      _groups = groups;
       _loading = false;
       _applyFilters();
     });
 
-    if (_focusId != null && list.isNotEmpty) {
-      UnitCatalogEntry? target;
-      try {
-        target = list.firstWhere((u) => u.wodId == _focusId);
-      } catch (_) {
-        target = null;
+    // If focusedWodId is set, open the group details at that specific level
+    if (_focusId != null && _groups.isNotEmpty) {
+      _UnitGroup? targetGroup;
+      int targetIdx = 0;
+      for (final g in _groups) {
+        final idx = g.entries.indexWhere((e) => e.wodId == _focusId);
+        if (idx >= 0) {
+          targetGroup = g;
+          targetIdx = idx;
+          break;
+        }
       }
-      if (target != null) {
-        final t = target;
+      if (targetGroup != null) {
+        final tg = targetGroup;
+        final ti = targetIdx;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showDetail(t);
+          if (mounted) _showDetail(tg, initialIndex: ti);
         });
       }
     }
@@ -76,18 +122,36 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
 
   void _applyFilters() {
     final q = _query.trim().toLowerCase();
-    _filtered = _all.where((u) {
-      if (_roleFilter != 'all' && u.role != _roleFilter) return false;
+    _filtered = _groups.where((g) {
+      if (_roleFilter != 'all') {
+        if (!g.entries.any((e) => e.role == _roleFilter)) return false;
+      }
       if (_typeFilter != 'all') {
-        final t = u.fightType;
-        if (_typeFilter == 'offense' && t != 0) return false;
-        if (_typeFilter == 'defense' && t != 1) return false;
-        if (_typeFilter == 'mixed' && t != null) return false;
+        bool typeMatch = false;
+        for (final e in g.entries) {
+          final t = e.fightType;
+          if (_typeFilter == 'offense' && t == 0) {
+            typeMatch = true;
+            break;
+          }
+          if (_typeFilter == 'defense' && t == 1) {
+            typeMatch = true;
+            break;
+          }
+          if (_typeFilter == 'mixed' && t == null) {
+            typeMatch = true;
+            break;
+          }
+        }
+        if (!typeMatch) return false;
       }
       if (q.isEmpty) return true;
-      return u.displayName.toLowerCase().contains(q) ||
-          u.wodId.toString().contains(q) ||
-          (u.type ?? '').toLowerCase().contains(q);
+      if (g.displayName.toLowerCase().contains(q)) return true;
+      for (final e in g.entries) {
+        if (e.wodId.toString().contains(q)) return true;
+        if ((e.type ?? '').toLowerCase().contains(q)) return true;
+      }
+      return false;
     }).toList();
   }
 
@@ -107,7 +171,8 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
                 Expanded(
                   child: _loading
                       ? const Center(
-                          child: CircularProgressIndicator(color: AppTheme.purple),
+                          child: CircularProgressIndicator(
+                              color: AppTheme.purple),
                         )
                       : _filtered.isEmpty
                           ? Center(
@@ -120,10 +185,12 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
                               ),
                             )
                           : ListView.builder(
-                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 8, 16, 24),
                               itemCount: _filtered.length,
                               itemBuilder: (_, i) => FadeSlideIn(
-                                delay: Duration(milliseconds: 20 + (i % 10) * 30),
+                                delay: Duration(
+                                    milliseconds: 20 + (i % 10) * 30),
                                 child: _unitCard(_filtered[i]),
                               ),
                             ),
@@ -161,7 +228,7 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
                   ),
                 ),
                 Text(
-                  '${_filtered.length} / ${_all.length}',
+                  '${_filtered.length} / ${_groups.length}',
                   style: TextStyle(
                     fontSize: 11,
                     color: AppTheme.subTextColor(context),
@@ -188,7 +255,8 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
         style: TextStyle(color: AppTheme.textColor(context)),
         decoration: InputDecoration(
           hintText: 'ابحث بالاسم أو الرقم...',
-          prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.purple),
+          prefixIcon:
+              const Icon(Icons.search_rounded, color: AppTheme.purple),
           suffixIcon: _query.isEmpty
               ? null
               : IconButton(
@@ -277,7 +345,9 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
-          color: selected ? color.withOpacity(0.2) : Colors.white.withOpacity(0.04),
+          color: selected
+              ? color.withOpacity(0.2)
+              : Colors.white.withOpacity(0.04),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: selected ? color : Colors.grey.withOpacity(0.2),
@@ -297,54 +367,83 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
     );
   }
 
-  Widget _unitCard(UnitCatalogEntry u) {
-    final accent = u.fightType == 0
+  Widget _unitCard(_UnitGroup g) {
+    final base = g.baseEntry;
+    final accent = base.fightType == 0
         ? AppTheme.red
-        : u.fightType == 1
+        : base.fightType == 1
             ? AppTheme.teal
             : AppTheme.orange;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: GestureDetector(
-        onTap: () => _showDetail(u),
+        onTap: () => _showDetail(g),
         child: AppTheme.glassCard(
           context: context,
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
-              UnitAvatar(info: u, size: 64),
+              UnitAvatar(info: base, size: 64),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      u.displayName,
-                      style: TextStyle(
-                        color: AppTheme.textColor(context),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                        decoration: TextDecoration.none,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            g.displayName,
+                            style: TextStyle(
+                              color: AppTheme.textColor(context),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                              decoration: TextDecoration.none,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (g.hasMultipleLevels) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppTheme.blue.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                  color: AppTheme.blue.withOpacity(0.4)),
+                            ),
+                            child: Text(
+                              g.levelRangeLabel,
+                              style: const TextStyle(
+                                color: AppTheme.blue,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                decoration: TextDecoration.none,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Row(children: [
                       _pill(
-                        u.role == 'ranged'
+                        base.role == 'ranged'
                             ? 'بعيد'
-                            : u.role == 'melee'
+                            : base.role == 'melee'
                                 ? 'قريب'
                                 : '—',
-                        u.role == 'ranged' ? AppTheme.teal : AppTheme.red,
+                        base.role == 'ranged' ? AppTheme.teal : AppTheme.red,
                       ),
                       const SizedBox(width: 6),
                       _pill(
-                        u.fightType == 0
+                        base.fightType == 0
                             ? 'هجومي'
-                            : u.fightType == 1
+                            : base.fightType == 1
                                 ? 'دفاعي'
                                 : 'مختلط',
                         accent,
@@ -352,7 +451,7 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
                     ]),
                     const SizedBox(height: 6),
                     Text(
-                      'ATK ${u.rangedAttack + u.meleeAttack} · DEF ${u.rangedDefence + u.meleeDefence}',
+                      'ATK ${base.rangedAttack + base.meleeAttack} · DEF ${base.rangedDefence + base.meleeDefence}',
                       style: TextStyle(
                         color: AppTheme.subTextColor(context),
                         fontSize: 10.5,
@@ -389,25 +488,60 @@ class _UnitCatalogScreenState extends State<UnitCatalogScreen> {
         ),
       );
 
-  void _showDetail(UnitCatalogEntry u) {
+  void _showDetail(_UnitGroup group, {int initialIndex = 0}) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _UnitDetailSheet(unit: u),
+      builder: (_) => _UnitDetailSheet(
+        group: group,
+        initialIndex: initialIndex,
+      ),
     );
   }
 }
 
-class _UnitDetailSheet extends StatelessWidget {
-  final UnitCatalogEntry unit;
-  const _UnitDetailSheet({required this.unit});
+// ═══════════════════════════════════════════
+//  Detail Sheet (with level selector)
+// ═══════════════════════════════════════════
+class _UnitDetailSheet extends StatefulWidget {
+  final _UnitGroup group;
+  final int initialIndex;
+  const _UnitDetailSheet({required this.group, this.initialIndex = 0});
+
+  @override
+  State<_UnitDetailSheet> createState() => _UnitDetailSheetState();
+}
+
+class _UnitDetailSheetState extends State<_UnitDetailSheet> {
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex =
+        widget.initialIndex.clamp(0, widget.group.entries.length - 1);
+  }
+
+  UnitCatalogEntry get _current => widget.group.entries[_currentIndex];
+  bool get _hasMultiple => widget.group.entries.length > 1;
+  bool get _canPrev => _currentIndex > 0;
+  bool get _canNext => _currentIndex < widget.group.entries.length - 1;
+
+  void _goPrev() {
+    if (_canPrev) setState(() => _currentIndex--);
+  }
+
+  void _goNext() {
+    if (_canNext) setState(() => _currentIndex++);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final accent = unit.fightType == 0
+    final u = _current;
+    final accent = u.fightType == 0
         ? AppTheme.red
-        : unit.fightType == 1
+        : u.fightType == 1
             ? AppTheme.teal
             : AppTheme.orange;
 
@@ -434,10 +568,16 @@ class _UnitDetailSheet extends StatelessWidget {
                   ),
                 ),
               ),
+              // ✅ Level selector (arrows)
+              if (_hasMultiple)
+                _buildLevelSelector()
+              else
+                const SizedBox.shrink(),
+              const SizedBox(height: 8),
               Row(children: [
                 Expanded(
                   child: Text(
-                    unit.displayName,
+                    u.displayName,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 20,
@@ -447,13 +587,14 @@ class _UnitDetailSheet extends StatelessWidget {
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.close_rounded, color: Colors.white70),
+                  icon: const Icon(Icons.close_rounded,
+                      color: Colors.white70),
                   onPressed: () => Navigator.pop(context),
                 ),
               ]),
               const SizedBox(height: 4),
               Text(
-                '#${unit.wodId} · ${unit.type ?? "—"}',
+                '#${u.wodId} · ${u.type ?? "—"}',
                 style: const TextStyle(
                   color: Colors.white54,
                   fontSize: 11,
@@ -462,21 +603,21 @@ class _UnitDetailSheet extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               Center(
-                child: UnitAvatar(info: unit, size: 160),
+                child: UnitAvatar(info: u, size: 160),
               ),
               const SizedBox(height: 20),
-              _row('هجوم عن بعد', unit.rangedAttack,
+              _row('هجوم عن بعد', u.rangedAttack,
                   Icons.gps_fixed_rounded, AppTheme.teal),
-              _row('هجوم قريب', unit.meleeAttack,
+              _row('هجوم قريب', u.meleeAttack,
                   Icons.gavel_rounded, AppTheme.red),
-              _row('دفاع عن بعد', unit.rangedDefence,
+              _row('دفاع عن بعد', u.rangedDefence,
                   Icons.shield_rounded, AppTheme.blue),
-              _row('دفاع قريب', unit.meleeDefence,
+              _row('دفاع قريب', u.meleeDefence,
                   Icons.shield_moon_rounded, AppTheme.purple),
-              _row('السرعة', unit.speed, Icons.speed_rounded, AppTheme.orange),
-              _row('الغنيمة', unit.loot, Icons.savings_rounded, AppTheme.orange),
-              _row('البأس', unit.might, Icons.star_rounded, AppTheme.purple),
-              _row('استهلاك الطعام', unit.food,
+              _row('السرعة', u.speed, Icons.speed_rounded, AppTheme.orange),
+              _row('الغنيمة', u.loot, Icons.savings_rounded, AppTheme.orange),
+              _row('البأس', u.might, Icons.star_rounded, AppTheme.purple),
+              _row('استهلاك الطعام', u.food,
                   Icons.restaurant_rounded, AppTheme.orange),
               const SizedBox(height: 16),
               Container(
@@ -488,9 +629,9 @@ class _UnitDetailSheet extends StatelessWidget {
                 ),
                 child: Row(children: [
                   Icon(
-                    unit.fightType == 0
+                    u.fightType == 0
                         ? Icons.gavel_rounded
-                        : unit.fightType == 1
+                        : u.fightType == 1
                             ? Icons.shield_rounded
                             : Icons.compare_arrows_rounded,
                     color: accent,
@@ -499,9 +640,9 @@ class _UnitDetailSheet extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      unit.fightType == 0
+                      u.fightType == 0
                           ? 'وحدة هجومية — مناسبة للهجوم على NPC / أعداء'
-                          : unit.fightType == 1
+                          : u.fightType == 1
                               ? 'وحدة دفاعية — مناسبة للدفاع عن القلاع'
                               : 'وحدة مختلطة — تصلح للهجوم والدفاع',
                       style: TextStyle(
@@ -516,6 +657,86 @@ class _UnitDetailSheet extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLevelSelector() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: Row(
+        children: [
+          _navBtn(
+            icon: Icons.arrow_back_rounded,
+            enabled: _canPrev,
+            onTap: _goPrev,
+          ),
+          Expanded(
+            child: Center(
+              child: Column(
+                children: [
+                  Text(
+                    'المستوى ${_current.level}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                  Text(
+                    '${_currentIndex + 1} / ${widget.group.entries.length}',
+                    style: const TextStyle(
+                      color: Colors.white54,
+                      fontSize: 10,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          _navBtn(
+            icon: Icons.arrow_forward_rounded,
+            enabled: _canNext,
+            onTap: _goNext,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _navBtn({
+    required IconData icon,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: enabled
+              ? Colors.white.withOpacity(0.1)
+              : Colors.white.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: enabled
+                ? Colors.white.withOpacity(0.2)
+                : Colors.white.withOpacity(0.05),
+          ),
+        ),
+        child: Icon(
+          icon,
+          color: enabled ? Colors.white : Colors.white24,
+          size: 20,
         ),
       ),
     );

@@ -34,14 +34,21 @@ class LocalCatalogService {
       final role = _roleFromStats(ra, ma);
       final fightType = _deriveFightType(ra, ma, rd, md);
 
-      var name = (item['Name (الاسم)'] ?? '').toString().trim();
-      name = name.replaceAll(RegExp(r'\s*\(Lvl\.\d+\)\s*$'), '').trim();
+      // ✅ استخراج الـ level من الاسم لو موجود، أو من الـ Level field
+      final rawName = (item['Name (الاسم)'] ?? '').toString().trim();
+      final level = _extractLevel(rawName, item['Level']);
+
+      // ✅ شيل "(Lvl.X)" من الاسم
+      final cleanName = rawName
+          .replaceAll(RegExp(r'\s*\(Lvl\.\d+\)\s*$'), '')
+          .trim();
 
       out[id] = UnitCatalogEntry(
         wodId: id,
+        level: level,
         type: type,
         role: role,
-        name: name.isEmpty ? null : name,
+        name: cleanName.isEmpty ? null : cleanName,
         fightType: fightType,
         imageUrl: url.isEmpty ? null : url,
         rangedAttack: ra,
@@ -56,7 +63,8 @@ class LocalCatalogService {
     }
 
     _cache = out;
-    TrafficLog.add('ST', '[LocalCatalog] Loaded ${out.length} units from assets');
+    TrafficLog.add('ST',
+        '[LocalCatalog] Loaded ${out.length} units from assets');
     return out;
   }
 
@@ -69,8 +77,15 @@ class LocalCatalogService {
     return 0;
   }
 
+  /// ✅ استخراج الـ level من الاسم (الأولوية) أو من Level field
+  static int _extractLevel(String rawName, dynamic levelField) {
+    final m = RegExp(r'\(Lvl\.(\d+)\)\s*$').firstMatch(rawName);
+    if (m != null) return int.tryParse(m.group(1)!) ?? 0;
+    return _i(levelField);
+  }
+
   static String? _typeFromUrl(String url) {
-    final m = RegExp(r'/([^/]+)--\d+\.webp$').firstMatch(url);
+    final m = RegExp(r'/([^/]+)--\d+\.(webp|png)$').firstMatch(url);
     return m?.group(1);
   }
 

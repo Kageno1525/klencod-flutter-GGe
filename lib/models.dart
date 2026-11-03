@@ -41,6 +41,7 @@ class OwnedCastle {
 // ═══════════════════════════════════════════
 class UnitCatalogEntry {
   final int wodId;
+  final int level; // ✅ NEW: level of this unit
   final String? type;
   final String? role;
   final String? name;
@@ -57,6 +58,7 @@ class UnitCatalogEntry {
 
   UnitCatalogEntry({
     required this.wodId,
+    this.level = 0,
     this.type,
     this.role,
     this.name,
@@ -116,12 +118,7 @@ class CastleUnit {
     return const Color(0xFF90A4AE);
   }
 
-  // ✅ التعديل هنا: لو الجندي مش موجود في الكاتلوج، بنعتبره جندي قتالي عشان يظهر
-  bool get isCombat {
-    if (info == null) return true; 
-    return info!.isCombat;
-  }
-  
+  bool get isCombat => info?.isCombat == true;
   bool get isDefensive => info?.isDefensive == true;
 }
 
