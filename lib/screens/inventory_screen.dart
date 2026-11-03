@@ -17,6 +17,7 @@ class InvItem {
   final List<dynamic> stats;
   final int slot;
   final int level;
+  final bool isGovernor; // ✅ NEW: عنصر حكام؟
 
   InvItem({
     required this.eid,
@@ -27,79 +28,56 @@ class InvItem {
     required this.stats,
     required this.slot,
     required this.level,
+    this.isGovernor = false,
   });
 
   /// 1=درع 2=سلاح 3=خوذة 4=قطعة أثرية 5=أخرى 6=قائد
   String get typeName {
     switch (type) {
-      case 1:
-        return 'درع';
-      case 2:
-        return 'سلاح';
-      case 3:
-        return 'خوذة';
-      case 4:
-        return 'قطعة أثرية';
-      case 5:
-        return 'أخرى';
-      case 6:
-        return 'قائد';
-      default:
-        return 'نوع $type';
+      case 1: return 'درع';
+      case 2: return 'سلاح';
+      case 3: return 'خوذة';
+      case 4: return 'قطعة أثرية';
+      case 5: return 'أخرى';
+      case 6: return 'قائد';
+      default: return 'نوع $type';
     }
   }
 
-  /// 1=عادي 2=نادر 3=ملحمي 4=أسطوري
   String get rarityName {
     switch (rarity) {
-      case 1:
-        return 'عادي';
-      case 2:
-        return 'نادر';
-      case 3:
-        return 'ملحمي';
-      case 4:
-        return 'أسطوري';
-      default:
-        return 'مستوى $rarity';
+      case 1: return 'عادي';
+      case 2: return 'نادر';
+      case 3: return 'ملحمي';
+      case 4: return 'أسطوري';
+      default: return 'مستوى $rarity';
     }
   }
 
   Color get rarityColor {
     switch (rarity) {
-      case 1:
-        return const Color(0xFF9E9E9E);
-      case 2:
-        return const Color(0xFF2196F3);
-      case 3:
-        return const Color(0xFF9C27B0);
-      case 4:
-        return const Color(0xFFFF9800);
-      default:
-        return Colors.grey;
+      case 1: return const Color(0xFF9E9E9E);
+      case 2: return const Color(0xFF2196F3);
+      case 3: return const Color(0xFF9C27B0);
+      case 4: return const Color(0xFFFF9800);
+      default: return Colors.grey;
     }
   }
 
   IconData get icon {
     switch (type) {
-      case 1:
-        return Icons.shield_rounded;
-      case 2:
-        return Icons.gavel_rounded;
-      case 3:
-        return Icons.sports_motorsports_rounded;
-      case 4:
-        return Icons.diamond_rounded;
-      case 6:
-        return Icons.person_rounded;
-      default:
-        return Icons.inventory_2_rounded;
+      case 1: return Icons.shield_rounded;
+      case 2: return Icons.gavel_rounded;
+      case 3: return Icons.sports_motorsports_rounded;
+      case 4: return Icons.diamond_rounded;
+      case 6: return Icons.person_rounded;
+      default: return Icons.inventory_2_rounded;
     }
   }
 
   bool get isCommander => type == 6;
 
-  /// ✅ slot >= 0 = مجهز (في قلعة) — slot = -1 = في المخزون
+  /// slot >= 0 = مجهز — slot = -1 = في المخزون
   bool get isEquipped => slot >= 0;
 }
 
@@ -127,13 +105,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
   final Map<int, int> _soldByType = {};
   final List<String> _log = [];
 
-  // ندرة: 1=عادي 2=نادر 3=ملحمي 4=أسطوري
-  // افتراضي: عادي + نادر
-  final Set<int> _selectedRarities = {1, 2};
+  // ✅ NEW: افتراضي = نادر بس
+  final Set<int> _selectedRarities = {2};
 
-  // نوع: 1=درع 2=سلاح 3=خوذة 4=قطعة أثرية
-  // افتراضي: كل الأنواع (ماعدا القواد)
-  final Set<int> _selectedTypes = {1, 2, 3, 4};
+  // افتراضي: كل الأنواع
+  final Set<int> _selectedTypes = {1, 2, 3, 4, 5};
 
   List<InvItem> get _commons =>
       _items.where((i) => i.rarity == 1 && !i.isCommander).toList();
@@ -143,17 +119,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
       _items.where((i) => i.isCommander).toList();
   List<InvItem> get _equipped =>
       _items.where((i) => i.isEquipped && !i.isCommander).toList();
+  List<InvItem> get _governorItems =>
+      _items.where((i) => i.isGovernor).toList();
 
-  /// ✅ العناصر المطابقة للفلاتر (المستهدفة بالبيع)
-  /// - بدون قواد
-  /// - بدون عناصر مجهزة (slot >= 0)
-  /// - مطابقة للفلاتر
+  /// ✅ العناصر المستهدفة للبيع (قواد + حكام مع بعض)
   List<InvItem> get _targets => _items
       .where((i) =>
           !i.isCommander &&
-          !i.isEquipped && // ✅ استبعاد العناصر المجهزة
+          !i.isEquipped &&
           _selectedRarities.contains(i.rarity) &&
-          _selectedTypes.contains(i.type))
+          (i.isGovernor || _selectedTypes.contains(i.type)))
       .toList();
 
   @override
@@ -174,7 +149,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   // ═══════════════════════════════════════════
-  // 1. تحميل المخزن
+  // 1. تحميل المخزن (gei + ggm)
   // ═══════════════════════════════════════════
   Future<void> _loadInventory() async {
     setState(() {
@@ -191,54 +166,48 @@ class _InventoryScreenState extends State<InventoryScreen> {
     });
 
     try {
-      _logLine('📤 gnr');
+      // 1. Fetch governor inventory (ggm)
+      String? ggmPayload;
+      _logLine('📤 ggm (حكام)');
       try {
-        await widget.client.sendXtAndWait('gnr', '{}',
-            responseCmd: 'gnr', timeoutMs: 15000);
-        _logLine('📥 gnr ok');
-      } catch (_) {
-        _logLine('⚠️ gnr timeout (متجاهل)');
-      }
-
-      _logLine('📤 ggm');
-      try {
-        await widget.client.sendXtAndWait('ggm', '{}',
+        final ggm = await widget.client.sendXtAndWait('ggm', '{}',
             responseCmd: 'ggm', timeoutMs: 15000);
-        _logLine('📥 ggm ok');
+        if (ggm.resultCode == 0 && ggm.payload != null) {
+          ggmPayload = ggm.payload;
+          _logLine('📥 ggm ok');
+        } else {
+          _logLine('⚠️ ggm rc=${ggm.resultCode}');
+        }
       } catch (_) {
         _logLine('⚠️ ggm timeout (متجاهل)');
       }
 
-      _logLine('📤 gei');
+      // 2. Fetch main inventory (gei)
+      _logLine('📤 gei (قواد)');
       final gei = await widget.client.sendXtAndWait('gei', '{}',
           responseCmd: 'gei', timeoutMs: 25000);
       _logLine('📥 gei rc=${gei.resultCode}');
-      if (gei.resultCode == 0 && gei.payload != null) {
-        _parseGei(gei.payload!);
-      } else {
+      if (gei.resultCode != 0 || gei.payload == null) {
         throw Exception('gei failed rc=${gei.resultCode}');
       }
 
-      _logLine('📤 gli');
-      try {
-        await widget.client.sendXtAndWait('gli', '{}',
-            responseCmd: 'gli', timeoutMs: 15000);
-        _logLine('📥 gli ok');
-      } catch (_) {
-        _logLine('⚠️ gli timeout (متجاهل)');
+      // 3. Parse both
+      _parseGei(gei.payload!);
+      if (ggmPayload != null) {
+        _parseGgm(ggmPayload);
       }
 
       if (!mounted) return;
       setState(() => _loading = false);
 
+      // Log summary
       _logLine('✅ تم تحميل ${_items.length} عنصر');
       _logLine('  • عادي: ${_commons.length}');
       _logLine('  • نادر: ${_rares.length}');
       _logLine('  • قائد: ${_commanders.length}');
       _logLine('  • مجهز: ${_equipped.length}');
-      _logLine('🎯 المطابق للفلاتر (قابل للبيع): ${_targets.length}');
-
-      // ✅ تم إزالة الحوار التلقائي — لن يظهر إلا عندما يضغط المستخدم زر البيع
+      _logLine('  • 🏛️ حكام: ${_governorItems.length}');
+      _logLine('🎯 المطابق للفلاتر: ${_targets.length}');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -249,6 +218,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
+  // ═══════════════════════════════════════════
+  // Parse gei (main inventory)
+  // ═══════════════════════════════════════════
   void _parseGei(String payload) {
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
@@ -285,14 +257,102 @@ class _InventoryScreenState extends State<InventoryScreen> {
             stats: stats,
             slot: slot,
             level: level,
+            isGovernor: false,
           ));
         } catch (_) {}
       }
 
-      setState(() => _items = parsed);
+      _items.addAll(parsed);
     } catch (e) {
       _logLine('❌ parse gei: $e');
     }
+  }
+
+  // ═══════════════════════════════════════════
+  // Parse ggm (governor inventory)
+  // RGEM format: [eid, rawType, rawRarity, value, stats, equipFlag]
+  // rawRarity: 5=rare, 6=epic, 7+=legendary
+  // ═══════════════════════════════════════════
+  void _parseGgm(String payload) {
+    try {
+      final data = jsonDecode(payload) as Map<String, dynamic>;
+
+      // RGEM = Rare Governor Equipment (حكام)
+      final rgem = data['RGEM'] as List? ?? [];
+      int govCount = 0;
+
+      for (final raw in rgem) {
+        if (raw is! List || raw.length < 5) continue;
+        try {
+          final eid = (raw[0] as num?)?.toInt() ?? 0;
+          if (eid <= 0) continue;
+
+          final rawType = (raw[1] as num?)?.toInt() ?? 0;
+          final rawRarity = (raw[2] as num?)?.toInt() ?? 0;
+          final value =
+              raw.length > 3 ? ((raw[3] as num?)?.toInt() ?? 0) : 0;
+          final stats = raw[4] is List ? raw[4] as List : <dynamic>[];
+          final equipFlag =
+              raw.length > 5 ? ((raw[5] as num?)?.toInt() ?? 0) : 0;
+
+          // Map governor rarity (5/6/7+) to our scale (1-4)
+          int rarity;
+          if (rawRarity >= 7) {
+            rarity = 4; // legendary
+          } else if (rawRarity == 6) {
+            rarity = 3; // epic
+          } else if (rawRarity == 5) {
+            rarity = 2; // rare
+          } else if (rawRarity >= 1 && rawRarity <= 4) {
+            rarity = rawRarity;
+          } else {
+            rarity = 2; // fallback
+          }
+
+          final type = _guessGovType(stats, rawType);
+
+          // 0 = not equipped, >0 = equipped
+          final slot = equipFlag == 0 ? -1 : 1;
+
+          _items.add(InvItem(
+            eid: eid,
+            type: type,
+            rarity: rarity,
+            extra1: 0,
+            extra2: 0,
+            stats: stats,
+            slot: slot,
+            level: value,
+            isGovernor: true,
+          ));
+          govCount++;
+        } catch (_) {}
+      }
+
+      if (govCount > 0) {
+        _logLine('🏛️ $govCount عنصر من الحكام');
+      }
+    } catch (e) {
+      _logLine('❌ parse ggm: $e');
+    }
+  }
+
+  /// Try to guess governor item type from stat IDs
+  int _guessGovType(List stats, int rawType) {
+    bool hasArtifact = false;
+    bool hasCombatStat = false;
+
+    for (final s in stats) {
+      if (s is! List || s.isEmpty) continue;
+      final id = (s[0] as num?)?.toInt() ?? 0;
+      if (id >= 10000) hasArtifact = true;
+      if (id >= 300 && id < 400) hasCombatStat = true;
+    }
+
+    if (hasArtifact) return 4;
+    if (hasCombatStat) return 2; // weapon (most likely)
+    if (rawType >= 1 && rawType <= 6) return rawType;
+    return 5;
   }
 
   // ═══════════════════════════════════════════
@@ -305,12 +365,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
       return;
     }
 
-    // ملخص قبل البيع حسب النوع والندرة
     final byType = <int, int>{};
     final byRarity = <int, int>{};
+    int govCount = 0;
     for (final i in targets) {
       byType[i.type] = (byType[i.type] ?? 0) + 1;
       byRarity[i.rarity] = (byRarity[i.rarity] ?? 0) + 1;
+      if (i.isGovernor) govCount++;
     }
     final typeSummary = byType.entries
         .map((e) => '  • ${_typeLabel(e.key)}: ${e.value}')
@@ -332,7 +393,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'إجمالي: ${targets.length} عنصر\n\n'
+                'إجمالي: ${targets.length} عنصر${govCount > 0 ? " (منهم $govCount 🏛️ حكام)" : ""}\n\n'
                 '📦 بالنوع:\n$typeSummary\n\n'
                 '⭐ بالندرة:\n$raritySummary',
                 style: const TextStyle(
@@ -420,7 +481,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
 
       if (i < targets.length - 1) {
-        // ✅ 3 ثواني بين كل عنصر (لتجنب الحظر)
         _logLine('⏱️ انتظار 3s قبل العنصر التالي...');
         await Future.delayed(const Duration(seconds: 3));
       }
@@ -442,9 +502,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
     if (_totalGold > 0) {
       _logLine('  • 💰 الذهب المكتسب: $_totalGold');
-    } else if (_lastSeqResponse != null) {
-      _logLine(
-          '  • 📥 آخر رد: ${_lastSeqResponse!.length > 120 ? "${_lastSeqResponse!.substring(0, 120)}..." : _lastSeqResponse}');
     }
     _logLine('━━━━━━━━━━━━━━━━');
 
@@ -470,7 +527,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (_disposed) return false;
 
       if (resp.resultCode == 0) {
-        _logLine('✅ #${item.eid} (${item.typeName}/${item.rarityName})');
+        final tag = item.isGovernor ? '🏛️' : '✅';
+        _logLine('$tag #${item.eid} (${item.typeName}/${item.rarityName})');
         if (resp.payload != null && resp.payload!.isNotEmpty) {
           _lastSeqResponse = resp.payload;
           _tryExtractGold(resp.payload!);
@@ -506,35 +564,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   String _typeLabel(int t) {
     switch (t) {
-      case 1:
-        return 'دروع';
-      case 2:
-        return 'أسلحة';
-      case 3:
-        return 'خوذات';
-      case 4:
-        return 'قطع أثرية';
-      case 5:
-        return 'أخرى';
-      case 6:
-        return 'قواد';
-      default:
-        return 'نوع $t';
+      case 1: return 'دروع';
+      case 2: return 'أسلحة';
+      case 3: return 'خوذات';
+      case 4: return 'قطع أثرية';
+      case 5: return 'أخرى';
+      case 6: return 'قواد';
+      default: return 'نوع $t';
     }
   }
 
   String _rarityLabel(int r) {
     switch (r) {
-      case 1:
-        return 'عادي';
-      case 2:
-        return 'نادر';
-      case 3:
-        return 'ملحمي';
-      case 4:
-        return 'أسطوري';
-      default:
-        return 'مستوى $r';
+      case 1: return 'عادي';
+      case 2: return 'نادر';
+      case 3: return 'ملحمي';
+      case 4: return 'أسطوري';
+      default: return 'مستوى $r';
     }
   }
 
@@ -648,7 +694,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
             const CircularProgressIndicator(color: AppTheme.purple),
             const SizedBox(height: 16),
             Text(
-              'جاري جلب المخزن...',
+              'جاري جلب المخزن (قواد + حكام)...',
               style: TextStyle(
                 color: AppTheme.subTextColor(context),
                 decoration: TextDecoration.none,
@@ -728,7 +774,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       ('عادي', _commons.length, const Color(0xFF9E9E9E)),
       ('نادر', _rares.length, const Color(0xFF2196F3)),
       ('قائد', _commanders.length, const Color(0xFF9C27B0)),
-      ('مجهز', _equipped.length, AppTheme.orange),
+      ('🏛️ حكام', _governorItems.length, AppTheme.orange),
     ];
     return AppTheme.glassCard(
       context: context,
@@ -740,7 +786,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       Text(
                         '${s.$2}',
                         style: TextStyle(
-                          fontSize: 22,
+                          fontSize: 20,
                           fontWeight: FontWeight.bold,
                           color: s.$3,
                           decoration: TextDecoration.none,
@@ -807,6 +853,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               _typeChip(2, 'سلاح', Icons.gavel_rounded),
               _typeChip(3, 'خوذة', Icons.sports_motorsports_rounded),
               _typeChip(4, 'قطعة أثرية', Icons.diamond_rounded),
+              _typeChip(5, 'أخرى', Icons.inventory_2_rounded),
             ],
           ),
           const SizedBox(height: 10),
@@ -816,11 +863,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 onPressed: (_selling)
                     ? null
                     : () => setState(() {
-                          _selectedRarities.addAll({1, 2});
-                          _selectedTypes.addAll({1, 2, 3, 4});
+                          // ✅ افتراضي: نادر بس
+                          _selectedRarities.clear();
+                          _selectedRarities.add(2);
+                          _selectedTypes.clear();
+                          _selectedTypes.addAll({1, 2, 3, 4, 5});
                         }),
                 icon: const Icon(Icons.restart_alt_rounded, size: 16),
-                label: const Text('افتراضي (عادي+نادر)',
+                label: const Text('افتراضي (نادر)',
                     style: TextStyle(fontSize: 11)),
               ),
               const Spacer(),
@@ -982,9 +1032,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           if (_selling) ...[
             const SizedBox(height: 12),
             LinearProgressIndicator(
-              value: _targets.isEmpty
-                  ? 0
-                  : _soldCount / _targets.length,
+              value: _targets.isEmpty ? 0 : _soldCount / _targets.length,
               backgroundColor: Colors.grey.withOpacity(0.2),
               color: AppTheme.green,
             ),
@@ -1037,7 +1085,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    '⏱️ 3 ثواني بين كل عنصر · 🔒 العناصر المجهزة لن تُباع',
+                    '🏛️ يشمل الحكام والقواد · ⏱️ 3s بين كل عنصر',
                     style: TextStyle(
                       color: AppTheme.teal,
                       fontSize: 10,
@@ -1085,11 +1133,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final sold = _soldEids.contains(item.eid);
     final equipped = item.isEquipped;
     final selectedForSell = _selectedRarities.contains(item.rarity) &&
-        _selectedTypes.contains(item.type) &&
+        (item.isGovernor || _selectedTypes.contains(item.type)) &&
         !item.isCommander &&
-        !equipped; // ✅ العناصر المجهزة مش بتتحسب
+        !equipped;
 
-    // لون الإطار
+    // Border color
     Color borderColor = item.rarityColor.withOpacity(0.4);
     double borderWidth = 1;
     if (equipped) {
@@ -1122,14 +1170,43 @@ class _InventoryScreenState extends State<InventoryScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  item.typeName,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    color: AppTheme.textColor(context),
-                    decoration: TextDecoration.none,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        item.typeName,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          color: AppTheme.textColor(context),
+                          decoration: TextDecoration.none,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (item.isGovernor) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: AppTheme.orange.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                              color: AppTheme.orange.withOpacity(0.5)),
+                        ),
+                        child: const Text(
+                          '🏛️ حكام',
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.orange,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 Text(
                   '${item.rarityName} · #${item.eid}',
@@ -1171,11 +1248,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.lock_rounded,
+                children: const [
+                  Icon(Icons.lock_rounded,
                       size: 10, color: AppTheme.orange),
-                  const SizedBox(width: 3),
-                  const Text('مجهز',
+                  SizedBox(width: 3),
+                  Text('مجهز',
                       style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.bold,

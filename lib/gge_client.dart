@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/io.dart';
 import 'models.dart';
 import 'services/alliance_service.dart';
@@ -203,7 +204,10 @@ class GgeClient {
   bool _networkWaitActive = false;
 
   bool _lastCloseWasClean = false;
+  bool _hadErrorBeforeClose = false;
   bool _closingIntentionally = false;
+
+  Timer? _watchdogTimer;
 
   int? _cachedPlayerId;
   final Map<int, AttackAlert> _latestAlertByMid = {};
@@ -767,6 +771,7 @@ class GgeClient {
     _cachedAllianceMembers = null;
     _gbdReceived = false;
     _lastCloseWasClean = false;
+    _hadErrorBeforeClose = false;
 
     _status('Opening WebSocket...');
     final uri = Uri.parse('wss://$_gameUrl/');
@@ -810,33 +815,63 @@ class GgeClient {
     }
 
     _connected = true;
+    _lastRxTime = DateTime.now();
     _status('Connected ✓');
 
     _sub = ch.stream.listen(
       (data) => _onMessage(data),
       onDone: () {
         _connected = false;
-        if (!_closingIntentionally && !_disposed) {
+        _stopWatchdog();
+
+        if (_closingIntentionally || _disposed) {
+          _lastCloseWasClean = false;
+          _hadErrorBeforeClose = false;
+          _status('Connection closed (intentional)');
+          return;
+        }
+
+        if (_hadErrorBeforeClose) {
+          _hadErrorBeforeClose = false;
+          _lastCloseWasClean = false;
+          _status('🔌 Network connection lost — will retry automatically');
+        } else {
           _lastCloseWasClean = true;
           _status('⚠️ WS closed by server (clean close)');
-        } else {
-          _lastCloseWasClean = false;
-          _status('Connection closed (intentional)');
         }
+
         _scheduleReconnect();
       },
       onError: (e) {
         _connected = false;
-        if (!_closingIntentionally && !_disposed) {
-          _lastCloseWasClean = false;
-          _status('⚠️ WS error close (network)');
-        }
+        _stopWatchdog();
+        _hadErrorBeforeClose = true;
         _errorLog('WS error: $e');
-        _scheduleReconnect();
       },
     );
 
+    _startWatchdog();
     await Future.delayed(const Duration(milliseconds: 500));
+  }
+
+  void _startWatchdog() {
+    _stopWatchdog();
+    _watchdogTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!_connected || _disposed) return;
+      final rx = _lastRxTime;
+      if (rx == null) return;
+      final idle = DateTime.now().difference(rx).inSeconds;
+      if (idle > 180) {
+        _status('🐕 No data for ${idle}s — forcing reconnect');
+        _hadErrorBeforeClose = true;
+        _closeWebSocket().then((_) => _scheduleReconnect());
+      }
+    });
+  }
+
+  void _stopWatchdog() {
+    _watchdogTimer?.cancel();
+    _watchdogTimer = null;
   }
 
   void _onMessage(dynamic data) {
@@ -1017,73 +1052,95 @@ class GgeClient {
     if (_networkWaitActive) return;
     if (_reconnecting) return;
 
-    Future.delayed(const Duration(seconds: 3), () async {
-      if (_disposed || _connected) return;
-      if (!_appForeground && !allowBackgroundReconnect) return;
-      if (!isLoggedIn) return;
+    final wasClean = _lastCloseWasClean;
+    _lastCloseWasClean = false;
 
-      final hasNet = await _hasInternet();
-      if (_disposed || _connected) return;
-
-      if (!hasNet) {
-        _status('⚠️ Network lost. Waiting for internet to return...');
-        _networkWaitActive = true;
-        _waitForNetworkAndReconnect();
-        return;
-      }
-
-      if (_lastCloseWasClean && _appForeground) {
-        _lastCloseWasClean = false;
-        if (_disposed) return;
-        _status('🔴 Server closed connection — possible session conflict');
-        onSuspiciousClose?.call(DateTime.now());
-        return;
-      }
-
-      _lastCloseWasClean = false;
-
-      _status('🔄 Connection lost — checking...');
-      await Future.delayed(const Duration(seconds: 5));
-      if (_disposed || _connected) return;
-
-      _status('🔄 Attempting auto-reconnect...');
-      final ok = await autoReconnect();
-      if (_disposed) return;
-
-      if (ok) {
-        _status('✅ Auto-reconnected after transient close');
-        return;
-      }
-
-      _status(
-          '🔴 Session conflict detected (are you playing?). Auto-reconnect paused.');
-      _status('👉 Tap "Login" to reconnect manually when done.');
-      if (_disposed) return;
-      onSessionConflict?.call();
-    });
+    if (wasClean) {
+      _handlePossibleSessionConflict();
+    } else {
+      _startNetworkReconnect();
+    }
   }
 
-  Future<void> _waitForNetworkAndReconnect() async {
+  Future<void> _handlePossibleSessionConflict() async {
+    _status('🔍 Clean close detected — testing if session conflict...');
+
+    await Future.delayed(const Duration(seconds: 3));
+    if (_disposed || _connected) return;
+
+    final ok = await autoReconnect();
+    if (_disposed) return;
+
+    if (ok) {
+      _status('✅ Reconnected (was a transient close)');
+      return;
+    }
+
+    final hasNet = await _hasInternet();
+    if (_disposed) return;
+    if (!hasNet) {
+      _status('🔌 No internet — treating as network issue');
+      _startNetworkReconnect();
+      return;
+    }
+
+    _status('🔴 Session conflict confirmed');
+    // ✅ الإصلاح: دايماً نادي الـ callback — بيتعامل مع UI و BG
+    onSessionConflict?.call();
+    // ✅ نسجل flag كـ backup
+    await _saveSessionConflictFlag();
+  }
+
+  void _startNetworkReconnect() {
+    if (_networkWaitActive) return;
+    _networkWaitActive = true;
+    _networkReconnectLoop();
+  }
+
+  Future<void> _networkReconnectLoop() async {
+    int attempt = 0;
+
     while (!_disposed && !_connected && isLoggedIn) {
-      await Future.delayed(const Duration(seconds: 10));
-      if (_disposed || _connected || !isLoggedIn) break;
-
-      final hasNet = await _hasInternet();
-      if (!hasNet) continue;
-
-      _status('🔄 Internet restored. Reconnecting...');
-      final ok = await autoReconnect();
-      if (ok) {
+      if (!_appForeground && !allowBackgroundReconnect) {
         _networkWaitActive = false;
-        _status('✅ Reconnected successfully');
-        return;
-      } else {
-        _networkWaitActive = false;
-        _status('❌ Reconnect attempt failed. Please tap "Login" manually.');
         return;
       }
+
+      attempt++;
+      final hasNet = await _hasInternet();
+      if (_disposed || _connected) break;
+
+      if (!hasNet) {
+        _status('⚠️ No internet (attempt $attempt) — waiting 10s');
+        await Future.delayed(const Duration(seconds: 10));
+        continue;
+      }
+
+      _status('🔄 Network reconnect attempt $attempt...');
+      final ok = await autoReconnect();
+      if (_disposed) break;
+
+      if (ok) {
+        _networkWaitActive = false;
+        _status('✅ Reconnected after network recovery');
+        return;
+      }
+
+      final delay = attempt < 5 ? attempt * 5 : 30;
+      _status('⏱ Retry in ${delay}s (attempt $attempt failed)');
+      await Future.delayed(Duration(seconds: delay));
     }
+
     _networkWaitActive = false;
+  }
+
+  Future<void> _saveSessionConflictFlag() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('bg_session_conflict', true);
+      TrafficLog.add('ST',
+          'Saved session conflict flag for UI on resume');
+    } catch (_) {}
   }
 
   void onAppLifecycleChanged(AppLifecycleState state) {
@@ -1110,6 +1167,7 @@ class GgeClient {
 
   Future<void> _closeWebSocket() async {
     _closingIntentionally = true;
+    _stopWatchdog();
     try {
       await _sub?.cancel();
     } catch (_) {}
@@ -1121,6 +1179,7 @@ class GgeClient {
     _connected = false;
     _closingIntentionally = false;
     _lastCloseWasClean = false;
+    _hadErrorBeforeClose = false;
   }
 
   Future<bool> autoReconnect() async {
@@ -1412,13 +1471,15 @@ class GgeClient {
   Future<List<AllyMember>> getAllianceMembers() =>
       allianceService.getMembers();
 
-  // ✅ هنا الإصلاح — getMyAllianceId بدل getAllianceId
   Future<int?> getMyAllianceId() => allianceService.getMyAllianceId();
 
   Future<void> dispose() async {
     _disposed = true;
     _closingIntentionally = true;
     _lastCloseWasClean = false;
+    _hadErrorBeforeClose = false;
+    _watchdogTimer?.cancel();
+    _watchdogTimer = null;
     _pollingTimer?.cancel();
     _backgroundPollingActive = false;
     _networkWaitActive = false;
