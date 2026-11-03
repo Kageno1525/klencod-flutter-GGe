@@ -129,17 +129,18 @@ class _SmuggleScreenState extends State<SmuggleScreen> {
   }
 
   bool _isSendableForSmuggle(CastleUnit u) {
-    final info = u.info;
-    if (info == null) return false;
-    if (!u.isCombat) return false;
-    final type = info.type ?? '';
-    if (type.contains('Wall') ||
-        type.contains('Gate') ||
-        type.contains('Moat')) {
-      return false;
-    }
-    return true;
+  final info = u.info;
+  // ✅ التعديل: لو مش في الكاتلوج نسمح بيه عشان يظهر
+  if (info == null) return true; 
+  if (!u.isCombat) return false;
+  final type = info.type ?? '';
+  if (type.contains('Wall') ||
+      type.contains('Gate') ||
+      type.contains('Moat')) {
+    return false;
   }
+  return true;
+}
 
   Future<void> _loadUnits() async {
     if (_source == null) return;

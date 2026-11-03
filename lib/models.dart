@@ -116,7 +116,12 @@ class CastleUnit {
     return const Color(0xFF90A4AE);
   }
 
-  bool get isCombat => info?.isCombat == true;
+  // ✅ التعديل هنا: لو الجندي مش موجود في الكاتلوج، بنعتبره جندي قتالي عشان يظهر
+  bool get isCombat {
+    if (info == null) return true; 
+    return info!.isCombat;
+  }
+  
   bool get isDefensive => info?.isDefensive == true;
 }
 
