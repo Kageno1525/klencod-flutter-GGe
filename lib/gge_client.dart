@@ -1010,7 +1010,6 @@ class GgeClient {
     }
   }
 
-  // ✅ MODIFIED: _scheduleReconnect with extra checks
   void _scheduleReconnect() {
     if (_disposed) return;
     if (!_appForeground && !allowBackgroundReconnect) return;
@@ -1033,7 +1032,6 @@ class GgeClient {
         return;
       }
 
-      // ✅ تحقق إضافي قبل ما نستخدم _lastCloseWasClean
       if (_lastCloseWasClean && _appForeground) {
         _lastCloseWasClean = false;
         if (_disposed) return;
@@ -1088,20 +1086,17 @@ class GgeClient {
     _networkWaitActive = false;
   }
 
-  // ✅ MODIFIED: onAppLifecycleChanged — disconnect when going to background
   void onAppLifecycleChanged(AppLifecycleState state) {
     final wasForeground = _appForeground;
     _appForeground = state == AppLifecycleState.resumed;
 
     if (state == AppLifecycleState.resumed) {
-      // ✅ UI رجع للمقدمة
       if (!isLoggedIn) return;
       if (!_connected && !_networkWaitActive) {
         _status('App resumed — reconnecting...');
         _scheduleReconnect();
       }
     } else if (wasForeground && !_appForeground) {
-      // ✅ UI راح للخلفية → افصل عشان الـ BG ياخد مكانه
       _status('App paused — disconnecting for BG handover');
       _lastCloseWasClean = false;
       Future.delayed(const Duration(milliseconds: 800), () async {
@@ -1417,9 +1412,9 @@ class GgeClient {
   Future<List<AllyMember>> getAllianceMembers() =>
       allianceService.getMembers();
 
-  Future<int?> getMyAllianceId() => allianceService.getAllianceId();
+  // ✅ هنا الإصلاح — getMyAllianceId بدل getAllianceId
+  Future<int?> getMyAllianceId() => allianceService.getMyAllianceId();
 
-  // ✅ MODIFIED: dispose — reset flags
   Future<void> dispose() async {
     _disposed = true;
     _closingIntentionally = true;
