@@ -291,8 +291,6 @@ class AutoDefenseService {
     }
   }
 
-  /// ✅ يختار lord فاضي — بيستبعد اللي فشلوا قبل كده
-  /// بيرجع list مرتبة: LID=0 أول، بعدين أصغر IDs
   Future<List<int>> _getFreeLordIds({Set<int> exclude = const {}}) async {
     try {
       final cmds = await _getCommanders(force: true);
@@ -318,7 +316,6 @@ class AutoDefenseService {
         return [];
       }
 
-      // نفضل LID=0، بعدين نصعد
       free.sort((a, b) {
         if (a.lord.id == 0) return -1;
         if (b.lord.id == 0) return 1;
@@ -407,7 +404,6 @@ class AutoDefenseService {
       }
     }
 
-    // Spy mode recall
     for (final ev in _evac.values.toList()) {
       if (ev.recalled || !ev.spyMode) continue;
 
@@ -424,7 +420,6 @@ class AutoDefenseService {
       _recallEvacuation(ev, reason: 'all attacks arrived');
     }
 
-    // Normal/Save mode recall
     for (final ev in _evac.values.toList()) {
       if (ev.recalled || ev.spyMode) continue;
       final castleAttacks = _pending.values
@@ -499,7 +494,6 @@ class AutoDefenseService {
     return batch;
   }
 
-  /// ✅ خطأ لورد مش صالح للقلعة دي → المفروض نجرب لورد تاني
   bool _isRetryableLordError(String err) {
     if (err.contains('92')) return true;
     if (err.contains('218')) return true;
@@ -512,7 +506,6 @@ class AutoDefenseService {
     return false;
   }
 
-  /// ✅ إرسال batch واحد مع retry على lords
   Future<({bool ok, int? mid, String? error})> _sendWithLordRetry({
     required GgeClient client,
     required OwnedCastle source,
@@ -525,6 +518,7 @@ class AutoDefenseService {
   }) async {
     final tried = <int>{};
     String? lastError;
+    final tag = totalCastles > 0 ? '[$castleNo/$totalCastles] ' : '';
 
     for (int attempt = 0; attempt < _maxLordRetries; attempt++) {
       if (_globalEvacRunning && _globalEvacCancelled) {
@@ -534,8 +528,7 @@ class AutoDefenseService {
       final freeIds = await _getFreeLordIds(exclude: tried);
       if (freeIds.isEmpty) {
         _addLog(
-            '⚠️ [$castleNo/$totalCastles] $castleName: no more free lords '
-            '(tried: $tried)', 'warn');
+            '⚠️ $tag$castleName: no more free lords (tried: $tried)', 'warn');
         return (ok: false, mid: null, error: 'NO_FREE_LORD');
       }
 
@@ -543,8 +536,10 @@ class AutoDefenseService {
       tried.add(lordId);
 
       _addLog(
-          '📤 [$castleNo/$totalCastles] $castleName: LID=$lordId '
-          '(attempt ${attempt + 1}/$_maxLordRetries)', 'evac');
+          '📤 $tag$castleName: LID=$lordId '
+          '(attempt ${attempt + 1}/$_maxLordRetries) → '
+          '(${target.x},${target.y})',
+          'evac');
 
       final result = await client.sendToAlly(
         source: source,
@@ -556,18 +551,15 @@ class AutoDefenseService {
 
       if (result.success) {
         _addLog(
-            '✅ [$castleNo/$totalCastles] $castleName: LID=$lordId, '
-            'MID=${result.movementId}', 'evac');
+            '✅ $tag$castleName: LID=$lordId, MID=${result.movementId}', 'evac');
         return (ok: true, mid: result.movementId, error: null);
       }
 
       lastError = result.error ?? 'unknown';
       _addLog(
-          '⚠️ [$castleNo/$totalCastles] $castleName: LID=$lordId rejected '
-          '($lastError)', 'warn');
+          '⚠️ $tag$castleName: LID=$lordId rejected ($lastError)', 'warn');
 
       if (!_isRetryableLordError(lastError)) {
-        // مش مشكلة lord — نوقف المحاولات
         return (ok: false, mid: null, error: lastError);
       }
 
@@ -575,8 +567,8 @@ class AutoDefenseService {
     }
 
     _addLog(
-        '❌ [$castleNo/$totalCastles] $castleName: all $_maxLordRetries '
-        'attempts failed (last: $lastError)', 'error');
+        '❌ $tag$castleName: all $_maxLordRetries attempts failed '
+        '(last: $lastError)', 'error');
     return (ok: false, mid: null, error: lastError);
   }
 
@@ -658,7 +650,8 @@ class AutoDefenseService {
       final wt = isSpy ? 1 : settings.saveHours;
       final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
       _addLog(
-          '📦 area=$areaId: ${batch.length} types, $totalUnits units → ${ally.name}',
+          '📦 area=$areaId: ${batch.length} types, $totalUnits units → '
+          '${ally.name} (${ally.castle.x},${ally.castle.y})',
           'evac');
 
       final sendResult = await _sendWithLordRetry(
@@ -694,6 +687,7 @@ class AutoDefenseService {
     }
   }
 
+  /// ✅ اختيار حليف حقيقي — يستبعد قلعتك انت (myPid)
   Future<_AllyPick?> _pickAllyCastle(OwnedCastle source) async {
     List<AllyMember>? members;
     try {
@@ -702,21 +696,40 @@ class AutoDefenseService {
     } catch (_) {
       return null;
     }
-    if (members == null || members.isEmpty) return null;
+    if (members == null || members.isEmpty) {
+      _addLog('⚠️ No alliance members cached', 'warn');
+      return null;
+    }
 
-    if (settings.preferredAllyPlayerId != null) {
+    final myPid = GgeClient().cachedPlayerId;
+    if (myPid == null) {
+      _addLog('⚠️ myPid unknown — may pick own castle', 'warn');
+    }
+
+    // 1) preferred ally first
+    if (settings.preferredAllyPlayerId != null &&
+        settings.preferredAllyPlayerId != myPid) {
       for (final m in members) {
+        if (m.playerId == myPid) continue;
         if (m.playerId == settings.preferredAllyPlayerId) {
           final c = m.castleIn(source.kingdomId);
           if (c != null && c.areaId != source.areaId) {
+            _addLog(
+                '🎯 Preferred ally: ${m.name} @ (${c.x},${c.y})', 'info');
             return _AllyPick(m.name, m.playerId, c);
           }
         }
       }
     }
 
+    // 2) all candidates (excluding self)
     final candidates = <(AllyMember, AllyCastle, int)>[];
+    int skippedSelf = 0;
     for (final m in members) {
+      if (m.playerId == myPid) {
+        skippedSelf++;
+        continue;
+      }
       for (final c in m.castles) {
         if (c.kingdomId != source.kingdomId) continue;
         if (c.areaId == source.areaId) continue;
@@ -725,7 +738,19 @@ class AutoDefenseService {
         candidates.add((m, c, dx * dx + dy * dy));
       }
     }
-    if (candidates.isEmpty) return null;
+
+    TrafficLog.add('ST',
+        '[AutoDef] _pickAllyCastle: ${candidates.length} candidates '
+        'in KID=${source.kingdomId} '
+        '(skipped self=$skippedSelf, myPid=$myPid, members=${members.length})');
+
+    if (candidates.isEmpty) {
+      _addLog(
+          '⚠️ No ally castles in KID=${source.kingdomId} '
+          '(self skipped=$skippedSelf)',
+          'warn');
+      return null;
+    }
 
     candidates.sort((a, b) {
       if (a.$1.hasPeace && !b.$1.hasPeace) return -1;
@@ -734,6 +759,10 @@ class AutoDefenseService {
     });
 
     final best = candidates.first;
+    _addLog(
+        '🎯 Picked ally: ${best.$1.name} @ (${best.$2.x},${best.$2.y}) '
+        'KID=${best.$2.kingdomId} peace=${best.$1.hasPeace}',
+        'info');
     return _AllyPick(best.$1.name, best.$1.playerId, best.$2);
   }
 
@@ -884,7 +913,8 @@ class AutoDefenseService {
       final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
       _addLog(
           '📦 [$castleNo/$totalCastles] ${source.displayName}: '
-          '${batch.length} types, $totalUnits units → ${ally.name}',
+          '${batch.length} types, $totalUnits units → '
+          '${ally.name} (${ally.castle.x},${ally.castle.y})',
           'evac');
 
       final sendResult = await _sendWithLordRetry(
