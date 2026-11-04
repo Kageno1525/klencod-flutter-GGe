@@ -27,10 +27,12 @@ class SmuggleService {
           'CROSS_KINGDOM: source KID=${source.kingdomId}, target KID=${target.kingdomId}');
     }
 
+    // ⚠️ حماية: السيرفر بيرفض > 10 أنواع (ban risk)
     if (filtered.length > 10) {
       return TransferResult.fail('TOO_MANY_UNIT_TYPES');
     }
 
+    // ✅ LID=0 = اللورد الرئيسي — يقدر يقود من أي قلعة في أي مملكة
     int lid = lordId ?? 0;
     if (lid < 0) lid = 0;
 
@@ -108,6 +110,7 @@ class SmuggleService {
           '[CDS-RESP] result=${resp.resultCode} (${_cdsErrorMessage(resp.resultCode)})');
 
       if (resp.resultCode == 0) {
+        // ✅ استخرج MID من payload عشان نقدر نعمل recall بعدين
         final mid = _extractMid(resp.payload);
         TrafficLog.add('ST', '[CDS-OK] MID=$mid');
         return TransferResult.ok(mid);
@@ -121,10 +124,13 @@ class SmuggleService {
         return TransferResult.fail('LORD_BUSY_218');
       }
 
-      // ✅ 92, 219, 222, 256, 404 = lord مش صالح → نرجع رسالة موحّدة
-      // عشان smuggly_screen يلاقيها ويعرض "القائد غير متاح"
-      if ([92, 219, 222, 256, 404].contains(resp.resultCode)) {
+      if ([219, 222, 256, 404].contains(resp.resultCode) && lid != 0) {
         return TransferResult.fail('LORD_UNAVAILABLE');
+      }
+
+      if (resp.resultCode == 219) {
+        return TransferResult.fail(
+            'Main Lord rejected (LID=0) — retry in a moment');
       }
 
       if (resp.resultCode == 181) {
@@ -144,6 +150,8 @@ class SmuggleService {
     }
   }
 
+  /// استخراج MID من cds response payload:
+  /// {"A":{"M":{"MID":353773379, ...}}, ...}
   int? _extractMid(String? payload) {
     if (payload == null || payload.isEmpty) return null;
     try {
@@ -170,8 +178,6 @@ class SmuggleService {
         return 'Not enough troops';
       case 91:
         return 'Unit not sendable from this castle (Defensive)';
-      case 92:
-        return 'Lord not valid for this castle';
       case 181:
         return 'Max kingdom army movements reached';
       case 218:
