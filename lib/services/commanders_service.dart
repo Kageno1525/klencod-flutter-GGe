@@ -7,7 +7,7 @@ class CommandersService {
   CommandersService(this.conn);
 
   Future<List<CommanderInfo>> getCommanders() async {
-    // ── 1. Get lords list ──────────────────────────────────────
+    // ── 1. Get lords ──────────────────────────────────────────
     final lordsResp =
         await conn.sendXtAndWait('gli', '{}', responseCmd: 'gli');
     if (lordsResp.resultCode != 0) return [];
@@ -59,7 +59,7 @@ class CommandersService {
 
         final um = m['UM'] as Map<String, dynamic>?;
 
-        // ── Extract LID ────────────────────────────────────────
+        // ✅ FIX 1: LID أول — قبل أي skip
         int? lid = _asIntOrNull((um?['L'] as Map?)?['ID']);
         lid ??= _asIntOrNull(mov['LID']);
         lid ??= _asIntOrNull(m['LID']);
@@ -76,65 +76,35 @@ class CommandersService {
         final ta = mov['TA'] as List?;
         final sa = mov['SA'] as List?;
 
-        // ── Phantom main lord check ────────────────────────────
+        // phantom main lord check
         if (lid == 0 && sa != null && sa.length > 4 && myPid != null) {
           final sid = _asInt(sa[3]);
           final oid = _asInt(sa[4]);
           if (sid == oid && sid == myPid) {
             TrafficLog.add('ST',
-                '[Cmd] MID=$mid LID=0 phantom (sid=$sid==oid==pid) - skip');
+                '[Cmd] MID=$mid LID=0 phantom (sid==oid==pid) - skip');
             continue;
           }
         }
 
-        // ── Ownership check ────────────────────────────────────
-        bool isOurs;
-        if (myPid == null) {
-          // مفيش player id → نعتمد على LID (بعد ما تأكدنا إنه من قوادنا فوق)
-          isOurs = true;
-          TrafficLog.add('ST',
-              '[Cmd] MID=$mid LID=$lid - myPid null, LID fallback');
-        } else if (sa != null &&
-            sa.length > 4 &&
-            ta != null &&
-            ta.length > 4) {
-          final sourcePid = _asInt(sa[4]);
-          final targetPid = _asInt(ta[4]);
-          final isOutgoing = sourcePid == myPid;
-          final isReturning = targetPid == myPid && movType == 2;
-          isOurs = isOutgoing || isReturning;
-        } else {
-          // SA/TA قصيرة → نستخدم LID
-          isOurs = true;
-          TrafficLog.add('ST',
-              '[Cmd] MID=$mid LID=$lid - short SA/TA, LID fallback');
-        }
-
-        if (!isOurs) {
-          TrafficLog.add('ST',
-              '[Cmd] MID=$mid LID=$lid type=$movType - not ours, skip');
-          continue;
-        }
-
-        // ── Done check (ينتبه للحالات الشاذة) ──────────────────
-        bool isDone = false;
-
-        if (tt != null && tt > 0 && pt != null && pt >= tt) {
-          if (movType == 1) {
-            // Support: مش DONE إلا لو TWD ≤ PWD (خلص وقت الدعم)
-            if (twd != null && pwd != null) {
-              isDone = twd <= pwd;
-            } else {
-              // مفيش TWD/PWD → نفترض لسه stationed (busy)
-              isDone = false;
-              TrafficLog.add('ST',
-                  '[Cmd] MID=$mid support but TWD/PWD missing → assume busy');
-            }
+        // ✅ FIX 2: done check — TT=0 مايبقاش DONE، وميخليش support ينط
+        bool isDone;
+        if (movType == 1) {
+          // Support / reinforce
+          if (twd != null && pwd != null) {
+            isDone = twd <= pwd; // استنفد وقت الدعم → رجع
           } else {
-            isDone = true;
+            isDone = false; // TWD/PWD مش موجودين → افترض stationed
+          }
+        } else {
+          // Attack / transfer / return
+          if (tt != null && tt > 0) {
+            isDone = pt != null && pt >= tt;
+          } else {
+            // TT=0 أو null → نستخدم PT
+            isDone = pt != null && pt > 0;
           }
         }
-        // لو TT=0 أو null → نعتبرها busy (منسيبش حركة محتملة)
 
         TrafficLog.add('ST',
             '[Cmd] MID=$mid LID=$lid type=$movType tt=$tt pt=$pt '
@@ -183,7 +153,6 @@ class CommandersService {
       ));
     }
 
-    // اللورد الرئيسي (LID=0) الأول
     result.sort((a, b) {
       if (a.lord.id == 0) return -1;
       if (b.lord.id == 0) return 1;
