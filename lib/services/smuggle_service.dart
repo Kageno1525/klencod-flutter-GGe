@@ -124,13 +124,9 @@ class SmuggleService {
         return TransferResult.fail('LORD_BUSY_218');
       }
 
-      if ([219, 222, 256, 404].contains(resp.resultCode) && lid != 0) {
-        return TransferResult.fail('LORD_UNAVAILABLE');
-      }
-
-      if (resp.resultCode == 219) {
-        return TransferResult.fail(
-            'Main Lord rejected (LID=0) — retry in a moment');
+      // ✅ 92 = lord مش موجود/مش صالح في القلعة دي → نعتبرها LORD_UNAVAILABLE عشان الـ caller يجرب لورد تاني
+      if ([92, 219, 222, 256, 404].contains(resp.resultCode)) {
+        return TransferResult.fail('LORD_UNAVAILABLE_${resp.resultCode}');
       }
 
       if (resp.resultCode == 181) {
@@ -178,6 +174,8 @@ class SmuggleService {
         return 'Not enough troops';
       case 91:
         return 'Unit not sendable from this castle (Defensive)';
+      case 92:
+        return 'Lord not valid for this castle/kingdom (92)';
       case 181:
         return 'Max kingdom army movements reached';
       case 218:
