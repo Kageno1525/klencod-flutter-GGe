@@ -156,12 +156,29 @@ class _AllyPick {
   _AllyPick(this.name, this.playerId, this.castle);
 }
 
+/// ✅ Task واحد في Global Evac queue: قلعة + batch من 10 أنواع + ally
+class _EvacTask {
+  final OwnedCastle source;
+  final _AllyPick ally;
+  final List<List<int>> batch;
+  final int wt;
+  final int batchIndex;
+  final int totalBatches;
+  _EvacTask({
+    required this.source,
+    required this.ally,
+    required this.batch,
+    required this.wt,
+    required this.batchIndex,
+    required this.totalBatches,
+  });
+}
+
 class AutoDefenseService {
   AutoDefenseService._();
   static final AutoDefenseService instance = AutoDefenseService._();
 
   static const int kMaxUnitTypes = 10;
-  static const int _maxLordRetries = 4;
 
   AutoDefenseSettings settings = AutoDefenseSettings();
 
@@ -176,7 +193,7 @@ class AutoDefenseService {
 
   List<CommanderInfo>? _commandersCache;
   DateTime? _commandersCacheAt;
-  static const _commandersTtl = Duration(seconds: 30);
+  static const _commandersTtl = Duration(seconds: 3);
 
   int? _currentKingdomId;
 
@@ -207,7 +224,7 @@ class AutoDefenseService {
 
   void _addLog(String msg, [String? kind]) {
     _log.insert(0, AutoDefenseLogEntry(DateTime.now(), msg, kind));
-    if (_log.length > 200) _log.removeRange(200, _log.length);
+    if (_log.length > 300) _log.removeRange(300, _log.length);
     if (!_logCtrl.isClosed) _logCtrl.add(List.unmodifiable(_log));
     TrafficLog.add('ST', '[AutoDef] $msg');
   }
@@ -249,7 +266,7 @@ class AutoDefenseService {
 
   Future<void> _prefetch() async {
     try {
-      await _getCommanders();
+      await _getCommanders(force: true);
       _addLog('📋 Commanders cached', 'info');
     } catch (_) {}
     try {
@@ -282,7 +299,7 @@ class AutoDefenseService {
         responseCmd: 'jaa',
         timeoutMs: 8000,
       );
-      await Future.delayed(const Duration(milliseconds: 600));
+      await Future.delayed(const Duration(milliseconds: 800));
       _currentKingdomId = kingdomId;
       _commandersCache = null;
       _commandersCacheAt = null;
@@ -291,40 +308,20 @@ class AutoDefenseService {
     }
   }
 
-  Future<List<int>> _getFreeLordIds({Set<int> exclude = const {}}) async {
+  /// ✅ يختار lord فاضي واحد — بيرجع null لو مفيش
+  Future<int?> _pickFreeLord() async {
     try {
       final cmds = await _getCommanders(force: true);
-      if (cmds.isEmpty) {
-        _addLog('📋 getCommanders returned empty', 'warn');
-        return [];
+      if (cmds.isEmpty) return null;
+      final free = cmds.where((c) => !c.isBusy).toList();
+      if (free.isEmpty) return null;
+      for (final c in free) {
+        if (c.lord.id == 0) return 0;
       }
-      final free = cmds
-          .where((c) => !c.isBusy && !exclude.contains(c.lord.id))
-          .toList();
-
-      TrafficLog.add('ST',
-          '[AutoDef] Commanders: ${cmds.length} total, '
-          '${cmds.where((c) => !c.isBusy).length} free, '
-          '${free.length} usable (excluded: $exclude)');
-
-      if (free.isEmpty) {
-        final details = cmds
-            .take(6)
-            .map((c) => 'LID=${c.lord.id}${c.isBusy ? "(busy)" : "(free)"}')
-            .join(', ');
-        TrafficLog.add('ST', '[AutoDef] First 6: $details');
-        return [];
-      }
-
-      free.sort((a, b) {
-        if (a.lord.id == 0) return -1;
-        if (b.lord.id == 0) return 1;
-        return a.lord.id.compareTo(b.lord.id);
-      });
-      return free.map((c) => c.lord.id).toList();
-    } catch (e) {
-      TrafficLog.add('ER', '[AutoDef] _getFreeLordIds failed: $e');
-      return [];
+      free.sort((a, b) => a.lord.id.compareTo(b.lord.id));
+      return free.first.lord.id;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -404,22 +401,20 @@ class AutoDefenseService {
       }
     }
 
+    // Spy mode recall
     for (final ev in _evac.values.toList()) {
       if (ev.recalled || !ev.spyMode) continue;
-
       final castleAttacks = _pending.values
           .where((a) => a.targetAreaId == ev.sourceAreaId)
           .toList();
-
       final hasIncoming = castleAttacks.any((a) => a.remainingSeconds() > 0);
       if (hasIncoming) continue;
-
       final ageSeconds = DateTime.now().difference(ev.createdAt).inSeconds;
       if (ageSeconds < 3) continue;
-
       _recallEvacuation(ev, reason: 'all attacks arrived');
     }
 
+    // Normal/Save mode recall
     for (final ev in _evac.values.toList()) {
       if (ev.recalled || ev.spyMode) continue;
       final castleAttacks = _pending.values
@@ -486,92 +481,30 @@ class AutoDefenseService {
     return [...offensive, ...defensive];
   }
 
-  List<List<int>> _buildBatch(List<CastleUnit> ordered) {
-    final batch = <List<int>>[];
-    for (final u in ordered.take(kMaxUnitTypes)) {
-      if (u.amount > 0) batch.add([u.wodId, u.amount]);
+  List<List<List<int>>> _splitIntoBatches(List<CastleUnit> ordered) {
+    final batches = <List<List<int>>>[];
+    for (int start = 0; start < ordered.length; start += kMaxUnitTypes) {
+      final end = (start + kMaxUnitTypes).clamp(0, ordered.length);
+      final slice = ordered.sublist(start, end);
+      final batch = <List<int>>[];
+      for (final u in slice) {
+        if (u.amount > 0) batch.add([u.wodId, u.amount]);
+      }
+      if (batch.isNotEmpty) batches.add(batch);
     }
-    return batch;
+    return batches;
   }
 
   bool _isRetryableLordError(String err) {
-    if (err.contains('92')) return true;
     if (err.contains('218')) return true;
-    if (err.contains('219')) return true;
-    if (err.contains('222')) return true;
-    if (err.contains('256')) return true;
-    if (err.contains('404')) return true;
     if (err.contains('LORD_BUSY')) return true;
     if (err.contains('LORD_UNAVAILABLE')) return true;
     return false;
   }
 
-  Future<({bool ok, int? mid, String? error})> _sendWithLordRetry({
-    required GgeClient client,
-    required OwnedCastle source,
-    required AllyCastle target,
-    required List<List<int>> batch,
-    required int stationTime,
-    required int castleNo,
-    required int totalCastles,
-    required String castleName,
-  }) async {
-    final tried = <int>{};
-    String? lastError;
-    final tag = totalCastles > 0 ? '[$castleNo/$totalCastles] ' : '';
-
-    for (int attempt = 0; attempt < _maxLordRetries; attempt++) {
-      if (_globalEvacRunning && _globalEvacCancelled) {
-        return (ok: false, mid: null, error: 'CANCELLED');
-      }
-
-      final freeIds = await _getFreeLordIds(exclude: tried);
-      if (freeIds.isEmpty) {
-        _addLog(
-            '⚠️ $tag$castleName: no more free lords (tried: $tried)', 'warn');
-        return (ok: false, mid: null, error: 'NO_FREE_LORD');
-      }
-
-      final lordId = freeIds.first;
-      tried.add(lordId);
-
-      _addLog(
-          '📤 $tag$castleName: LID=$lordId '
-          '(attempt ${attempt + 1}/$_maxLordRetries) → '
-          '(${target.x},${target.y})',
-          'evac');
-
-      final result = await client.sendToAlly(
-        source: source,
-        target: target,
-        units: batch,
-        stationTime: stationTime,
-        lordId: lordId,
-      );
-
-      if (result.success) {
-        _addLog(
-            '✅ $tag$castleName: LID=$lordId, MID=${result.movementId}', 'evac');
-        return (ok: true, mid: result.movementId, error: null);
-      }
-
-      lastError = result.error ?? 'unknown';
-      _addLog(
-          '⚠️ $tag$castleName: LID=$lordId rejected ($lastError)', 'warn');
-
-      if (!_isRetryableLordError(lastError)) {
-        return (ok: false, mid: null, error: lastError);
-      }
-
-      await Future.delayed(const Duration(milliseconds: 800));
-    }
-
-    _addLog(
-        '❌ $tag$castleName: all $_maxLordRetries attempts failed '
-        '(last: $lastError)', 'error');
-    return (ok: false, mid: null, error: lastError);
-  }
-
+  // ═══════════════════════════════════════════════════════════
+  // AUTO DEFENSE — evac on attack (time-critical)
+  // ═══════════════════════════════════════════════════════════
   Future<void> _triggerEvacuation(
       _PendingAttack attack, int totalAttacks) async {
     final areaId = attack.targetAreaId;
@@ -620,65 +553,108 @@ class AutoDefenseService {
       }
 
       final filtered = _applyUnitFilter(sendable);
-      if (filtered.isEmpty) {
-        _addLog(
-            '⚠️ No units after type filter (${settings.evacUnitFilter.name})',
-            'warn');
-        return;
-      }
+      if (filtered.isEmpty) return;
 
       final ordered = _orderedForEvac(filtered);
-      final batch = _buildBatch(ordered);
-      if (batch.isEmpty) {
-        _addLog('⚠️ Empty batch at $areaId', 'warn');
-        return;
-      }
+      final batches = _splitIntoBatches(ordered);
+      if (batches.isEmpty) return;
 
-      if (ordered.length > kMaxUnitTypes) {
-        _addLog(
-            '⚠️ $areaId: ${ordered.length} types, only first $kMaxUnitTypes '
-            'sent (exactly like manual)',
-            'warn');
-      }
+      _addLog(
+          '📦 $areaId: ${ordered.length} types → ${batches.length} batch(es)',
+          'evac');
 
       final ally = await _pickAllyCastle(source);
       if (ally == null) {
-        _addLog('⚠️ No allied castle in same kingdom for area=$areaId', 'warn');
+        _addLog('⚠️ No allied castle in same kingdom', 'warn');
         return;
       }
 
       final wt = isSpy ? 1 : settings.saveHours;
-      final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
-      _addLog(
-          '📦 area=$areaId: ${batch.length} types, $totalUnits units → '
-          '${ally.name} (${ally.castle.x},${ally.castle.y})',
-          'evac');
+      final listMids = <int>[];
 
-      final sendResult = await _sendWithLordRetry(
-        client: client,
-        source: source,
-        target: ally.castle,
-        batch: batch,
-        stationTime: wt,
-        castleNo: 0,
-        totalCastles: 0,
-        castleName: 'area=$areaId',
-      );
+      // ⏰ Deadline: 5s before attack arrives
+      final deadline = attack.arrivalAt.subtract(const Duration(seconds: 5));
 
-      if (sendResult.ok) {
+      for (int b = 0; b < batches.length; b++) {
+        if (DateTime.now().isAfter(deadline)) {
+          _addLog(
+              '⏰ Attack imminent — stopping at batch ${b + 1}/${batches.length}',
+              'warn');
+          break;
+        }
+
+        final batch = batches[b];
+        final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
+
+        bool batchSent = false;
+        int attempts = 0;
+        while (!batchSent &&
+            attempts < 5 &&
+            DateTime.now().isBefore(deadline)) {
+          attempts++;
+          final lordId = await _pickFreeLord();
+          if (lordId == null) {
+            _addLog(
+                '⏳ Batch ${b + 1}: no free lord (attempt $attempts) — wait 3s',
+                'warn');
+            await Future.delayed(const Duration(seconds: 3));
+            continue;
+          }
+
+          _addLog(
+              '📤 Batch ${b + 1}/${batches.length}: ${batch.length} types, '
+              '$totalUnits units, LID=$lordId',
+              'evac');
+
+          final result = await client.sendToAlly(
+            source: source,
+            target: ally.castle,
+            units: batch,
+            stationTime: wt,
+            lordId: lordId,
+          );
+
+          if (result.success) {
+            if (result.movementId != null) listMids.add(result.movementId!);
+            batchSent = true;
+            _addLog('✅ Batch ${b + 1} MID=${result.movementId}', 'evac');
+          } else {
+            final err = result.error ?? '';
+            if (_isRetryableLordError(err)) {
+              _addLog(
+                  '⚠️ LID=$lordId rejected ($err) — try another', 'warn');
+              await Future.delayed(const Duration(seconds: 1));
+            } else {
+              _addLog('❌ Batch ${b + 1} failed: $err — stop', 'error');
+              break;
+            }
+          }
+        }
+
+        if (!batchSent) {
+          _addLog(
+              '⏹️ Stopping after batch ${b + 1}/${batches.length} — could not send',
+              'warn');
+          break;
+        }
+
+        if (b < batches.length - 1 && DateTime.now().isBefore(deadline)) {
+          await Future.delayed(const Duration(seconds: 2));
+        }
+      }
+
+      if (listMids.isNotEmpty) {
         _evac[areaId] = _CastleEvac(
           sourceAreaId: areaId,
-          evacuationMovementIds: [
-            if (sendResult.mid != null) sendResult.mid!
-          ],
+          evacuationMovementIds: listMids,
           targetAllyName: ally.name,
           createdAt: DateTime.now(),
           spyMode: isSpy,
           wtHours: wt,
         );
-        _addLog('✅ EVAC area=$areaId complete', 'evac');
-      } else {
-        _addLog('❌ EVAC area=$areaId failed: ${sendResult.error}', 'error');
+        _addLog(
+            '✅ EVAC area=$areaId: ${listMids.length}/${batches.length} batches sent',
+            'evac');
       }
     } catch (e) {
       _addLog('❌ EVAC area=$areaId exception: $e', 'error');
@@ -687,7 +663,6 @@ class AutoDefenseService {
     }
   }
 
-  /// ✅ اختيار حليف حقيقي — يستبعد قلعتك انت (myPid)
   Future<_AllyPick?> _pickAllyCastle(OwnedCastle source) async {
     List<AllyMember>? members;
     try {
@@ -696,40 +671,21 @@ class AutoDefenseService {
     } catch (_) {
       return null;
     }
-    if (members == null || members.isEmpty) {
-      _addLog('⚠️ No alliance members cached', 'warn');
-      return null;
-    }
+    if (members == null || members.isEmpty) return null;
 
-    final myPid = GgeClient().cachedPlayerId;
-    if (myPid == null) {
-      _addLog('⚠️ myPid unknown — may pick own castle', 'warn');
-    }
-
-    // 1) preferred ally first
-    if (settings.preferredAllyPlayerId != null &&
-        settings.preferredAllyPlayerId != myPid) {
+    if (settings.preferredAllyPlayerId != null) {
       for (final m in members) {
-        if (m.playerId == myPid) continue;
         if (m.playerId == settings.preferredAllyPlayerId) {
           final c = m.castleIn(source.kingdomId);
           if (c != null && c.areaId != source.areaId) {
-            _addLog(
-                '🎯 Preferred ally: ${m.name} @ (${c.x},${c.y})', 'info');
             return _AllyPick(m.name, m.playerId, c);
           }
         }
       }
     }
 
-    // 2) all candidates (excluding self)
     final candidates = <(AllyMember, AllyCastle, int)>[];
-    int skippedSelf = 0;
     for (final m in members) {
-      if (m.playerId == myPid) {
-        skippedSelf++;
-        continue;
-      }
       for (final c in m.castles) {
         if (c.kingdomId != source.kingdomId) continue;
         if (c.areaId == source.areaId) continue;
@@ -738,19 +694,7 @@ class AutoDefenseService {
         candidates.add((m, c, dx * dx + dy * dy));
       }
     }
-
-    TrafficLog.add('ST',
-        '[AutoDef] _pickAllyCastle: ${candidates.length} candidates '
-        'in KID=${source.kingdomId} '
-        '(skipped self=$skippedSelf, myPid=$myPid, members=${members.length})');
-
-    if (candidates.isEmpty) {
-      _addLog(
-          '⚠️ No ally castles in KID=${source.kingdomId} '
-          '(self skipped=$skippedSelf)',
-          'warn');
-      return null;
-    }
+    if (candidates.isEmpty) return null;
 
     candidates.sort((a, b) {
       if (a.$1.hasPeace && !b.$1.hasPeace) return -1;
@@ -759,10 +703,6 @@ class AutoDefenseService {
     });
 
     final best = candidates.first;
-    _addLog(
-        '🎯 Picked ally: ${best.$1.name} @ (${best.$2.x},${best.$2.y}) '
-        'KID=${best.$2.kingdomId} peace=${best.$1.hasPeace}',
-        'info');
     return _AllyPick(best.$1.name, best.$1.playerId, best.$2);
   }
 
@@ -787,13 +727,16 @@ class AutoDefenseService {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════
+  // GLOBAL EVAC — QUEUE-BASED (empties ALL troops eventually)
+  // ═══════════════════════════════════════════════════════════
   Future<void> evacuateAllCastles() async {
     if (_globalEvacRunning) return;
     _globalEvacRunning = true;
     _globalEvacCancelled = false;
     _globalEvacCurrent = 0;
     _globalEvacTotal = 0;
-    _globalEvacStatus = '';
+    _globalEvacStatus = 'Preparing...';
 
     try {
       final client = GgeClient();
@@ -803,43 +746,162 @@ class AutoDefenseService {
               c.areaType == 1 || c.areaType == 4 || c.areaType == 12)
           .toList();
 
-      _globalEvacTotal = targets.length;
-      _addLog('🌍 Global evac: ${targets.length} castles', 'evac');
-
-      int successCastles = 0;
-      int failedCastles = 0;
+      // ── 1. Build task queue (castle + batch + ally) ─────────
+      final tasks = <_EvacTask>[];
+      final alliesByArea = <int, _AllyPick>{};
 
       for (int i = 0; i < targets.length; i++) {
-        if (_globalEvacCancelled) {
-          _addLog('⏹️ Global evac cancelled at ${i + 1}/${targets.length}',
+        if (_globalEvacCancelled) break;
+        final castle = targets[i];
+        _globalEvacStatus = 'Preparing ${i + 1}/${targets.length}: '
+            '${castle.displayName}';
+
+        await _ensureKingdom(castle.kingdomId, force: true);
+
+        final catalog = await client.loadCatalog();
+        final units =
+            await client.getCastleUnits(castle.kingdomId, castle.areaId, catalog);
+
+        final sendable = units.where(_isSendableForEvac).toList();
+        if (sendable.isEmpty) {
+          _addLog('⏭️ ${castle.displayName}: no sendable units', 'warn');
+          continue;
+        }
+
+        final filtered = _applyUnitFilter(sendable);
+        if (filtered.isEmpty) continue;
+
+        final ordered = _orderedForEvac(filtered);
+        final batches = _splitIntoBatches(ordered);
+        if (batches.isEmpty) continue;
+
+        final ally = await _pickAllyCastle(castle);
+        if (ally == null) {
+          _addLog(
+              '⏭️ ${castle.displayName}: no allied castle in same kingdom',
               'warn');
-          break;
+          continue;
+        }
+        alliesByArea[castle.areaId] = ally;
+
+        for (int b = 0; b < batches.length; b++) {
+          tasks.add(_EvacTask(
+            source: castle,
+            ally: ally,
+            batch: batches[b],
+            wt: settings.globalEvacHours,
+            batchIndex: b + 1,
+            totalBatches: batches.length,
+          ));
         }
 
-        _globalEvacCurrent = i + 1;
-        _globalEvacStatus = targets[i].displayName;
-
-        final ok = await _evacuateCastleStandalone(
-          targets[i],
-          castleNo: i + 1,
-          totalCastles: targets.length,
-        );
-        if (ok) {
-          successCastles++;
-        } else {
-          failedCastles++;
-        }
-
-        if (i < targets.length - 1 && !_globalEvacCancelled) {
-          await Future.delayed(const Duration(seconds: 3));
-        }
-      }
-
-      if (!_globalEvacCancelled) {
         _addLog(
-            '✅ Global evac done — $successCastles success, $failedCastles failed',
+            '📦 ${castle.displayName}: ${ordered.length} types → ${batches.length} batch(es) queued',
             'evac');
       }
+
+      if (tasks.isEmpty) {
+        _addLog('⏭️ No tasks to send', 'warn');
+        return;
+      }
+
+      _globalEvacTotal = tasks.length;
+      _addLog(
+          '🌍 Queue ready: ${tasks.length} batches across ${alliesByArea.length} castles',
+          'evac');
+
+      // ── 2. Process queue ─────────────────────────────────────
+      final midsByArea = <int, List<int>>{};
+      int success = 0;
+      int failed = 0;
+      int waitCycles = 0;
+      const maxWaitCycles = 60; // 60 * 20s = 20 minutes without any progress
+
+      while (tasks.isNotEmpty && !_globalEvacCancelled) {
+        final task = tasks.first;
+        _globalEvacStatus =
+            '${task.source.displayName} (${task.batchIndex}/${task.totalBatches}) '
+            '— ${_globalEvacCurrent + 1}/${_globalEvacTotal}';
+
+        // Make sure we're in the right kingdom (cheap if already)
+        await _ensureKingdom(task.source.kingdomId);
+
+        final lordId = await _pickFreeLord();
+        if (lordId == null) {
+          waitCycles++;
+          _addLog(
+              '⏳ No free lord — ${tasks.length} batches left, waiting (cycle $waitCycles/$maxWaitCycles)',
+              'warn');
+          await Future.delayed(const Duration(seconds: 20));
+
+          if (waitCycles >= maxWaitCycles) {
+            _addLog(
+                '⏹️ Gave up after 20 min without a free lord — ${tasks.length} batches remain',
+                'warn');
+            break;
+          }
+          continue;
+        }
+
+        waitCycles = 0;
+
+        final totalUnits = task.batch.fold<int>(0, (s, e) => s + e[1]);
+        _addLog(
+            '📤 ${task.source.displayName} batch ${task.batchIndex}/${task.totalBatches}: '
+            '${task.batch.length} types, $totalUnits units, LID=$lordId → ${task.ally.name}',
+            'evac');
+
+        final result = await client.sendToAlly(
+          source: task.source,
+          target: task.ally.castle,
+          units: task.batch,
+          stationTime: task.wt,
+          lordId: lordId,
+        );
+
+        if (result.success) {
+          if (result.movementId != null) {
+            midsByArea.putIfAbsent(task.source.areaId, () => []).add(
+                result.movementId!);
+          }
+          success++;
+          _globalEvacCurrent++;
+          _addLog(
+              '✅ MID=${result.movementId} (${success}/${_globalEvacTotal})',
+              'evac');
+          tasks.removeAt(0);
+          await Future.delayed(const Duration(seconds: 3));
+        } else {
+          final err = result.error ?? '';
+          if (_isRetryableLordError(err)) {
+            _addLog('⚠️ LID=$lordId rejected ($err) — try another', 'warn');
+            await Future.delayed(const Duration(seconds: 2));
+          } else {
+            failed++;
+            _globalEvacCurrent++;
+            _addLog('❌ Batch failed: $err — skip', 'error');
+            tasks.removeAt(0);
+          }
+        }
+      }
+
+      // ── 3. Store evac records per castle ──────────────────────
+      for (final entry in midsByArea.entries) {
+        final ally = alliesByArea[entry.key];
+        if (ally == null) continue;
+        _evac[entry.key] = _CastleEvac(
+          sourceAreaId: entry.key,
+          evacuationMovementIds: entry.value,
+          targetAllyName: ally.name,
+          createdAt: DateTime.now(),
+          spyMode: false,
+          wtHours: settings.globalEvacHours,
+        );
+      }
+
+      _addLog(
+          '🏁 Global evac done — $success sent, $failed failed, ${tasks.length} remaining',
+          'evac');
     } catch (e) {
       _addLog('❌ Global evac exception: $e', 'error');
     } finally {
@@ -851,109 +913,7 @@ class AutoDefenseService {
 
   void stopGlobalEvac() {
     _globalEvacCancelled = true;
-  }
-
-  Future<bool> _evacuateCastleStandalone(
-    OwnedCastle source, {
-    required int castleNo,
-    required int totalCastles,
-  }) async {
-    final areaId = source.areaId;
-    if (_evacuationInProgress.contains(areaId)) {
-      _addLog('⏭️ [$castleNo/$totalCastles] ${source.displayName}: busy, skip',
-          'warn');
-      return false;
-    }
-    _evacuationInProgress.add(areaId);
-
-    try {
-      final client = GgeClient();
-      await _ensureKingdom(source.kingdomId, force: true);
-
-      final catalog = await client.loadCatalog();
-      final allUnits =
-          await client.getCastleUnits(source.kingdomId, source.areaId, catalog);
-
-      final sendable = allUnits.where(_isSendableForEvac).toList();
-      if (sendable.isEmpty) {
-        _addLog(
-            '⚠️ [$castleNo/$totalCastles] ${source.displayName}: no sendable units',
-            'warn');
-        return false;
-      }
-
-      final filtered = _applyUnitFilter(sendable);
-      if (filtered.isEmpty) {
-        _addLog(
-            '⚠️ [$castleNo/$totalCastles] ${source.displayName}: no units after filter',
-            'warn');
-        return false;
-      }
-
-      final ordered = _orderedForEvac(filtered);
-      final batch = _buildBatch(ordered);
-      if (batch.isEmpty) return false;
-
-      if (ordered.length > kMaxUnitTypes) {
-        _addLog(
-            '⚠️ [$castleNo/$totalCastles] ${source.displayName}: '
-            '${ordered.length} types, only first $kMaxUnitTypes sent (like manual)',
-            'warn');
-      }
-
-      final ally = await _pickAllyCastle(source);
-      if (ally == null) {
-        _addLog(
-            '⚠️ [$castleNo/$totalCastles] ${source.displayName}: no allied castle',
-            'warn');
-        return false;
-      }
-
-      final wt = settings.globalEvacHours;
-      final totalUnits = batch.fold<int>(0, (s, e) => s + e[1]);
-      _addLog(
-          '📦 [$castleNo/$totalCastles] ${source.displayName}: '
-          '${batch.length} types, $totalUnits units → '
-          '${ally.name} (${ally.castle.x},${ally.castle.y})',
-          'evac');
-
-      final sendResult = await _sendWithLordRetry(
-        client: client,
-        source: source,
-        target: ally.castle,
-        batch: batch,
-        stationTime: wt,
-        castleNo: castleNo,
-        totalCastles: totalCastles,
-        castleName: source.displayName,
-      );
-
-      if (sendResult.ok) {
-        _evac[areaId] = _CastleEvac(
-          sourceAreaId: areaId,
-          evacuationMovementIds: [
-            if (sendResult.mid != null) sendResult.mid!
-          ],
-          targetAllyName: ally.name,
-          createdAt: DateTime.now(),
-          spyMode: false,
-          wtHours: wt,
-        );
-        return true;
-      }
-
-      _addLog(
-          '❌ [$castleNo/$totalCastles] ${source.displayName}: '
-          '${sendResult.error}', 'error');
-      return false;
-    } catch (e) {
-      _addLog(
-          '❌ [$castleNo/$totalCastles] ${source.displayName}: exception $e',
-          'error');
-      return false;
-    } finally {
-      _evacuationInProgress.remove(areaId);
-    }
+    _addLog('⏹️ Global evac cancel requested', 'warn');
   }
 
   Future<void> dispose() async {
