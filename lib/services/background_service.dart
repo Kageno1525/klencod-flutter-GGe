@@ -72,7 +72,7 @@ class _GgeTaskHandler extends TaskHandler {
         _log('Presence: UI opened → pausing');
         _presenceTimer?.cancel();
         _presenceTimer = null;
-        await _pauseAll();
+        await _pauseAll(handoff: true);
         _watchPresence();
         return;
       }
@@ -153,7 +153,7 @@ class _GgeTaskHandler extends TaskHandler {
         await prefs.setBool('bg_session_conflict', true);
       } catch (_) {}
       await _saveStatus('SESSION_CONFLICT');
-      await _pauseAll();
+      await _pauseAll(handoff: false);
     };
 
     _client!.onSuspiciousClose = (DateTime when) async {
@@ -176,7 +176,7 @@ class _GgeTaskHandler extends TaskHandler {
       } catch (_) {}
       await _saveStatus('SUSPICIOUS_CLOSE',
           extra: 'Server closed connection');
-      await _pauseAll();
+      await _pauseAll(handoff: false);
     };
 
     try {
@@ -279,8 +279,9 @@ class _GgeTaskHandler extends TaskHandler {
     }
   }
 
-  Future<void> _pauseAll() async {
-    _log('Pausing all');
+  // ✅ FIX: parameter handoff عشان نحدد الـ status
+  Future<void> _pauseAll({bool handoff = true}) async {
+    _log('Pausing all (handoff=$handoff)');
     _running = false;
     _statusTimer?.cancel();
     _statusTimer = null;
@@ -297,7 +298,10 @@ class _GgeTaskHandler extends TaskHandler {
     } catch (_) {}
     _client = null;
 
-    await _saveStatus('ONLINE');
+    if (handoff) {
+      await _saveStatus('RELEASED');
+    }
+    // لو handoff=false → الـ caller مسؤول عن كتابة الـ status قبل النداء
   }
 
   void _setupDesertCallbacks() {
@@ -352,26 +356,47 @@ class _GgeTaskHandler extends TaskHandler {
   void onReceiveData(Object data) {
     if (data is String) {
       if (data == 'UI_RESUMED') {
-        _log('Signal: UI_RESUMED');
-        if (_running) {
-          _pauseAll();
-          _watchPresence();
-        }
+        unawaited(_handleUiResumed());
       } else if (data == 'UI_PAUSED') {
-        _log('Signal: UI_PAUSED');
-        if (!_running && _token != null) {
-          Future.delayed(const Duration(seconds: 2), () async {
-            final fg = (await SharedPreferences.getInstance())
-                    .getBool('is_app_foreground') ??
-                false;
-            if (!fg && !_running) {
-              await _startAll();
-              _watchPresence();
-            }
-          });
-        }
+        unawaited(_handleUiPaused());
       }
     }
+  }
+
+  Future<void> _handleUiResumed() async {
+    _log('Signal: UI_RESUMED');
+    if (_running) {
+      await _pauseAll(handoff: true);
+    } else {
+      // متكتبش RELEASED فوق حالة خطأ
+      try {
+        final current =
+            await FlutterForegroundTask.getData<String>(key: 'bg_status');
+        if (current != 'SESSION_CONFLICT' &&
+            current != 'SUSPICIOUS_CLOSE') {
+          await _saveStatus('RELEASED');
+        }
+      } catch (_) {
+        await _saveStatus('RELEASED');
+      }
+    }
+    _watchPresence();
+  }
+
+  Future<void> _handleUiPaused() async {
+    _log('Signal: UI_PAUSED');
+    if (_running) return;
+    if (_token == null) return;
+
+    await Future.delayed(const Duration(seconds: 2));
+    final fg = (await SharedPreferences.getInstance())
+            .getBool('is_app_foreground') ??
+        false;
+    if (fg) return;
+    if (_running) return;
+
+    await _startAll();
+    _watchPresence();
   }
 
   @override
@@ -470,7 +495,6 @@ class BackgroundService {
     }
   }
 
-  // ✅ MODIFIED: Always verify with FlutterForegroundTask.isRunningService
   static Future<void> stop() async {
     try {
       final isRunning = await FlutterForegroundTask.isRunningService;

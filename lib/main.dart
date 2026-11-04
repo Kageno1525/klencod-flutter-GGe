@@ -96,23 +96,74 @@ class GgeAppState extends State<GgeApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    GgeClient().onAppLifecycleChanged(state);
+    // ✅ FIX: نستنى الـ async كامل قبل أي إجراء
+    unawaited(_handleLifecycleChange(state));
+  }
 
-    unawaited(_updateForegroundState(state == AppLifecycleState.resumed));
+  Future<void> _handleLifecycleChange(AppLifecycleState state) async {
+    if (state == AppLifecycleState.resumed) {
+      await _handleResume();
+    } else if (state == AppLifecycleState.paused) {
+      await _handlePause();
+    }
+  }
 
+  Future<void> _handleResume() async {
+    // 1) اكتب flag أول حاجة عشان BG يشوفه
+    await _updateForegroundState(true);
+
+    // 2) ابعت signal للـ BG
     try {
-      if (state == AppLifecycleState.resumed) {
-        FlutterForegroundTask.sendDataToTask('UI_RESUMED');
-        TrafficLog.add('ST', '[Lifecycle] → BG: UI_RESUMED');
-      } else if (state == AppLifecycleState.paused) {
-        FlutterForegroundTask.sendDataToTask('UI_PAUSED');
-        TrafficLog.add('ST', '[Lifecycle] → BG: UI_PAUSED');
-      }
+      FlutterForegroundTask.sendDataToTask('UI_RESUMED');
+      TrafficLog.add('ST', '[Lifecycle] → BG: UI_RESUMED');
     } catch (_) {}
 
-    if (state == AppLifecycleState.resumed) {
-      unawaited(_logBgWsStatus());
+    // 3) استنى BG يعلن إنه ساب الاتصال (بحد أقصى 5 ثواني)
+    final released = await _waitForBgRelease(const Duration(seconds: 5));
+    TrafficLog.add('ST', '[Lifecycle] BG released=$released');
+
+    // 4) دلوقتي بس نسمح للـ UI يعيد الاتصال
+    GgeClient().onAppLifecycleChanged(AppLifecycleState.resumed);
+
+    unawaited(_logBgWsStatus());
+  }
+
+  Future<void> _handlePause() async {
+    // 1) اكتب flag أول حاجة
+    await _updateForegroundState(false);
+
+    // 2) ابعت signal
+    try {
+      FlutterForegroundTask.sendDataToTask('UI_PAUSED');
+      TrafficLog.add('ST', '[Lifecycle] → BG: UI_PAUSED');
+    } catch (_) {}
+
+    // 3) خلي الـ client يقفل الـ WS
+    GgeClient().onAppLifecycleChanged(AppLifecycleState.paused);
+  }
+
+  Future<bool> _waitForBgRelease(Duration timeout) async {
+    final start = DateTime.now();
+    while (DateTime.now().difference(start) < timeout) {
+      try {
+        final status =
+            await FlutterForegroundTask.getData<String>(key: 'bg_status');
+        // ✅ الحالات اللي معناها BG مش ماسك الاتصال
+        if (status == null ||
+            status == 'never ran' ||
+            status == 'NO_TOKEN' ||
+            status == 'STOPPED' ||
+            status == 'DESTROYED' ||
+            status == 'RELEASED' ||
+            status == 'CONNECT_FAILED' ||
+            status == 'SESSION_CONFLICT' ||
+            status == 'SUSPICIOUS_CLOSE') {
+          return true;
+        }
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 200));
     }
+    return false;
   }
 
   Future<void> _updateForegroundState(bool isForeground) async {

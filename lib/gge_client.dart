@@ -199,6 +199,7 @@ class GgeClient {
   String? _savedToken;
   bool _disposed = false;
   bool _reconnecting = false;
+  bool _reconnectScheduled = false; // ✅ NEW: يمنع جدولة reconnect مكررة
   bool _appForeground = true;
   DateTime? _lastRxTime;
   bool _networkWaitActive = false;
@@ -767,6 +768,9 @@ class GgeClient {
   Future<void> connect() async {
     if (_connected) return;
 
+    // ✅ FIX: نرجع الـ flag false عند بدء اتصال جديد
+    _closingIntentionally = false;
+
     _cachedAllianceId = null;
     _cachedAllianceMembers = null;
     _gbdReceived = false;
@@ -824,6 +828,7 @@ class GgeClient {
         _connected = false;
         _stopWatchdog();
 
+        // ✅ FIX: نشيك على الـ flag — لو intentional متعملش reconnect
         if (_closingIntentionally || _disposed) {
           _lastCloseWasClean = false;
           _hadErrorBeforeClose = false;
@@ -1045,21 +1050,34 @@ class GgeClient {
     }
   }
 
+  // ✅ FIX: نمنع جدولة reconnect مكررة
   void _scheduleReconnect() {
     if (_disposed) return;
     if (!_appForeground && !allowBackgroundReconnect) return;
-    if (!isLoggedIn) return;
-    if (_networkWaitActive) return;
+    if (_reconnectScheduled) return;
     if (_reconnecting) return;
+    if (_networkWaitActive) return;
 
-    final wasClean = _lastCloseWasClean;
-    _lastCloseWasClean = false;
+    _reconnectScheduled = true;
 
-    if (wasClean) {
-      _handlePossibleSessionConflict();
-    } else {
-      _startNetworkReconnect();
-    }
+    Future.delayed(const Duration(seconds: 3), () {
+      _reconnectScheduled = false;
+      if (_disposed) return;
+      if (_connected) return;
+      if (_reconnecting) return;
+      if (_networkWaitActive) return;
+      if (!_appForeground && !allowBackgroundReconnect) return;
+      if (!isLoggedIn) return;
+
+      final wasClean = _lastCloseWasClean;
+      _lastCloseWasClean = false;
+
+      if (wasClean) {
+        _handlePossibleSessionConflict();
+      } else {
+        _startNetworkReconnect();
+      }
+    });
   }
 
   Future<void> _handlePossibleSessionConflict() async {
@@ -1068,11 +1086,22 @@ class GgeClient {
     await Future.delayed(const Duration(seconds: 3));
     if (_disposed || _connected) return;
 
+    if (!isLoggedIn) {
+      _status('🔒 No token — skipping reconnect');
+      return;
+    }
+
     final ok = await autoReconnect();
     if (_disposed) return;
-
     if (ok) {
       _status('✅ Reconnected (was a transient close)');
+      return;
+    }
+
+    // لو autoReconnect مسح الـ token، يبقى token expired مش conflict
+    if (!isLoggedIn) {
+      _status('🔒 Token expired — need re-login');
+      onSessionConflict?.call();
       return;
     }
 
@@ -1085,9 +1114,7 @@ class GgeClient {
     }
 
     _status('🔴 Session conflict confirmed');
-    // ✅ الإصلاح: دايماً نادي الـ callback — بيتعامل مع UI و BG
     onSessionConflict?.call();
-    // ✅ نسجل flag كـ backup
     await _saveSessionConflictFlag();
   }
 
@@ -1149,10 +1176,16 @@ class GgeClient {
 
     if (state == AppLifecycleState.resumed) {
       if (!isLoggedIn) return;
-      if (!_connected && !_networkWaitActive) {
-        _status('App resumed — reconnecting...');
-        _scheduleReconnect();
+      if (_connected) {
+        _status('App resumed — already connected');
+        return;
       }
+      if (_networkWaitActive) {
+        _status('App resumed — network wait active');
+        return;
+      }
+      _status('App resumed — reconnecting...');
+      _scheduleReconnect();
     } else if (wasForeground && !_appForeground) {
       _status('App paused — disconnecting for BG handover');
       _lastCloseWasClean = false;
@@ -1165,6 +1198,7 @@ class GgeClient {
     }
   }
 
+  // ✅ FIX: متعملش reset للـ _closingIntentionally هنا — نعملها في connect()
   Future<void> _closeWebSocket() async {
     _closingIntentionally = true;
     _stopWatchdog();
@@ -1177,9 +1211,9 @@ class GgeClient {
     _channel = null;
     _sub = null;
     _connected = false;
-    _closingIntentionally = false;
     _lastCloseWasClean = false;
     _hadErrorBeforeClose = false;
+    // NOTE: _closingIntentionally stays true — reset in connect()/autoReconnect()
   }
 
   Future<bool> autoReconnect() async {
@@ -1193,6 +1227,8 @@ class GgeClient {
     _savedToken = token;
 
     _reconnecting = true;
+    // ✅ FIX: نرجع الـ flag false قبل أي محاولة اتصال
+    _closingIntentionally = false;
     _status('🔄 Auto-reconnecting...');
 
     for (int attempt = 1; attempt <= 3; attempt++) {
@@ -1483,6 +1519,7 @@ class GgeClient {
     _pollingTimer?.cancel();
     _backgroundPollingActive = false;
     _networkWaitActive = false;
+    _reconnectScheduled = false;
     await _sub?.cancel();
     try {
       await _channel?.sink.close();
