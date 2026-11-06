@@ -156,51 +156,31 @@ class CommandersService {
     return result;
   }
 
-  /// ✅ استرجاع حركة — mcm أول، ثم rcm كـ fallback للـ stationed support
-  Future<TransferResult> recall(
-    int movementId, {
-    int? type,
-    int? tt,
-    int? pt,
-  }) async {
-    final isStationedSupport =
-        type == 1 && tt != null && pt != null && tt > 0 && pt >= tt;
-
-    final commands = <String>['mcm'];
-    if (isStationedSupport) commands.add('rcm');
-
-    TransferResult? lastError;
-
-    for (final cmd in commands) {
-      try {
-        await Future.delayed(const Duration(seconds: 2));
-        TrafficLog.add('ST',
-            '[RECALL] → $cmd MID=$movementId '
-            '(type=$type tt=$tt pt=$pt stationed=$isStationedSupport)');
-
-        final resp = await conn.sendXtAndWait(
-          cmd,
-          jsonEncode({'MID': movementId}),
-          responseCmd: cmd,
-          timeoutMs: 15000,
-          isAction: true,
-        );
-
-        TrafficLog.add('ST',
-            '[RECALL] ← $cmd result=${resp.resultCode} '
-            '(${errorName(resp.resultCode)})');
-
-        if (resp.resultCode == 0) return TransferResult.ok();
-
-        lastError = TransferResult.fail(
-            '${cmd} code ${resp.resultCode}: ${errorName(resp.resultCode)}');
-      } catch (e) {
-        TrafficLog.add('ER', '[RECALL] $cmd MID=$movementId exception: $e');
-        lastError = TransferResult.fail('$cmd: $e');
+  /// ✅ نسخة قديمة بسيطة (زي الأصل) — mcm بس
+  /// mcm بيسترجع الحركات اللي **لسه في الطريق**.
+  /// الحركات اللي **اتمركزت (stationed)** لازم تترجع من جوّه اللعبة.
+  Future<TransferResult> recall(int movementId) async {
+    try {
+      await Future.delayed(const Duration(seconds: 2));
+      TrafficLog.add('ST', '[RECALL] → mcm MID=$movementId');
+      final resp = await conn.sendXtAndWait(
+        'mcm',
+        jsonEncode({'MID': movementId}),
+        responseCmd: 'mcm',
+        timeoutMs: 15000,
+        isAction: true,
+      );
+      TrafficLog.add('ST',
+          '[RECALL] ← mcm result=${resp.resultCode} '
+          '(${errorName(resp.resultCode)})');
+      if (resp.resultCode != 0) {
+        return TransferResult.fail(errorName(resp.resultCode));
       }
+      return TransferResult.ok();
+    } catch (e) {
+      TrafficLog.add('ER', '[RECALL] mcm MID=$movementId exception: $e');
+      return TransferResult.fail('$e');
     }
-
-    return lastError ?? TransferResult.fail('All recall methods failed');
   }
 
   static int _asInt(dynamic v, [int def = 0]) {

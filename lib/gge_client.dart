@@ -1441,14 +1441,9 @@ class GgeClient {
   Future<List<CommanderInfo>> getCommanders() =>
       commandersService.getCommanders();
 
-  // ✅ تحديث: تمرير بيانات الحركة للـ recall
-  Future<TransferResult> recallMovement(
-    int movementId, {
-    int? type,
-    int? tt,
-    int? pt,
-  }) =>
-      commandersService.recall(movementId, type: type, tt: tt, pt: pt);
+  /// ✅ نسخة قديمة بسيطة — mcm بس
+  Future<TransferResult> recallMovement(int movementId) =>
+      commandersService.recall(movementId);
 
   Future<TransferResult> transfer({
     required OwnedCastle source,
