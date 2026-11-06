@@ -7,7 +7,6 @@ class CommandersService {
   CommandersService(this.conn);
 
   Future<List<CommanderInfo>> getCommanders() async {
-    // ── 1. Get lords ──────────────────────────────────────────
     final lordsResp =
         await conn.sendXtAndWait('gli', '{}', responseCmd: 'gli');
     if (lordsResp.resultCode != 0) return [];
@@ -29,7 +28,6 @@ class CommandersService {
       ourLids.add(lord.id);
     }
 
-    // ── 2. Get movements ───────────────────────────────────────
     final gamResp =
         await conn.sendXtAndWait('gam', '{}', responseCmd: 'gam');
     final movementsMap = <int, LordMovement>{};
@@ -59,7 +57,6 @@ class CommandersService {
 
         final um = m['UM'] as Map<String, dynamic>?;
 
-        // ✅ FIX 1: LID أول — قبل أي skip
         int? lid = _asIntOrNull((um?['L'] as Map?)?['ID']);
         lid ??= _asIntOrNull(mov['LID']);
         lid ??= _asIntOrNull(m['LID']);
@@ -76,7 +73,6 @@ class CommandersService {
         final ta = mov['TA'] as List?;
         final sa = mov['SA'] as List?;
 
-        // phantom main lord check
         if (lid == 0 && sa != null && sa.length > 4 && myPid != null) {
           final sid = _asInt(sa[3]);
           final oid = _asInt(sa[4]);
@@ -87,21 +83,17 @@ class CommandersService {
           }
         }
 
-        // ✅ FIX 2: done check — TT=0 مايبقاش DONE، وميخليش support ينط
         bool isDone;
         if (movType == 1) {
-          // Support / reinforce
           if (twd != null && pwd != null) {
-            isDone = twd <= pwd; // استنفد وقت الدعم → رجع
+            isDone = twd <= pwd;
           } else {
-            isDone = false; // TWD/PWD مش موجودين → افترض stationed
+            isDone = false;
           }
         } else {
-          // Attack / transfer / return
           if (tt != null && tt > 0) {
             isDone = pt != null && pt >= tt;
           } else {
-            // TT=0 أو null → نستخدم PT
             isDone = pt != null && pt > 0;
           }
         }
@@ -112,7 +104,6 @@ class CommandersService {
 
         if (isDone) continue;
 
-        // ── Build movement record ──────────────────────────────
         final targetX = ta != null && ta.length > 1 ? _asInt(ta[1]) : 0;
         final targetY = ta != null && ta.length > 2 ? _asInt(ta[2]) : 0;
         final targetPid = ta != null && ta.length > 4 ? _asInt(ta[4]) : 0;
@@ -144,7 +135,6 @@ class CommandersService {
           'payloadNull=${gamResp.payload == null}');
     }
 
-    // ── 3. Build result ────────────────────────────────────────
     final result = <CommanderInfo>[];
     for (final lord in lords) {
       result.add(CommanderInfo(
@@ -166,23 +156,51 @@ class CommandersService {
     return result;
   }
 
-  Future<TransferResult> recall(int movementId) async {
-    try {
-      await Future.delayed(const Duration(seconds: 2));
-      final resp = await conn.sendXtAndWait(
-        'mcm',
-        jsonEncode({'MID': movementId}),
-        responseCmd: 'mcm',
-        timeoutMs: 15000,
-        isAction: true,
-      );
-      if (resp.resultCode != 0) {
-        return TransferResult.fail(errorName(resp.resultCode));
+  /// ✅ استرجاع حركة — mcm أول، ثم rcm كـ fallback للـ stationed support
+  Future<TransferResult> recall(
+    int movementId, {
+    int? type,
+    int? tt,
+    int? pt,
+  }) async {
+    final isStationedSupport =
+        type == 1 && tt != null && pt != null && tt > 0 && pt >= tt;
+
+    final commands = <String>['mcm'];
+    if (isStationedSupport) commands.add('rcm');
+
+    TransferResult? lastError;
+
+    for (final cmd in commands) {
+      try {
+        await Future.delayed(const Duration(seconds: 2));
+        TrafficLog.add('ST',
+            '[RECALL] → $cmd MID=$movementId '
+            '(type=$type tt=$tt pt=$pt stationed=$isStationedSupport)');
+
+        final resp = await conn.sendXtAndWait(
+          cmd,
+          jsonEncode({'MID': movementId}),
+          responseCmd: cmd,
+          timeoutMs: 15000,
+          isAction: true,
+        );
+
+        TrafficLog.add('ST',
+            '[RECALL] ← $cmd result=${resp.resultCode} '
+            '(${errorName(resp.resultCode)})');
+
+        if (resp.resultCode == 0) return TransferResult.ok();
+
+        lastError = TransferResult.fail(
+            '${cmd} code ${resp.resultCode}: ${errorName(resp.resultCode)}');
+      } catch (e) {
+        TrafficLog.add('ER', '[RECALL] $cmd MID=$movementId exception: $e');
+        lastError = TransferResult.fail('$cmd: $e');
       }
-      return TransferResult.ok();
-    } catch (e) {
-      return TransferResult.fail('$e');
     }
+
+    return lastError ?? TransferResult.fail('All recall methods failed');
   }
 
   static int _asInt(dynamic v, [int def = 0]) {

@@ -19,8 +19,11 @@ class _CommandersScreenState extends State<CommandersScreen> {
   bool _loading = true;
   Timer? _timer;
 
-  /// عدد مرات محاولة reload تلقائي بعد ما تنتهي الحركات.
-  /// بيمنع spam على gam لو السيرفر لسه بيرجع الحركات القديمة.
+  bool _bulkRunning = false;
+  int _bulkDone = 0;
+  int _bulkTotal = 0;
+  String _bulkScope = '';
+
   int _staleReloadAttempts = 0;
   static const int _maxStaleReloadAttempts = 3;
 
@@ -53,34 +56,25 @@ class _CommandersScreenState extends State<CommandersScreen> {
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  Timer — بيحدث الـ countdowns و يكتشف transition
-  //  (قائد وصل / stationed خلص) و يعمل reload تلقائي.
-  // ═══════════════════════════════════════════════════════════
   void _startTimer() {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
 
-      // مفيش أي movement في الكاش — بلاش timer أصلاً
       final hasAnyMovement = _commanders.any((c) => c.movement != null);
       if (!hasAnyMovement) {
         _timer?.cancel();
         return;
       }
 
-      // فيه حركة "شغالة" فعلاً (مسافرة أو stationed لسه في الدعم)
       final hasActiveMovement = _commanders.any((c) =>
           c.movement != null && !_isMovementFullyDone(c.movement!));
 
       if (hasActiveMovement) {
-        // حدّث الـ countdowns
         setState(() {});
         return;
       }
 
-      // كل الحركات في الكاش خلصت — اعمل setState نهائي، ألغِ الـ timer،
-      // و جرّب reload واحد لتنضيف الكاش (بدون spam)
       setState(() {});
       _timer?.cancel();
       _silentReloadAndRestart();
@@ -88,19 +82,13 @@ class _CommandersScreenState extends State<CommandersScreen> {
   }
 
   bool _isMovementFullyDone(LordMovement m) {
-    // لسه بيسافر
     if (!m.isArrived) return false;
-    // stationed و لسه في وقت الدعم
     if (m.type == 1 && m.isStationed) return false;
-    // غير كده → خلص تماماً
     return true;
   }
 
   Future<void> _silentReloadAndRestart() async {
-    if (_staleReloadAttempts >= _maxStaleReloadAttempts) {
-      // السيرفر لسه بيرجع الحركات القديمة — استسلم، المستخدم يعمل refresh يدوي.
-      return;
-    }
+    if (_staleReloadAttempts >= _maxStaleReloadAttempts) return;
     _staleReloadAttempts++;
 
     await Future.delayed(const Duration(seconds: 3));
@@ -109,7 +97,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
     await _loadCommanders(silent: true);
     if (!mounted) return;
 
-    // لو الـ reload نجح و نضّف الحركات، صفّر العداد
     final stillStale = _commanders.any((c) =>
         c.movement != null && _isMovementFullyDone(c.movement!));
     if (!stillStale) {
@@ -117,8 +104,28 @@ class _CommandersScreenState extends State<CommandersScreen> {
     }
   }
 
+  bool _isRecallable(CommanderInfo c) {
+    final m = c.movement;
+    if (m == null) return false;
+    if (m.movementId <= 0) return false;
+    if (m.isReturning) return false;
+    if (m.type != 0 && m.type != 1) return false;
+    return true;
+  }
+
   Future<void> _recall(CommanderInfo cmd) async {
-    if (cmd.movement == null) return;
+    final m = cmd.movement;
+    if (m == null) return;
+    if (!_isRecallable(cmd)) {
+      _snack(
+        S.isAr
+            ? 'الحركة دي مش قابلة للاسترجاع (${m.actionLabel})'
+            : 'This movement cannot be recalled (${m.actionLabel})',
+        color: AppTheme.orange,
+      );
+      return;
+    }
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -144,8 +151,12 @@ class _CommandersScreenState extends State<CommandersScreen> {
     if (confirm != true) return;
 
     setState(() => _loading = true);
-    final res = await widget.client.recallMovement(cmd.movement!.movementId);
-
+    final res = await widget.client.recallMovement(
+      m.movementId,
+      type: m.type,
+      tt: m.totalTime,
+      pt: m.paidTime,
+    );
     if (!mounted) return;
 
     if (res.success) {
@@ -155,6 +166,121 @@ class _CommandersScreenState extends State<CommandersScreen> {
       setState(() => _loading = false);
       _snack('${S.recallFail}: ${res.error}', color: AppTheme.red);
     }
+  }
+
+  List<CommanderInfo> _recallableList({required String scope}) {
+    final list = <CommanderInfo>[];
+    for (final c in _commanders) {
+      if (!_isRecallable(c)) continue;
+      final t = c.movement!.type;
+      if (scope == 'all') {
+        if (t == 0 || t == 1) list.add(c);
+      } else if (scope == 'smuggle') {
+        if (t == 1) list.add(c);
+      } else if (scope == 'attack') {
+        if (t == 0) list.add(c);
+      }
+    }
+    return list;
+  }
+
+  Future<void> _bulkRecall({required String scope}) async {
+    if (_bulkRunning) return;
+
+    final targets = _recallableList(scope: scope);
+    if (targets.isEmpty) {
+      _snack(
+        S.isAr ? 'مفيش حركات للاسترجاع' : 'Nothing to recall',
+        color: AppTheme.orange,
+      );
+      return;
+    }
+
+    final label = switch (scope) {
+      'all' => S.isAr ? 'كل الحركات' : 'all movements',
+      'smuggle' => S.isAr ? 'حركات التهريب' : 'smuggle movements',
+      'attack' => S.isAr ? 'حركات الهجوم' : 'attack movements',
+      _ => '',
+    };
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(S.isAr ? 'تأكيد الاسترجاع الجماعي' : 'Confirm bulk recall',
+            style: const TextStyle(decoration: TextDecoration.none)),
+        content: Text(
+          S.isAr
+              ? 'هيتم استرجاع ${targets.length} من $label — يكمل؟'
+              : 'Recall ${targets.length} of $label?',
+          style: const TextStyle(decoration: TextDecoration.none, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(S.cancel)),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
+              child: Text(
+                  S.isAr ? 'استرجاع الكل' : 'Recall all',
+                  style: const TextStyle(color: Colors.white))),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() {
+      _bulkRunning = true;
+      _bulkDone = 0;
+      _bulkTotal = targets.length;
+      _bulkScope = label;
+    });
+
+    int success = 0;
+    int failed = 0;
+
+    for (int i = 0; i < targets.length; i++) {
+      if (!mounted || !_bulkRunning) break;
+      final c = targets[i];
+      final mv = c.movement!;
+      final res = await widget.client.recallMovement(
+        mv.movementId,
+        type: mv.type,
+        tt: mv.totalTime,
+        pt: mv.paidTime,
+      );
+      if (res.success) {
+        success++;
+      } else {
+        failed++;
+      }
+      if (mounted) {
+        setState(() => _bulkDone = i + 1);
+      }
+      if (i < targets.length - 1) {
+        await Future.delayed(const Duration(seconds: 2));
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _bulkRunning = false;
+      _bulkDone = 0;
+      _bulkTotal = 0;
+      _bulkScope = '';
+    });
+
+    _snack(
+      S.isAr
+          ? '✓ نجح: $success · فشل: $failed'
+          : '✓ Success: $success · Failed: $failed',
+      color: failed == 0 ? AppTheme.green : AppTheme.orange,
+    );
+
+    await _loadCommanders();
   }
 
   void _snack(String msg, {Color? color}) {
@@ -184,6 +310,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
             child: Column(
               children: [
                 _header(context),
+                _bulkRecallBar(context),
                 Expanded(
                   child: _loading
                       ? Center(
@@ -224,6 +351,70 @@ class _CommandersScreenState extends State<CommandersScreen> {
               ],
             ),
           ),
+          if (_bulkRunning)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.purple.withOpacity(0.3),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppTheme.purple),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            S.isAr
+                                ? 'جاري استرجاع $_bulkScope ($_bulkDone/$_bulkTotal)'
+                                : 'Recalling $_bulkScope ($_bulkDone/$_bulkTotal)',
+                            style: TextStyle(
+                              color: AppTheme.textColor(context),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => setState(() => _bulkRunning = false),
+                          child: Text(
+                            S.cancel,
+                            style: const TextStyle(
+                                color: AppTheme.red, fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: _bulkTotal > 0 ? _bulkDone / _bulkTotal : null,
+                      minHeight: 4,
+                      backgroundColor: AppTheme.purple.withOpacity(0.15),
+                      valueColor: const AlwaysStoppedAnimation(AppTheme.purple),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -268,10 +459,123 @@ class _CommandersScreenState extends State<CommandersScreen> {
           ),
           AppIconBtn(
             icon: Icons.refresh_rounded,
-            onTap: _loading ? null : () => _loadCommanders(),
+            onTap: _loading || _bulkRunning ? null : () => _loadCommanders(),
             size: 42,
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _bulkRecallBar(BuildContext context) {
+    final attackList = _recallableList(scope: 'attack');
+    final smuggleList = _recallableList(scope: 'smuggle');
+    final allList = _recallableList(scope: 'all');
+
+    if (allList.isEmpty && !_bulkRunning) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: _bulkBtn(
+              context,
+              label: S.isAr ? 'استرجاع الكل' : 'Recall All',
+              count: allList.length,
+              color: AppTheme.red,
+              onTap: _bulkRunning ? null : () => _bulkRecall(scope: 'all'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _bulkBtn(
+              context,
+              label: S.isAr ? 'تهريب فقط' : 'Smuggle only',
+              count: smuggleList.length,
+              color: AppTheme.orange,
+              onTap: _bulkRunning
+                  ? null
+                  : () => _bulkRecall(scope: 'smuggle'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _bulkBtn(
+              context,
+              label: S.isAr ? 'هجوم فقط' : 'Attack only',
+              count: attackList.length,
+              color: AppTheme.blue,
+              onTap: _bulkRunning ? null : () => _bulkRecall(scope: 'attack'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bulkBtn(
+    BuildContext context, {
+    required String label,
+    required int count,
+    required Color color,
+    required VoidCallback? onTap,
+  }) {
+    final disabled = count == 0 || onTap == null;
+    return InkWell(
+      onTap: disabled ? null : onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        decoration: BoxDecoration(
+          color: disabled
+              ? AppTheme.subTextColor(context).withOpacity(0.06)
+              : color.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: disabled
+                ? AppTheme.subTextColor(context).withOpacity(0.15)
+                : color.withOpacity(0.4),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: disabled ? AppTheme.subTextColor(context) : color,
+                fontSize: 10.5,
+                fontWeight: FontWeight.bold,
+                decoration: TextDecoration.none,
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: disabled
+                    ? Colors.transparent
+                    : color.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  color: disabled
+                      ? AppTheme.subTextColor(context)
+                      : color,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -313,6 +617,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
     final accent = isBusy ? AppTheme.orange : AppTheme.green;
     final gradient =
         isBusy ? AppTheme.orangeGradient : AppTheme.successGradient;
+    final canRecall = _isRecallable(cmd);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -429,7 +734,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
               ),
               child: Column(
                 children: [
-                  // ─── Action row ─────────────────────────────
                   Row(
                     children: [
                       Container(
@@ -469,8 +773,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ],
                   ),
                   const SizedBox(height: 10),
-
-                  // ─── Target ──────────────────────────────────
                   Row(
                     children: [
                       const Icon(Icons.place_rounded,
@@ -491,8 +793,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-
-                  // ─── Started + Return time ──────────────────
                   Row(
                     children: [
                       const Icon(Icons.play_arrow_rounded,
@@ -507,8 +807,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
                             decoration: TextDecoration.none),
                       ),
                       const Spacer(),
-                      // ✅ لما stationed: نعرض وقت الرجوع المتوقع (returnAt)
-                      //    غير كده: نعرض وقت الوصول (arrivalAt)
                       Icon(
                         movement.isArrived
                             ? Icons.check_circle_rounded
@@ -536,8 +834,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-
-                  // ─── Countdown ───────────────────────────────
                   Row(
                     children: [
                       const Icon(Icons.timer_rounded,
@@ -578,56 +874,68 @@ class _CommandersScreenState extends State<CommandersScreen> {
                 ],
               ),
             ),
-            if (!isReturning && !isStationed)
+            if (canRecall)
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
                 child: SizedBox(
                   width: double.infinity,
                   height: 42,
                   child: OutlinedButton.icon(
-                    onPressed: () => _recall(cmd),
-                    icon: const Icon(Icons.undo_rounded,
-                        color: AppTheme.red, size: 18),
-                    label: Text(S.recall,
-                        style: const TextStyle(
-                            color: AppTheme.red,
+                    onPressed: _bulkRunning ? null : () => _recall(cmd),
+                    icon: Icon(Icons.undo_rounded,
+                        color: isStationed ? AppTheme.orange : AppTheme.red,
+                        size: 18),
+                    label: Text(
+                        isStationed
+                            ? (S.isAr
+                                ? 'استرجاع القائد'
+                                : 'Recall commander')
+                            : S.recall,
+                        style: TextStyle(
+                            color:
+                                isStationed ? AppTheme.orange : AppTheme.red,
                             fontWeight: FontWeight.bold,
                             decoration: TextDecoration.none)),
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(
-                          color: AppTheme.red.withOpacity(0.5), width: 1.5),
+                          color: (isStationed
+                                  ? AppTheme.orange
+                                  : AppTheme.red)
+                              .withOpacity(0.5),
+                          width: 1.5),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
-                      backgroundColor: AppTheme.red.withOpacity(0.08),
+                      backgroundColor:
+                          (isStationed ? AppTheme.orange : AppTheme.red)
+                              .withOpacity(0.08),
                     ),
                   ),
                 ),
               )
-            else if (isStationed)
+            else
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 42,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _recall(cmd),
-                    icon: const Icon(Icons.undo_rounded,
-                        color: AppTheme.orange, size: 18),
-                    label: Text(
-                        S.isAr ? 'استرجاع القائد' : 'Recall commander',
-                        style: const TextStyle(
-                            color: AppTheme.orange,
-                            fontWeight: FontWeight.bold,
-                            decoration: TextDecoration.none)),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(
-                          color: AppTheme.orange.withOpacity(0.5),
-                          width: 1.5),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      backgroundColor: AppTheme.orange.withOpacity(0.08),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline_rounded,
+                        color: AppTheme.subTextColor(context), size: 14),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        isReturning
+                            ? (S.isAr
+                                ? 'القائد في طريق العودة — لا يحتاج استرجاع'
+                                : 'Returning — no recall needed')
+                            : (S.isAr
+                                ? 'هذا النوع من الحركات لا يمكن استرجاعه'
+                                : 'This movement type cannot be recalled'),
+                        style: TextStyle(
+                            color: AppTheme.subTextColor(context),
+                            fontSize: 10.5,
+                            decoration: TextDecoration.none),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
           ] else

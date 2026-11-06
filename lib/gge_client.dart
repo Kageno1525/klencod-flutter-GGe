@@ -199,7 +199,7 @@ class GgeClient {
   String? _savedToken;
   bool _disposed = false;
   bool _reconnecting = false;
-  bool _reconnectScheduled = false; // ✅ يمنع جدولة reconnect مكررة
+  bool _reconnectScheduled = false;
   bool _appForeground = true;
   DateTime? _lastRxTime;
   bool _networkWaitActive = false;
@@ -768,7 +768,6 @@ class GgeClient {
   Future<void> connect() async {
     if (_connected) return;
 
-    // ✅ FIX: نرجع الـ flag false عند بدء اتصال جديد
     _closingIntentionally = false;
 
     _cachedAllianceId = null;
@@ -1049,7 +1048,6 @@ class GgeClient {
     }
   }
 
-  // ✅ FIX: يمنع جدولة reconnect مكررة
   void _scheduleReconnect() {
     if (_disposed) return;
     if (_reconnectScheduled) return;
@@ -1092,7 +1090,6 @@ class GgeClient {
       return;
     }
 
-    // ✅ FIX: autoReconnect بيمسح الـ token لو expired — ده مش conflict
     if (!isLoggedIn) {
       _status('🔒 Token expired — need re-login');
       onSessionConflict?.call();
@@ -1186,7 +1183,6 @@ class GgeClient {
     }
   }
 
-  // ✅ FIX: متعملش reset للـ _closingIntentionally هنا — نعملها في connect()
   Future<void> _closeWebSocket() async {
     _closingIntentionally = true;
     _stopWatchdog();
@@ -1201,7 +1197,6 @@ class GgeClient {
     _connected = false;
     _lastCloseWasClean = false;
     _hadErrorBeforeClose = false;
-    // NOTE: _closingIntentionally stays true — reset in connect()
   }
 
   Future<bool> autoReconnect() async {
@@ -1226,7 +1221,7 @@ class GgeClient {
         _status('Reconnect attempt $attempt/3');
         await _closeWebSocket();
         await Future.delayed(const Duration(milliseconds: 500));
-        await connect(); // ← resets _closingIntentionally internally
+        await connect();
         await loginWithToken(token);
         _reconnecting = false;
         _status('✅ Reconnected ✓');
@@ -1446,8 +1441,14 @@ class GgeClient {
   Future<List<CommanderInfo>> getCommanders() =>
       commandersService.getCommanders();
 
-  Future<TransferResult> recallMovement(int movementId) =>
-      commandersService.recall(movementId);
+  // ✅ تحديث: تمرير بيانات الحركة للـ recall
+  Future<TransferResult> recallMovement(
+    int movementId, {
+    int? type,
+    int? tt,
+    int? pt,
+  }) =>
+      commandersService.recall(movementId, type: type, tt: tt, pt: pt);
 
   Future<TransferResult> transfer({
     required OwnedCastle source,
