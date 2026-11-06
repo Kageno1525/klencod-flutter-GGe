@@ -45,12 +45,7 @@ class CommandersService {
         }
       }
 
-      final rawMovements = data['M'] as List? ?? [];
-      TrafficLog.add('ST',
-          '[Cmd] gam → ${rawMovements.length} movements '
-          '(myPid=$myPid, ourLids=${ourLids.toList()})');
-
-      for (final m in rawMovements) {
+      for (final m in (data['M'] as List? ?? [])) {
         if (m is! Map) continue;
         final mov = m['M'] as Map<String, dynamic>?;
         if (mov == null) continue;
@@ -73,14 +68,11 @@ class CommandersService {
         final ta = mov['TA'] as List?;
         final sa = mov['SA'] as List?;
 
+        // تجاهل حركة اللورد "الوهمية"
         if (lid == 0 && sa != null && sa.length > 4 && myPid != null) {
           final sid = _asInt(sa[3]);
           final oid = _asInt(sa[4]);
-          if (sid == oid && sid == myPid) {
-            TrafficLog.add('ST',
-                '[Cmd] MID=$mid LID=0 phantom (sid==oid==pid) - skip');
-            continue;
-          }
+          if (sid == oid && sid == myPid) continue;
         }
 
         bool isDone;
@@ -97,10 +89,6 @@ class CommandersService {
             isDone = pt != null && pt > 0;
           }
         }
-
-        TrafficLog.add('ST',
-            '[Cmd] MID=$mid LID=$lid type=$movType tt=$tt pt=$pt '
-            'twd=$twd pwd=$pwd → ${isDone ? "DONE" : "BUSY"}');
 
         if (isDone) continue;
 
@@ -129,10 +117,6 @@ class CommandersService {
           stationPaidSeconds: pwd,
         );
       }
-    } else {
-      TrafficLog.add('ER',
-          '[Cmd] gam FAILED: result=${gamResp.resultCode} '
-          'payloadNull=${gamResp.payload == null}');
     }
 
     final result = <CommanderInfo>[];
@@ -149,20 +133,13 @@ class CommandersService {
       return a.lord.visibleIndex.compareTo(b.lord.visibleIndex);
     });
 
-    final busyCount = result.where((c) => c.isBusy).length;
-    TrafficLog.add('ST',
-        '[Cmd] Result: ${result.length} lords, $busyCount busy');
-
     return result;
   }
 
-  /// ✅ نسخة قديمة بسيطة (زي الأصل) — mcm بس
-  /// mcm بيسترجع الحركات اللي **لسه في الطريق**.
-  /// الحركات اللي **اتمركزت (stationed)** لازم تترجع من جوّه اللعبة.
+  /// ✅ استرجاع بـ mcm فقط — زي النسخة القديمة اللي كانت شغالة
   Future<TransferResult> recall(int movementId) async {
     try {
       await Future.delayed(const Duration(seconds: 2));
-      TrafficLog.add('ST', '[RECALL] → mcm MID=$movementId');
       final resp = await conn.sendXtAndWait(
         'mcm',
         jsonEncode({'MID': movementId}),
@@ -170,15 +147,11 @@ class CommandersService {
         timeoutMs: 15000,
         isAction: true,
       );
-      TrafficLog.add('ST',
-          '[RECALL] ← mcm result=${resp.resultCode} '
-          '(${errorName(resp.resultCode)})');
       if (resp.resultCode != 0) {
         return TransferResult.fail(errorName(resp.resultCode));
       }
       return TransferResult.ok();
     } catch (e) {
-      TrafficLog.add('ER', '[RECALL] mcm MID=$movementId exception: $e');
       return TransferResult.fail('$e');
     }
   }

@@ -60,21 +60,17 @@ class _CommandersScreenState extends State<CommandersScreen> {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
-
-      final hasAnyMovement = _commanders.any((c) => c.movement != null);
-      if (!hasAnyMovement) {
+      final hasAny = _commanders.any((c) => c.movement != null);
+      if (!hasAny) {
         _timer?.cancel();
         return;
       }
-
-      final hasActiveMovement = _commanders.any((c) =>
+      final hasActive = _commanders.any((c) =>
           c.movement != null && !_isMovementFullyDone(c.movement!));
-
-      if (hasActiveMovement) {
+      if (hasActive) {
         setState(() {});
         return;
       }
-
       setState(() {});
       _timer?.cancel();
       _silentReloadAndRestart();
@@ -90,60 +86,33 @@ class _CommandersScreenState extends State<CommandersScreen> {
   Future<void> _silentReloadAndRestart() async {
     if (_staleReloadAttempts >= _maxStaleReloadAttempts) return;
     _staleReloadAttempts++;
-
     await Future.delayed(const Duration(seconds: 3));
     if (!mounted) return;
-
     await _loadCommanders(silent: true);
     if (!mounted) return;
-
     final stillStale = _commanders.any((c) =>
         c.movement != null && _isMovementFullyDone(c.movement!));
-    if (!stillStale) {
-      _staleReloadAttempts = 0;
-    }
+    if (!stillStale) _staleReloadAttempts = 0;
   }
 
-  /// ✅ الحركة قابلة للاسترجاع بـ mcm بس لو:
-  /// - MID > 0
-  /// - مش return (type 2)
-  /// - type 0 (هجوم/transfer) أو type 1 لسه ما وصلش (مش stationed)
+  /// ✅ زي القديم: قابلة للاسترجاع لو busy ومش return
+  /// (mcm بيشتغل مع متحرك ومتمركز — مش محتاجين نفرق)
   bool _isRecallable(CommanderInfo c) {
     final m = c.movement;
     if (m == null) return false;
     if (m.movementId <= 0) return false;
-    if (m.isReturning) return false;
-    if (m.type == 1 && m.isStationed) return false; // stationed → لازم من اللعبة
-    if (m.type != 0 && m.type != 1) return false;
+    if (m.isReturning) return false; // في طريق العودة أصلاً
     return true;
-  }
-
-  /// ✅ الحركة stationed support — قابلة للسحب من اللعبة فقط
-  bool _isStationedNonRecallable(CommanderInfo c) {
-    final m = c.movement;
-    if (m == null) return false;
-    return m.type == 1 && m.isStationed && !m.isReturning;
   }
 
   Future<void> _recall(CommanderInfo cmd) async {
     final m = cmd.movement;
     if (m == null) return;
-
-    if (_isStationedNonRecallable(cmd)) {
-      _snack(
-        S.isAr
-            ? 'القائد متمركز في قلعة الحليف — لازم ترجعه من جوّه اللعبة'
-            : 'Commander is stationed — recall from in-game only',
-        color: AppTheme.orange,
-      );
-      return;
-    }
-
     if (!_isRecallable(cmd)) {
       _snack(
         S.isAr
-            ? 'الحركة دي مش قابلة للاسترجاع (${m.actionLabel})'
-            : 'This movement cannot be recalled (${m.actionLabel})',
+            ? 'القائد في طريق العودة — لا يحتاج استرجاع'
+            : 'Commander is already returning',
         color: AppTheme.orange,
       );
       return;
@@ -204,13 +173,10 @@ class _CommandersScreenState extends State<CommandersScreen> {
 
   Future<void> _bulkRecall({required String scope}) async {
     if (_bulkRunning) return;
-
     final targets = _recallableList(scope: scope);
     if (targets.isEmpty) {
       _snack(
-        S.isAr
-            ? 'مفيش حركات قابلة للاسترجاع في النطاق ده'
-            : 'Nothing recallable in this scope',
+        S.isAr ? 'مفيش حركات للاسترجاع' : 'Nothing to recall',
         color: AppTheme.orange,
       );
       return;
@@ -233,10 +199,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
             style: const TextStyle(decoration: TextDecoration.none)),
         content: Text(
           S.isAr
-              ? 'هيتم استرجاع ${targets.length} من $label — يكمل؟\n\n'
-                  'ملاحظة: الحركات المتمركزة (stationed) مش بتترجع من التطبيق.'
-              : 'Recall ${targets.length} of $label?\n\n'
-                  'Note: Stationed movements cannot be recalled from the app.',
+              ? 'هيتم استرجاع ${targets.length} من $label — يكمل؟'
+              : 'Recall ${targets.length} of $label?',
           style: const TextStyle(decoration: TextDecoration.none, height: 1.5),
         ),
         actions: [
@@ -273,9 +237,7 @@ class _CommandersScreenState extends State<CommandersScreen> {
       } else {
         failed++;
       }
-      if (mounted) {
-        setState(() => _bulkDone = i + 1);
-      }
+      if (mounted) setState(() => _bulkDone = i + 1);
       if (i < targets.length - 1) {
         await Future.delayed(const Duration(seconds: 2));
       }
@@ -425,7 +387,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
                       value: _bulkTotal > 0 ? _bulkDone / _bulkTotal : null,
                       minHeight: 4,
                       backgroundColor: AppTheme.purple.withOpacity(0.15),
-                      valueColor: const AlwaysStoppedAnimation(AppTheme.purple),
+                      valueColor:
+                          const AlwaysStoppedAnimation(AppTheme.purple),
                     ),
                   ],
                 ),
@@ -510,9 +473,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
               label: S.isAr ? 'تهريب فقط' : 'Smuggle only',
               count: smuggleList.length,
               color: AppTheme.orange,
-              onTap: _bulkRunning
-                  ? null
-                  : () => _bulkRecall(scope: 'smuggle'),
+              onTap:
+                  _bulkRunning ? null : () => _bulkRecall(scope: 'smuggle'),
             ),
           ),
           const SizedBox(width: 8),
@@ -522,7 +484,8 @@ class _CommandersScreenState extends State<CommandersScreen> {
               label: S.isAr ? 'هجوم فقط' : 'Attack only',
               count: attackList.length,
               color: AppTheme.blue,
-              onTap: _bulkRunning ? null : () => _bulkRecall(scope: 'attack'),
+              onTap:
+                  _bulkRunning ? null : () => _bulkRecall(scope: 'attack'),
             ),
           ),
         ],
@@ -573,17 +536,15 @@ class _CommandersScreenState extends State<CommandersScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
-                color: disabled
-                    ? Colors.transparent
-                    : color.withOpacity(0.2),
+                color:
+                    disabled ? Colors.transparent : color.withOpacity(0.2),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
                 '$count',
                 style: TextStyle(
-                  color: disabled
-                      ? AppTheme.subTextColor(context)
-                      : color,
+                  color:
+                      disabled ? AppTheme.subTextColor(context) : color,
                   fontSize: 11,
                   fontWeight: FontWeight.w900,
                   decoration: TextDecoration.none,
@@ -634,7 +595,6 @@ class _CommandersScreenState extends State<CommandersScreen> {
     final gradient =
         isBusy ? AppTheme.orangeGradient : AppTheme.successGradient;
     final canRecall = _isRecallable(cmd);
-    final stationedOnly = _isStationedNonRecallable(cmd);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -899,19 +859,31 @@ class _CommandersScreenState extends State<CommandersScreen> {
                   height: 42,
                   child: OutlinedButton.icon(
                     onPressed: _bulkRunning ? null : () => _recall(cmd),
-                    icon: const Icon(Icons.undo_rounded,
-                        color: AppTheme.red, size: 18),
-                    label: Text(S.recall,
-                        style: const TextStyle(
-                            color: AppTheme.red,
+                    icon: Icon(Icons.undo_rounded,
+                        color: isStationed ? AppTheme.orange : AppTheme.red,
+                        size: 18),
+                    label: Text(
+                        isStationed
+                            ? (S.isAr
+                                ? 'استرجاع القائد'
+                                : 'Recall commander')
+                            : S.recall,
+                        style: TextStyle(
+                            color:
+                                isStationed ? AppTheme.orange : AppTheme.red,
                             fontWeight: FontWeight.bold,
                             decoration: TextDecoration.none)),
                     style: OutlinedButton.styleFrom(
                       side: BorderSide(
-                          color: AppTheme.red.withOpacity(0.5), width: 1.5),
+                          color:
+                              (isStationed ? AppTheme.orange : AppTheme.red)
+                                  .withOpacity(0.5),
+                          width: 1.5),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
-                      backgroundColor: AppTheme.red.withOpacity(0.08),
+                      backgroundColor:
+                          (isStationed ? AppTheme.orange : AppTheme.red)
+                              .withOpacity(0.08),
                     ),
                   ),
                 ),
@@ -922,28 +894,19 @@ class _CommandersScreenState extends State<CommandersScreen> {
                 child: Row(
                   children: [
                     Icon(Icons.info_outline_rounded,
-                        color: stationedOnly
-                            ? AppTheme.orange
-                            : AppTheme.subTextColor(context),
-                        size: 14),
+                        color: AppTheme.subTextColor(context), size: 14),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        stationedOnly
+                        isReturning
                             ? (S.isAr
-                                ? 'القائد متمركز — لازم ترجعه من جوّه اللعبة'
-                                : 'Commander stationed — recall from in-game')
-                            : (isReturning
-                                ? (S.isAr
-                                    ? 'القائد في طريق العودة — لا يحتاج استرجاع'
-                                    : 'Returning — no recall needed')
-                                : (S.isAr
-                                    ? 'هذا النوع من الحركات لا يمكن استرجاعه'
-                                    : 'This movement type cannot be recalled')),
+                                ? 'القائد في طريق العودة — لا يحتاج استرجاع'
+                                : 'Returning — no recall needed')
+                            : (S.isAr
+                                ? 'هذا النوع من الحركات لا يمكن استرجاعه'
+                                : 'This movement cannot be recalled'),
                         style: TextStyle(
-                            color: stationedOnly
-                                ? AppTheme.orange
-                                : AppTheme.subTextColor(context),
+                            color: AppTheme.subTextColor(context),
                             fontSize: 10.5,
                             decoration: TextDecoration.none),
                       ),

@@ -1441,7 +1441,6 @@ class GgeClient {
   Future<List<CommanderInfo>> getCommanders() =>
       commandersService.getCommanders();
 
-  /// ✅ نسخة قديمة بسيطة — mcm بس
   Future<TransferResult> recallMovement(int movementId) =>
       commandersService.recall(movementId);
 
